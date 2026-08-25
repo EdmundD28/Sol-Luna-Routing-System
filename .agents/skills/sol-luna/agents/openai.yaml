@@ -1,0 +1,7 @@
+interface:
+  display_name: "Sol-Luna Delivery System"
+  short_description: "Cost-aware parallel Luna delivery led by Sol"
+  default_prompt: "Use $sol-luna to build a conflict-free work graph, run worthwhile Luna packages in parallel, and have Sol continuously review, integrate, and optimize delivery cost."
+
+policy:
+  allow_implicit_invocation: false
