@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "policy_version": "1.1.0",
+  "minimum_expected_credit_savings_fraction": 0.15,
+  "minimum_first_pass_probability": 0.80,
+  "maximum_initial_writers": 2,
+  "maximum_evidence_backed_writers": 4,
+  "parallel_expansion_minimum_pairs": 5,
+  "effort_order": [
+    "low",
+    "medium",
+    "high",
+    "xhigh",
+    "max"
+  ],
+  "effort_aliases": {
+    "light": "low"
+  },
+  "rework_budget": {
+    "focused_repairs": 1,
+    "effort_escalations": 1
+  }
+}

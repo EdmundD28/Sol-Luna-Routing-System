@@ -1,87 +1,154 @@
 # Sol-Luna Delivery System
 
-An experimental, explicit Codex Skill for cost-aware two-tier delivery with one accountable Sol controller and optional, dynamically selected GPT-5.6 Luna workers.
+An experimental, explicit Codex Skill that predicts whether bounded GPT-5.6 Luna execution can reduce the credits and elapsed time of an independently accepted result while Sol retains architecture, integration, and final judgment.
 
-Sol first chooses `SOL_ONLY` or `SOL_LUNA`. Sol owns architecture, scheduling, integration, verification, and final acceptance in either route. Luna workers receive only bounded, conflict-free implementation or verification packages. The workflow uses a rolling pipeline so Sol can review frozen handoffs and prepare acceptance tests while other ready packages continue.
+The objective is not to maximize delegation. Quality, safety, ownership, and authority are hard gates; `SOL_ONLY` is correct whenever expected Sol coordination, Luna recovery, review, or integration would erase the saving.
 
 ## Status
 
-This repository is an experimental public baseline, not a proven cost-saving product.
+This revision adds executable policy and evidence controls. It is still an experimental baseline, not a proven cost optimizer or a filesystem security boundary.
 
-- The current Skill and Luna worker profile are published as the source of truth for future development.
-- The current stability revision adds explicit Sol-only fallback, runtime evidence receipts, final-candidate evidence freshness, bounded repairs, and distinct failed-versus-blocked outcomes.
-- One preliminary paired run found the earlier Sol-Luna workflow was 2.62x slower than Sol-only on that task.
-- The paired run did not capture comparable credit usage and did not use an independent hidden acceptance suite.
-- The current rolling-pipeline revision was created after that run and has not yet been evaluated by the same protocol.
+- Predictive routing compares Sol-only delivery with Luna `low`, `medium`, `high`, `xhigh`, and `max` using expected accepted-result credits and time. The user-facing word `light` is accepted as an alias for Codex `low`.
+- A lower-effort failure is not required before direct XHigh or Max selection.
+- Initial parallel writing is capped at two; expansion requires matched non-regressive evidence and remains capped at four.
+- Rework is limited to one evidence-backed focused repair, then repartition, one effort escalation, or Sol reclaim.
+- Risk-proportional review avoids replaying clean low-risk work while requiring deep review for material risk and discrepancies.
+- Runtime receipts compare expected identity and boundary values with host-observed records.
+- Ownership, frozen handoffs, lifecycle transitions, phase evidence, atomic ledger writes, and matched cohorts have executable validators.
+- A five-pair matched bounded-function campaign achieved equal independent acceptance and zero final defects, but Sol→Luna regressed to 4.08× the median diagnostic tokens and 5.42× the median elapsed time. It provides no credit proof, so the credit-saving gate remains closed.
+- Local lifecycle tests validate the state machine. A [native desktop-app smoke](docs/validation/native-app-lifecycle-smoke-2026-08-26.md) exercised real Luna delegation, one repair, stale-evidence rejection, timeout/interruption, same-child continuation, and pre-dispatch ownership conflict rejection. It did not prove that the packaged custom TOML profile was loaded; the automated opt-in runner remains unavailable until Codex exposes a stable non-interactive custom-subagent surface.
 
-See [the preliminary comparison](docs/benchmark/preliminary-comparison.md).
+See [the matched bounded-function campaign](docs/benchmark/matched-bounded-campaign-2026-08-26.md) and the [older preliminary comparison](docs/benchmark/preliminary-comparison.md).
+
+## Core workflow
+
+Invoke explicitly:
+
+```text
+$sol-luna <substantial task>
+```
+
+Sol estimates each eligible route before dispatch. Policy `1.1.0` requires at least 80% predicted first-pass acceptance, no predicted final-defect regression, at least 15% expected credit reduction by default, and no expected elapsed regression. It then selects the lowest expected accepted-delivery cost—not automatically the lowest reasoning effort.
+
+```powershell
+python .agents/skills/sol-luna/scripts/routing_policy.py template
+python .agents/skills/sol-luna/scripts/routing_policy.py evaluate --input route.json
+python .agents/skills/sol-luna/scripts/routing_policy.py evaluate --ledger runtime/sol-luna/ledger.jsonl --input route.json
+python .agents/skills/sol-luna/scripts/routing_policy.py review --input review.json
+python .agents/skills/sol-luna/scripts/routing_policy.py rework --input rework.json
+python .agents/skills/sol-luna/scripts/routing_policy.py fingerprint
+```
+
+The policy is advisory and never launches a worker automatically. Missing estimates stay unknown; Sol can retain the task or run a short read-only scout probe.
+
+## Profiles
+
+The project ships two roles rather than a large role hierarchy:
+
+- `luna_worker_{low,medium,high,xhigh,max}`: workspace-write implementation variants selected predictively.
+- `luna_reviewer`: read-only independent reviewer/tester.
+- `luna_scout`: read-only Low feasibility probe.
+
+`luna_worker` remains a backward-compatible High profile. Every writer has an explicit `workspace-write` sandbox, and read-only roles declare `read-only`. Parent live permission overrides can still affect a native child; use host-observed receipts when boundary compliance is material.
+
+Official OpenAI documentation describes Luna as the cost-sensitive, high-volume GPT-5.6 tier and recommends reserving higher reasoning settings for workloads where evaluation shows a quality gain:
+
+- [GPT-5.6 Luna](https://developers.openai.com/api/docs/models/gpt-5.6-luna)
+- [GPT-5.6 model guidance](https://developers.openai.com/api/docs/guides/latest-model)
+- [Codex custom agents and subagents](https://developers.openai.com/codex/subagents)
+
+## Evidence and enforcement tools
+
+The Skill uses standard-library Python tools:
+
+| Tool | Purpose |
+|---|---|
+| `routing_policy.py` | Predict route, effort, concurrency, review depth, and rework action |
+| `ownership_guard.py` | Reject overlapping write plans, observed scope violations, and unauthorized frozen-candidate changes |
+| `lifecycle_contract.py` | Replay package transitions, stale evidence, timeout, repair, escalation, continuation, and acceptance |
+| `native_lifecycle_receipt.py` | Fail closed unless a native runner proves profile loading, requested/observed identity and boundaries, timeout, child continuity, stale rejection, repair, and ownership blocking |
+| `runtime_receipt.py` | Compare expected identity and boundaries with one explicit host session record |
+| `phase_tracker.py` | Accumulate explicit phase durations and optional source token/credit readings |
+| `evidence_ledger.py` | Validate phase-aware evidence, persist it atomically, and emit fail-closed task-family feedback without automatic routing |
+| `matched_eval.py` | Freeze paired arms and reject mismatched starts, task specs, suites, policies, and metric cohorts |
+
+The matched harness binds each pair to the same starting candidate, task digest, independent acceptance-suite digest, policy fingerprint, and observed runtime identity. It does not launch paid model work. See [runtime and evidence details](.agents/skills/sol-luna/references/evidence-and-runtime.md) and [the orchestration policy](.agents/skills/sol-luna/references/orchestration-policy.md).
+
+## Installation lifecycle
+
+Preview is non-mutating:
+
+```powershell
+python scripts/setup.py preview
+```
+
+After reviewing the plan:
+
+```powershell
+python scripts/setup.py install --confirm
+python scripts/setup.py doctor
+python scripts/setup.py update --confirm
+python scripts/setup.py rollback --confirm
+```
+
+Setup manages only the Sol-Luna Skill and named agent TOMLs. It uses source hashes, conflict refusal, atomic writes, backups, install state, post-write Doctor verification, and rollback refusal when a managed target has user drift. Tests use isolated temporary homes; this repository does not install itself during validation.
 
 ## Repository layout
 
 ```text
 .agents/skills/sol-luna/
   SKILL.md
-  agents/openai.yaml
-  references/evidence-and-runtime.md
-  scripts/runtime_receipt.py
-  scripts/evidence_ledger.py
+  references/
+    orchestration-policy.md
+    evidence-and-runtime.md
+    routing-policy.v1.json
+  scripts/
+    routing_policy.py
+    ownership_guard.py
+    lifecycle_contract.py
+    native_lifecycle_receipt.py
+    runtime_receipt.py
+    phase_tracker.py
+    evidence_ledger.py
+    matched_eval.py
 .codex/agents/
-  luna-worker.toml
-docs/benchmark/
-  preliminary-comparison.md
-docs/design/
-  upstream-influences.md
+  luna-worker-{low,medium,high,xhigh,max}.toml
+  luna-reviewer.toml
+  luna-scout.toml
+scripts/setup.py
 tests/
-  test_runtime_receipt.py
-  test_evidence_ledger.py
+.github/workflows/ci.yml
 ```
-
-## Invocation
-
-The Skill is explicit-only:
-
-```text
-$sol-luna <substantial task>
-```
-
-Invocation does not force delegation. Small, tightly coupled, or inherently serial work can remain `SOL_ONLY`; Luna is used only when a bounded package is expected to improve accepted delivery.
-
-## Design principles
-
-- Optimize accepted delivery, not agent count.
-- Treat `SOL_ONLY` as a valid outcome rather than forcing ceremonial delegation.
-- Use the minimum economically justified parallelism.
-- Give each worker exclusive write ownership and minimal sufficient context.
-- Freeze worker output at handoff so Sol reviews a stable candidate.
-- Distinguish requested, configuration-derived, host-observed, and unknown runtime facts.
-- Invalidate affected validation evidence after the checked candidate changes.
-- Reserve `BLOCKED` for missing authority, decisions, inputs, permissions, or external-state changes; report in-scope failures as failures.
-- Treat worker summaries as claims; Sol independently inspects and verifies the result.
-- Never claim token, credit, latency, or quality improvements without comparable measurements.
-
-## Optional evidence tools
-
-The stability revision includes two standard-library Python tools. They are not mandatory overhead for every invocation:
-
-- `runtime_receipt.py` converts one explicitly supplied Codex session JSONL into an allowlisted, redacted requested-versus-host-observed receipt. Strict identity and boundary checks are opt-in.
-- `evidence_ledger.py` validates and appends opt-in redacted run records, then checks whether at least five clean matched pairs are ready for human review. It never changes routing.
-
-See [the runtime and evidence contract](.agents/skills/sol-luna/references/evidence-and-runtime.md) and [the upstream design review](docs/design/upstream-influences.md).
 
 ## Validation boundary
 
-The checked-in Skill passes the installed Skill Creator validator, and the TOML profile parses as `gpt-5.6-luna` with `max` reasoning. Behavioral tests cover redaction, self-report exclusion, conflicting runtime evidence, failed-versus-blocked outcomes, repair exceptions, acceptance-suite matching, and the five-pair human-review gate. These tests validate the tools and contracts; they do not prove native worker routing, implementation quality, or cost savings.
+Run:
 
-## Roadmap
+```powershell
+python -m unittest discover -s tests -v
+python C:\path\to\skill-creator\scripts\quick_validate.py .agents\skills\sol-luna
+git diff --check
+```
 
-Planned evaluation work:
+When a native runner can emit the strict receipt, opt in with `SOL_LUNA_NATIVE_RECEIPT` and run `python -m unittest discover -s tests/live -v`. A missing receipt skips; an incomplete or self-reported receipt fails closed.
 
-1. Add native worker lifecycle scenarios for `SOL_ONLY`, `SOL_LUNA`, stalled workers, and final-candidate evidence refresh.
-2. Add portable install, upgrade, conflict, and rollback lifecycle tests without overwriting user-modified configuration.
-3. Compare Luna reasoning levels on matched bounded package families before changing the current `max` profile.
-4. Populate the opt-in ledger with comparable real measurements from clearly identified sources.
-5. Run matched tasks with an independent acceptance suite and blind review before changing the routing policy or claiming savings.
+CI runs the behavioral suite on Windows and Ubuntu with Python 3.11 and 3.14. Tests cover predictive direct effort selection, hard quality/cost/time gates, writer caps, rework limits, review depth, runtime boundary mismatches, ownership conflicts, frozen handoffs, stale evidence, timeout and continuation states, atomic concurrent appends, phase reconciliation, matched-cohort isolation, and setup lifecycle.
+
+These tests and the one native app smoke do not prove routing economics. The completed five-pair campaign supplies diagnostic token and elapsed evidence, but not credible credit evidence; see the [objective completion audit](docs/validation/objective-completion-audit-2026-08-26.md). Token evidence may diagnose efficiency but cannot satisfy the credit-saving policy gate.
+
+## Success gate
+
+Within each task family, do not call the system improved unless matched evidence shows:
+
+- independent acceptance remains equal or better;
+- final defects do not increase;
+- median comparable credits fall by at least the policy threshold, currently 15%;
+- median elapsed time does not regress;
+- first-pass acceptance is at least 80%, keeping repair cost from consuming the saving;
+- Sol planning and review remain less than half of measured delivery cost.
+
+Five fully assessed pairs permit human review, not automatic policy change. Failed arms remain in acceptance, defect, and first-pass denominators. Ledger feedback is advisory and never dispatches work or edits policy.
 
 ## License
 
-No open-source license has been selected yet. The repository is public for inspection and collaboration planning, but reuse rights are not granted until a license is added.
+No open-source license has been selected yet. The repository is public for inspection and collaboration planning, but reuse rights are not granted until the owner chooses a license.

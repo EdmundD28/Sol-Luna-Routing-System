@@ -26,6 +26,8 @@ class RuntimeReceiptTests(unittest.TestCase):
             requested_agent="luna_worker",
             requested_model="gpt-5.6-luna",
             requested_effort="max",
+            expected_sandbox="workspace-write",
+            expected_permission_profile="managed",
         )
         self.assertEqual(receipt["status"], "verified")
         self.assertEqual(receipt["host_observed"]["model"]["value"], "gpt-5.6-luna")
@@ -81,6 +83,31 @@ class RuntimeReceiptTests(unittest.TestCase):
         self.assertEqual(receipt["invalid_jsonl_lines"], 1)
         with self.assertRaises(RUNTIME.ReceiptError):
             RUNTIME.enforce_requirements(receipt, require_identity=True, require_boundary=False)
+
+    def test_strict_identity_requires_supplied_expected_values(self) -> None:
+        receipt = RUNTIME.build_receipt(self.fixture("runtime-consistent.jsonl"), "thread-123")
+        with self.assertRaisesRegex(RUNTIME.ReceiptError, "strict identity requires expected values"):
+            RUNTIME.enforce_requirements(receipt, require_identity=True, require_boundary=False)
+
+    def test_strict_boundary_compares_expected_policy_not_only_presence(self) -> None:
+        receipt = RUNTIME.build_receipt(
+            self.fixture("runtime-consistent.jsonl"),
+            "thread-123",
+            expected_sandbox="read-only",
+            expected_permission_profile="managed",
+        )
+        self.assertIn("requested sandbox_policy_type", receipt["mismatches"][0])
+        with self.assertRaises(RUNTIME.ReceiptError):
+            RUNTIME.enforce_requirements(receipt, require_identity=False, require_boundary=True)
+
+    def test_strict_boundary_passes_only_with_matching_expected_policy(self) -> None:
+        receipt = RUNTIME.build_receipt(
+            self.fixture("runtime-consistent.jsonl"),
+            "thread-123",
+            expected_sandbox="workspace-write",
+            expected_permission_profile="managed",
+        )
+        RUNTIME.enforce_requirements(receipt, require_identity=False, require_boundary=True)
 
 
 if __name__ == "__main__":

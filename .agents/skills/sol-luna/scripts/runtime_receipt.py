@@ -85,6 +85,8 @@ def build_receipt(
     requested_agent: str | None = None,
     requested_model: str | None = None,
     requested_effort: str | None = None,
+    expected_sandbox: str | None = None,
+    expected_permission_profile: str | None = None,
     include_identifiers: bool = False,
 ) -> dict[str, Any]:
     events, invalid_lines = load_events(session_path)
@@ -132,6 +134,8 @@ def build_receipt(
         "agent": requested_field(requested_agent),
         "model": requested_field(requested_model),
         "effort": requested_field(requested_effort),
+        "sandbox_policy_type": requested_field(expected_sandbox),
+        "permission_profile_type": requested_field(expected_permission_profile),
     }
 
     mismatches: list[str] = []
@@ -139,6 +143,8 @@ def build_receipt(
         ("agent", "agent_role"),
         ("model", "model"),
         ("effort", "effort"),
+        ("sandbox_policy_type", "sandbox_policy_type"),
+        ("permission_profile_type", "permission_profile_type"),
     )
     for requested_name, observed_name in comparisons:
         expected = requested[requested_name].get("value")
@@ -182,8 +188,22 @@ def enforce_requirements(receipt: dict[str, Any], *, require_identity: bool, req
         failures.extend(receipt["mismatches"])
     if require_identity and receipt["unknown_identity_fields"]:
         failures.append("required identity fields are unknown or conflicting")
+    if require_identity:
+        missing_expected = [
+            name for name in ("agent", "model", "effort") if receipt["requested"][name]["value"] is None
+        ]
+        if missing_expected:
+            failures.append(f"strict identity requires expected values for: {', '.join(missing_expected)}")
     if require_boundary and receipt["unknown_boundary_fields"]:
         failures.append("required boundary fields are unknown or conflicting")
+    if require_boundary:
+        missing_expected = [
+            name
+            for name in ("sandbox_policy_type", "permission_profile_type")
+            if receipt["requested"][name]["value"] is None
+        ]
+        if missing_expected:
+            failures.append(f"strict boundary requires expected values for: {', '.join(missing_expected)}")
     if (require_identity or require_boundary) and receipt["source_warnings"]:
         failures.append("strict runtime proof requires a fully readable session record")
     if failures:
@@ -199,6 +219,8 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--requested-agent")
     result.add_argument("--requested-model")
     result.add_argument("--requested-effort")
+    result.add_argument("--expected-sandbox")
+    result.add_argument("--expected-permission-profile")
     result.add_argument("--require-identity", action="store_true")
     result.add_argument("--require-boundary", action="store_true")
     result.add_argument("--include-identifiers", action="store_true")
@@ -215,6 +237,8 @@ def main() -> int:
             requested_agent=args.requested_agent,
             requested_model=args.requested_model,
             requested_effort=args.requested_effort,
+            expected_sandbox=args.expected_sandbox,
+            expected_permission_profile=args.expected_permission_profile,
             include_identifiers=args.include_identifiers,
         )
         enforce_requirements(

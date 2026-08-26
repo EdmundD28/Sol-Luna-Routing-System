@@ -12,9 +12,10 @@ This revision studied current public source at the pinned commits below. The imp
 ## Local corrections
 
 - Runtime evidence is redacted by default and requires an explicit session file plus thread ID.
-- Strict identity and boundary checks are opt-in acceptance gates, not universal blockers for ordinary reversible work.
-- The ledger requires five clean matched pairs before evidence is merely eligible for human review.
+- Strict identity and boundary checks compare caller-supplied expected values with host-observed values; config-file presence alone is not proof.
+- The atomic ledger requires five clean matched pairs in one policy, suite, metric, and source cohort before evidence is merely eligible for human review.
+- Token cohorts and displayed allowance deltas may diagnose efficiency, but they cannot satisfy the credit-reduction policy gate.
 - Even after the threshold is reached, the tool cannot choose or modify a route.
 - Terra remains outside the current two-tier stability boundary.
 
-[Official OpenAI model guidance](https://developers.openai.com/api/docs/guides/latest-model) recommends choosing reasoning effort intentionally and comparing representative tasks using success, completeness, evidence, tokens, latency, and cost. That is why this repository retains Luna `max` as the current baseline while requiring matched evaluation before changing effort or routing.
+[Official OpenAI model guidance](https://developers.openai.com/api/docs/guides/latest-model) recommends choosing reasoning effort intentionally and comparing representative tasks using success, completeness, evidence, tokens, latency, and cost. Accordingly, this repository predicts among Luna `low`, `medium`, `high`, `xhigh`, and `max`, then requires matched evaluation before a policy change. It does not retain `max` as a universal baseline.

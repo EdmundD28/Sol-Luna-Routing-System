@@ -13,24 +13,47 @@ class PackageContractTests(unittest.TestCase):
     def test_skill_references_every_shipped_evidence_component(self) -> None:
         skill = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
         for relative_path in (
+            "references/orchestration-policy.md",
+            "references/routing-policy.v1.json",
             "references/evidence-and-runtime.md",
+            "scripts/routing_policy.py",
+            "scripts/ownership_guard.py",
+            "scripts/lifecycle_contract.py",
+            "scripts/native_lifecycle_receipt.py",
+            "scripts/matched_eval.py",
             "scripts/runtime_receipt.py",
             "scripts/evidence_ledger.py",
+            "scripts/phase_tracker.py",
         ):
             self.assertTrue((SKILL_ROOT / relative_path).is_file(), relative_path)
             self.assertIn(relative_path, skill)
 
-    def test_worker_profile_remains_luna_max(self) -> None:
-        profile_path = ROOT / ".codex" / "agents" / "luna-worker.toml"
-        with profile_path.open("rb") as handle:
-            profile = tomllib.load(handle)
-        self.assertEqual(profile["model"], "gpt-5.6-luna")
-        self.assertEqual(profile["model_reasoning_effort"], "max")
-        self.assertNotIn("terra", profile["model"].lower())
+    def test_effort_specific_worker_profiles_cover_the_predictive_ladder(self) -> None:
+        for effort in ("low", "medium", "high", "xhigh", "max"):
+            profile_path = ROOT / ".codex" / "agents" / f"luna-worker-{effort}.toml"
+            with profile_path.open("rb") as handle:
+                profile = tomllib.load(handle)
+            self.assertEqual(profile["name"], f"luna_worker_{effort}")
+            self.assertEqual(profile["model"], "gpt-5.6-luna")
+            self.assertEqual(profile["model_reasoning_effort"], effort)
+            self.assertEqual(profile["sandbox_mode"], "workspace-write")
+
+    def test_specialized_read_only_profiles_are_minimal(self) -> None:
+        expected = {"luna-reviewer.toml": "luna_reviewer", "luna-scout.toml": "luna_scout"}
+        for filename, name in expected.items():
+            with (ROOT / ".codex" / "agents" / filename).open("rb") as handle:
+                profile = tomllib.load(handle)
+            self.assertEqual(profile["name"], name)
+            self.assertEqual(profile["model"], "gpt-5.6-luna")
+            self.assertEqual(profile["sandbox_mode"], "read-only")
 
     def test_evidence_runtime_directory_is_ignored(self) -> None:
         ignores = (ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
         self.assertIn("runtime/sol-luna/", ignores)
+
+    def test_ci_and_setup_lifecycle_are_shipped(self) -> None:
+        self.assertTrue((ROOT / ".github" / "workflows" / "ci.yml").is_file())
+        self.assertTrue((ROOT / "scripts" / "setup.py").is_file())
 
 
 if __name__ == "__main__":
