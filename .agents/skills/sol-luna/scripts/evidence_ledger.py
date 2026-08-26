@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Edmund Dai
+# SPDX-License-Identifier: Apache-2.0
 """Validate, atomically persist, and cohort Sol-Luna delivery evidence."""
 
 from __future__ import annotations

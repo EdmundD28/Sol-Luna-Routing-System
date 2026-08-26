@@ -19,7 +19,7 @@ This audit separates implemented controls from measured economic improvement. It
 | P2.11 Short core Skill | Implemented | `SKILL.md` is about 950 words; uncommon procedures live in routed references. |
 | P2.12 Minimal profiles | Implemented | Worker effort variants plus one read-only reviewer and one bounded scout; no additional role taxonomy. |
 | P2.13 Setup lifecycle, CI, fingerprints | Implemented | Preview/install/update/Doctor/rollback, Windows and Ubuntu CI, and versioned policy fingerprints are present and tested. |
-| P2.14 Open-source licence | Conditional requirement not triggered | No external-reuse intent was supplied. The repository explicitly grants no reuse rights; a licence becomes required only if the owner later chooses external reuse. Do not silently infer MIT, Apache-2.0, or another legal intent. |
+| P2.14 Open-source licence | Superseded after this audit | At audit time, no external-reuse intent or licence had been supplied. The owner subsequently selected Apache-2.0; the repository-root `LICENSE` and `NOTICE` now govern reuse and attribution. |
 
 ## Economic success gates
 

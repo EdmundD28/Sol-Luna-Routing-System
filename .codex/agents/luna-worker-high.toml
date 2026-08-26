@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Edmund Dai
+# SPDX-License-Identifier: Apache-2.0
+
 name = "luna_worker_high"
 description = "High-effort Luna writer for bounded work that requires complex logic tracing, assumption checks, or substantial edge-case reasoning."
 model = "gpt-5.6-luna"

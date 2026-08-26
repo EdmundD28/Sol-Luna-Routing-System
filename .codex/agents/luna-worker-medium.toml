@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Edmund Dai
+# SPDX-License-Identifier: Apache-2.0
+
 name = "luna_worker_medium"
 description = "Medium-effort Luna writer for clear bounded implementation with established architecture and deterministic acceptance checks."
 model = "gpt-5.6-luna"

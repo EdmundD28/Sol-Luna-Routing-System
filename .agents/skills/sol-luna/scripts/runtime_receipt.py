@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Edmund Dai
+# SPDX-License-Identifier: Apache-2.0
 """Build a redacted runtime receipt from one explicit Codex session JSONL file."""
 
 from __future__ import annotations

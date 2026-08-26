@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Edmund Dai
+# SPDX-License-Identifier: Apache-2.0
+
 name = "luna_worker_max"
 description = "Max-effort Luna writer for exceptional reasoning-heavy bounded packages where decomposition cannot remove material uncertainty."
 model = "gpt-5.6-luna"

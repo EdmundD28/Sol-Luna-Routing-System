@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Edmund Dai
+# SPDX-License-Identifier: Apache-2.0
 """Validate a host-produced receipt for real Codex child lifecycle behavior."""
 
 from __future__ import annotations

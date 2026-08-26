@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Edmund Dai
+# SPDX-License-Identifier: Apache-2.0
+
 name = "luna_worker_low"
 description = "Low-effort Luna writer for mechanical, deterministic, tightly specified packages with cheap authoritative verification."
 model = "gpt-5.6-luna"

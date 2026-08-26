@@ -151,4 +151,6 @@ Five fully assessed pairs permit human review, not automatic policy change. Fail
 
 ## License
 
-No open-source license has been selected yet. The repository is public for inspection and collaboration planning, but reuse rights are not granted until the owner chooses a license.
+Copyright 2026 Edmund Dai.
+
+Licensed under the [Apache License 2.0](LICENSE). See [NOTICE](NOTICE) for attribution and the official project repository. The license does not grant permission to use the Licensor's trade names or product names except for customary attribution and origin notices.

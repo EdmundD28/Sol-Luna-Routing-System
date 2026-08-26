@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Edmund Dai
+# SPDX-License-Identifier: Apache-2.0
 """Evaluate predictive Sol-Luna routing, review depth, and bounded rework."""
 
 from __future__ import annotations

@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Edmund Dai
+# SPDX-License-Identifier: Apache-2.0
 """Freeze and assess matched Sol-only versus Sol-Luna evaluation campaigns."""
 
 from __future__ import annotations

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Edmund Dai
+# SPDX-License-Identifier: Apache-2.0
+
 name = "luna_reviewer"
 description = "Read-only Luna High reviewer/tester for independent acceptance evidence and focused risk review; never edits implementation files."
 model = "gpt-5.6-luna"

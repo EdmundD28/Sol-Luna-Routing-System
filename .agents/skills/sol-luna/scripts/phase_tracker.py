@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Edmund Dai
+# SPDX-License-Identifier: Apache-2.0
 """Collect phase elapsed time and optional source readings for one explicit run."""
 
 from __future__ import annotations

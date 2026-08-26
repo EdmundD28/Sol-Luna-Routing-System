@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Edmund Dai
+# SPDX-License-Identifier: Apache-2.0
 """Replay a deterministic Sol-Luna package lifecycle for behavioral verification."""
 
 from __future__ import annotations

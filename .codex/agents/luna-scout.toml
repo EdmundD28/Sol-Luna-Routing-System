@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Edmund Dai
+# SPDX-License-Identifier: Apache-2.0
+
 name = "luna_scout"
 description = "Read-only Luna Low scout for short feasibility probes and dependency maps before Sol commits to an implementation route."
 model = "gpt-5.6-luna"
