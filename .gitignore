@@ -10,3 +10,4 @@ venv/
 *.log
 *.tmp
 models-v1.json
+runtime/sol-luna/

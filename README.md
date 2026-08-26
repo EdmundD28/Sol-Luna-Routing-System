@@ -22,10 +22,18 @@ See [the preliminary comparison](docs/benchmark/preliminary-comparison.md).
 .agents/skills/sol-luna/
   SKILL.md
   agents/openai.yaml
+  references/evidence-and-runtime.md
+  scripts/runtime_receipt.py
+  scripts/evidence_ledger.py
 .codex/agents/
   luna-worker.toml
 docs/benchmark/
   preliminary-comparison.md
+docs/design/
+  upstream-influences.md
+tests/
+  test_runtime_receipt.py
+  test_evidence_ledger.py
 ```
 
 ## Invocation
@@ -51,18 +59,27 @@ Invocation does not force delegation. Small, tightly coupled, or inherently seri
 - Treat worker summaries as claims; Sol independently inspects and verifies the result.
 - Never claim token, credit, latency, or quality improvements without comparable measurements.
 
+## Optional evidence tools
+
+The stability revision includes two standard-library Python tools. They are not mandatory overhead for every invocation:
+
+- `runtime_receipt.py` converts one explicitly supplied Codex session JSONL into an allowlisted, redacted requested-versus-host-observed receipt. Strict identity and boundary checks are opt-in.
+- `evidence_ledger.py` validates and appends opt-in redacted run records, then checks whether at least five clean matched pairs are ready for human review. It never changes routing.
+
+See [the runtime and evidence contract](.agents/skills/sol-luna/references/evidence-and-runtime.md) and [the upstream design review](docs/design/upstream-influences.md).
+
 ## Validation boundary
 
-The checked-in Skill passes the installed Skill Creator validator, and the TOML profile parses as `gpt-5.6-luna` with `max` reasoning. These are structural checks, not proof of routing behavior, runtime identity, implementation quality, or cost savings. Independent forward tests remain release work.
+The checked-in Skill passes the installed Skill Creator validator, and the TOML profile parses as `gpt-5.6-luna` with `max` reasoning. Behavioral tests cover redaction, self-report exclusion, conflicting runtime evidence, failed-versus-blocked outcomes, repair exceptions, acceptance-suite matching, and the five-pair human-review gate. These tests validate the tools and contracts; they do not prove native worker routing, implementation quality, or cost savings.
 
 ## Roadmap
 
 Planned evaluation work:
 
-1. Add forward scenarios for `SOL_ONLY`, `SOL_LUNA`, runtime-unknown, stale-evidence, failed-versus-blocked, and repair-budget behavior.
+1. Add native worker lifecycle scenarios for `SOL_ONLY`, `SOL_LUNA`, stalled workers, and final-candidate evidence refresh.
 2. Add portable install, upgrade, conflict, and rollback lifecycle tests without overwriting user-modified configuration.
 3. Compare Luna reasoning levels on matched bounded package families before changing the current `max` profile.
-4. Record comparable tokens or credits, elapsed time, first-pass acceptance, and rework from clearly identified measurement sources.
+4. Populate the opt-in ledger with comparable real measurements from clearly identified sources.
 5. Run matched tasks with an independent acceptance suite and blind review before changing the routing policy or claiming savings.
 
 ## License
