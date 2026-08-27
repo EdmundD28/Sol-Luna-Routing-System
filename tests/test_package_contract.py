@@ -55,6 +55,15 @@ class PackageContractTests(unittest.TestCase):
         self.assertTrue((ROOT / ".github" / "workflows" / "ci.yml").is_file())
         self.assertTrue((ROOT / "scripts" / "setup.py").is_file())
 
+    def test_credit_trust_boundary_is_documented_fail_closed(self) -> None:
+        skill = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
+        reference = (SKILL_ROOT / "references" / "evidence-and-runtime.md").read_text(encoding="utf-8")
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        self.assertIn("independently supplied claim index bound to each record and receipt", skill)
+        self.assertIn("does **not** fetch billing data", reference)
+        self.assertIn("validate a provider signature", reference)
+        self.assertIn("does not establish a Codex desktop task-level authenticated credit receipt", readme)
+
 
 if __name__ == "__main__":
     unittest.main()

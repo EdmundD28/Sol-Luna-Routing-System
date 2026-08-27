@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Any, Iterator, Mapping
 
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 MIN_MATCHED_PAIRS = 5
 ROUTES = {"SOL_ONLY", "SOL_LUNA"}
 OUTCOMES = {"ACCEPTED", "FAILED", "BLOCKED", "CANCELLED_OR_OBSOLETE", "NOT_ASSESSED"}
@@ -36,6 +36,8 @@ FAILURE_CLASSES = {
     "model_identity",
 }
 CREDIT_KINDS = {"exact", "estimated", "displayed_allowance_delta"}
+CREDIT_VERIFICATIONS = {"UNVERIFIED", "PROVIDER_AUTHENTICATED"}
+VERIFIED_RECEIPTS_SCHEMA_VERSION = 1
 PHASES = {"sol_planning", "sol_execution", "luna_execution", "sol_review", "repair", "integration"}
 EFFORTS = {"low", "medium", "high", "xhigh", "max"}
 REVIEW_DEPTHS = {"TARGETED", "STANDARD", "DEEP", "NOT_APPLICABLE"}
@@ -81,6 +83,10 @@ ALLOWED_FIELDS = {
     "credit_kind",
     "credit_source",
     "credit_uncertainty",
+    "credit_verification",
+    "credit_receipt_ref",
+    "credit_receipt_digest",
+    "billing_window_id",
     "phase_elapsed_seconds",
     "phase_tokens",
     "phase_credits",
@@ -211,11 +217,24 @@ def validate_record(
     if missing:
         raise LedgerError(f"record missing fields: {sorted(missing)}")
     incoming_schema = source.get("schema_version", SCHEMA_VERSION)
-    if incoming_schema not in {1, 2, SCHEMA_VERSION}:
+    if not isinstance(incoming_schema, int) or isinstance(incoming_schema, bool) or incoming_schema not in {1, 2, 3, SCHEMA_VERSION}:
         raise LedgerError(f"unsupported schema_version: {incoming_schema}")
+    if incoming_schema < SCHEMA_VERSION and any(
+        field in source
+        for field in (
+            "credit_verification",
+            "credit_receipt_ref",
+            "credit_receipt_digest",
+            "billing_window_id",
+        )
+    ):
+        raise LedgerError("schema 1-3 records may not carry schema 4 credit trust fields")
 
     record = dict(source)
     record["schema_version"] = SCHEMA_VERSION
+    # Schema 1-3 records predate provider-authenticated billing receipts.  Keep
+    # them readable, but explicitly fail closed for the credit gate.
+    record["credit_verification"] = record.get("credit_verification", "UNVERIFIED")
     run_ref = require_string(record, "run_ref", required=True)
     if PRIVATE_PATH.search(run_ref) or normalize_run_ref:
         run_ref = redacted_ref(run_ref)
@@ -331,11 +350,47 @@ def validate_record(
         record["token_source"] = safe_summary(record, "token_source", required=True)
         record["token_uncertainty"] = safe_summary(record, "token_uncertainty", required=True)
     credit_value = non_negative_number(record.get("credit_value"), "credit_value")
+    credit_verification = require_string(record, "credit_verification") or "UNVERIFIED"
+    if credit_verification not in CREDIT_VERIFICATIONS:
+        raise LedgerError(f"credit_verification must be one of {sorted(CREDIT_VERIFICATIONS)}")
+    record["credit_verification"] = credit_verification
     if credit_value is not None:
         if record.get("credit_kind") not in CREDIT_KINDS:
             raise LedgerError(f"credit_kind must be one of {sorted(CREDIT_KINDS)}")
         record["credit_source"] = safe_summary(record, "credit_source", required=True)
         record["credit_uncertainty"] = safe_summary(record, "credit_uncertainty", required=True)
+        receipt_ref = require_string(record, "credit_receipt_ref")
+        receipt_digest = require_digest(record, "credit_receipt_digest")
+        billing_window = require_string(record, "billing_window_id")
+        for field, value in (
+            ("credit_receipt_ref", receipt_ref),
+            ("billing_window_id", billing_window),
+        ):
+            if value and (len(value) > 128 or PRIVATE_PATH.search(value)):
+                raise LedgerError(f"{field} must be a short non-path identifier")
+        if credit_verification == "PROVIDER_AUTHENTICATED":
+            if record["credit_kind"] != "exact":
+                raise LedgerError("PROVIDER_AUTHENTICATED credits must use credit_kind exact")
+            if record["credit_uncertainty"] != "none":
+                raise LedgerError("PROVIDER_AUTHENTICATED credits require credit_uncertainty none")
+            if not receipt_ref or not receipt_digest or not billing_window:
+                raise LedgerError(
+                    "PROVIDER_AUTHENTICATED credits require credit_receipt_ref, credit_receipt_digest, and billing_window_id"
+                )
+    elif credit_verification == "PROVIDER_AUTHENTICATED":
+        raise LedgerError("PROVIDER_AUTHENTICATED requires credit_value")
+    else:
+        # Validate optional receipt metadata even when a record is intentionally
+        # unverified; malformed values must never enter the ledger.
+        receipt_ref = require_string(record, "credit_receipt_ref")
+        receipt_digest = require_digest(record, "credit_receipt_digest")
+        billing_window = require_string(record, "billing_window_id")
+        for field, value in (
+            ("credit_receipt_ref", receipt_ref),
+            ("billing_window_id", billing_window),
+        ):
+            if value and (len(value) > 128 or PRIVATE_PATH.search(value)):
+                raise LedgerError(f"{field} must be a short non-path identifier")
 
     phase_elapsed = validate_phase_map(record.get("phase_elapsed_seconds"), "phase_elapsed_seconds")
     phase_tokens = validate_phase_map(record.get("phase_tokens"), "phase_tokens", integer=True)
@@ -391,11 +446,18 @@ def load_records(path: Path) -> list[dict[str, Any]]:
     if not path.exists():
         return []
     records: list[dict[str, Any]] = []
+    receipt_digests: set[str] = set()
     for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
         if not line.strip():
             continue
         try:
-            records.append(validate_record(json.loads(line)))
+            record = validate_record(json.loads(line))
+            digest = record.get("credit_receipt_digest")
+            if digest:
+                if digest in receipt_digests:
+                    raise LedgerError(f"duplicate credit_receipt_digest in ledger: {digest}")
+                receipt_digests.add(digest)
+            records.append(record)
         except (json.JSONDecodeError, LedgerError) as exc:
             raise LedgerError(f"invalid ledger line {line_number}: {exc}") from exc
     return records
@@ -454,6 +516,11 @@ def append_record(path: Path, source: Mapping[str, Any], *, now: datetime | None
         records = load_records(path)
         if any(existing["record_id"] == record["record_id"] for existing in records):
             raise LedgerError(f"duplicate record_id: {record['record_id']}")
+        if record.get("credit_receipt_digest") and any(
+            existing.get("credit_receipt_digest") == record["credit_receipt_digest"]
+            for existing in records
+        ):
+            raise LedgerError(f"duplicate credit_receipt_digest: {record['credit_receipt_digest']}")
         atomic_write_records(path, [*records, record])
     return record
 
@@ -465,6 +532,7 @@ def comparable_metric(left: Mapping[str, Any], right: Mapping[str, Any]) -> tupl
         and left.get("credit_kind") == right.get("credit_kind")
         and left.get("credit_source") == right.get("credit_source")
         and left.get("credit_uncertainty") == right.get("credit_uncertainty")
+        and left.get("billing_window_id") == right.get("billing_window_id")
     ):
         return "credit_value", f"{left.get('credit_kind')}:{left.get('credit_source')}"
     if (
@@ -489,12 +557,208 @@ def median(values: list[float | int]) -> float | None:
     return round(float(statistics.median(values)), 6) if values else None
 
 
-def cohort_identity(left: Mapping[str, Any], metric: tuple[str, str]) -> tuple[str, ...]:
+def _cohort_identity_value(field: str, value: Any) -> tuple[str, str]:
+    return (field, json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")))
+
+
+def _cohort_pair_output(identity: tuple[Any, ...], left_index: int) -> dict[str, Any]:
+    return {
+        "SOL_ONLY": json.loads(identity[left_index][1]),
+        "SOL_LUNA": json.loads(identity[left_index + 1][1]),
+    }
+
+
+def cohort_identity(
+    left: Mapping[str, Any], metric: tuple[str, str], right: Mapping[str, Any] | None = None
+) -> tuple[Any, ...]:
+    right = right or {}
     return (
         str(left.get("acceptance_suite_digest") or left.get("acceptance_suite_id")),
         str(left.get("policy_fingerprint") or left.get("policy_version") or "legacy-policy"),
         metric[0],
         metric[1],
+        # Keep each side as its own tuple element.  Delimiter-joined strings
+        # can collide when a user-controlled summary contains that delimiter.
+        _cohort_identity_value("credit_uncertainty", left.get("credit_uncertainty", "")),
+        _cohort_identity_value("credit_uncertainty", right.get("credit_uncertainty", "")),
+        _cohort_identity_value("token_uncertainty", left.get("token_uncertainty", "")),
+        _cohort_identity_value("token_uncertainty", right.get("token_uncertainty", "")),
+        _cohort_identity_value("runtime_identity_uncertainty", left.get("runtime_identity_uncertainty", "")),
+        _cohort_identity_value("runtime_identity_uncertainty", right.get("runtime_identity_uncertainty", "")),
+        _cohort_identity_value("luna_effort", left.get("luna_effort", "")),
+        _cohort_identity_value("luna_effort", right.get("luna_effort", "")),
+        _cohort_identity_value("writer_count", left.get("writer_count", "")),
+        _cohort_identity_value("writer_count", right.get("writer_count", "")),
+        _cohort_identity_value("observed_luna_model", left.get("observed_luna_model", "")),
+        _cohort_identity_value("observed_luna_model", right.get("observed_luna_model", "")),
+        _cohort_identity_value("review_depth", left.get("review_depth", "")),
+        _cohort_identity_value("review_depth", right.get("review_depth", "")),
+        _cohort_identity_value("billing_window_id", left.get("billing_window_id", "")),
+        _cohort_identity_value("billing_window_id", right.get("billing_window_id", "")),
+    )
+
+
+VERIFIED_CLAIM_FIELDS = {
+    "record_id",
+    "task_family",
+    "route",
+    "pair_id",
+    "policy_identity",
+    "acceptance_suite_identity",
+    "credit_value",
+    "credit_source",
+    "credit_uncertainty",
+    "billing_window_id",
+    "credit_receipt_ref",
+    "receipt_digest",
+    "runtime_identity_source",
+    "runtime_identity_uncertainty",
+    "observed_sol_model",
+    "observed_luna_model",
+    "claim_digest",
+}
+VERIFIED_INDEX_FIELDS = {"schema_version", "verification_source", "claims"}
+
+
+def _canonical_claim_digest(claim: Mapping[str, Any]) -> str:
+    payload = {field: claim[field] for field in sorted(VERIFIED_CLAIM_FIELDS - {"claim_digest"})}
+    digest = hashlib.sha256(
+        json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    return f"sha256:{digest}"
+
+
+def _validate_verified_claim(claim: Mapping[str, Any]) -> dict[str, Any]:
+    if not isinstance(claim, Mapping) or set(claim) != VERIFIED_CLAIM_FIELDS:
+        raise LedgerError(
+            "verified credit claims must contain exactly the required ledger binding fields"
+        )
+    normalized = dict(claim)
+    record_id = require_string(normalized, "record_id", required=True)
+    if len(record_id) > 128 or PRIVATE_PATH.search(record_id):
+        raise LedgerError("verified claim record_id must be a short non-path identifier")
+    if normalized.get("route") not in ROUTES:
+        raise LedgerError("verified claim route must be SOL_ONLY or SOL_LUNA")
+    normalized["task_family"] = require_label(normalized, "task_family", required=True)
+    normalized["pair_id"] = require_label(normalized, "pair_id", required=True)
+    normalized["policy_identity"] = safe_summary(
+        normalized, "policy_identity", required=True
+    )
+    normalized["acceptance_suite_identity"] = safe_summary(
+        normalized, "acceptance_suite_identity", required=True
+    )
+    normalized["credit_value"] = non_negative_number(normalized.get("credit_value"), "credit_value")
+    if normalized["credit_value"] is None:
+        raise LedgerError("verified claim credit_value may not be null")
+    normalized["credit_source"] = safe_summary(normalized, "credit_source", required=True)
+    normalized["credit_uncertainty"] = safe_summary(normalized, "credit_uncertainty", required=True)
+    for field in ("billing_window_id", "credit_receipt_ref"):
+        value = require_string(normalized, field, required=True)
+        if len(value) > 128 or PRIVATE_PATH.search(value):
+            raise LedgerError(f"verified claim {field} must be a short non-path identifier")
+        normalized[field] = value
+    normalized["receipt_digest"] = require_digest(normalized, "receipt_digest", required=True)
+    for field in (
+        "runtime_identity_source",
+        "runtime_identity_uncertainty",
+        "observed_sol_model",
+        "observed_luna_model",
+    ):
+        normalized[field] = safe_summary(normalized, field)
+    normalized["claim_digest"] = require_digest(normalized, "claim_digest", required=True)
+    if normalized["claim_digest"] != _canonical_claim_digest(normalized):
+        raise LedgerError("verified claim claim_digest does not match canonical claim JSON")
+    return normalized
+
+
+def _validate_verified_receipt_index(source: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
+    if set(source) != VERIFIED_INDEX_FIELDS:
+        raise LedgerError(
+            "verified credit receipt index must contain only schema_version, verification_source, and claims"
+        )
+    version = source.get("schema_version")
+    if version != VERIFIED_RECEIPTS_SCHEMA_VERSION:
+        raise LedgerError(f"unsupported verified credit receipt index schema_version: {version}")
+    verification_source = source.get("verification_source")
+    if not isinstance(verification_source, str) or not verification_source.strip():
+        raise LedgerError("verification_source must be a non-empty non-sensitive string")
+    if len(verification_source) > 240 or PRIVATE_PATH.search(verification_source):
+        raise LedgerError("verification_source must be a short non-sensitive string")
+    claims = source.get("claims")
+    if not isinstance(claims, list):
+        raise LedgerError("verified credit claims must be a JSON array")
+    by_digest: dict[str, dict[str, Any]] = {}
+    record_ids: set[str] = set()
+    claim_digests: set[str] = set()
+    for raw_claim in claims:
+        claim = _validate_verified_claim(raw_claim)
+        receipt_digest = claim["receipt_digest"]
+        if receipt_digest in by_digest:
+            raise LedgerError("verified credit receipt digest may not be reused by multiple claims")
+        if claim["record_id"] in record_ids:
+            raise LedgerError("verified credit claims must bind unique record_id values")
+        if claim["claim_digest"] in claim_digests:
+            raise LedgerError("verified credit claims must have unique claim_digest values")
+        by_digest[receipt_digest] = claim
+        record_ids.add(claim["record_id"])
+        claim_digests.add(claim["claim_digest"])
+    return by_digest
+
+
+def _normalize_verified_credit_receipts(verified_credit_receipts: Any) -> dict[str, dict[str, Any]]:
+    """Return independently supplied, ledger-bound claims; digest sets are rejected."""
+    if verified_credit_receipts is None:
+        return {}
+    if not isinstance(verified_credit_receipts, Mapping):
+        raise LedgerError("verified_credit_receipts must be a strict claim-index object")
+    return _validate_verified_receipt_index(verified_credit_receipts)
+
+
+def load_verified_credit_receipts(path: Path) -> dict[str, dict[str, Any]]:
+    try:
+        source = json.loads(path.read_text(encoding="utf-8"))
+    except (UnicodeError, json.JSONDecodeError) as exc:
+        raise LedgerError(f"invalid verified credit receipt index: {exc}") from exc
+    if not isinstance(source, Mapping):
+        raise LedgerError("verified credit receipt index must be a JSON object")
+    _validate_verified_receipt_index(source)
+    return dict(source)
+
+
+def _credit_record_is_independently_verified(
+    record: Mapping[str, Any], verified_credit_receipts: Mapping[str, Mapping[str, Any]]
+) -> bool:
+    digest = record.get("credit_receipt_digest")
+    claim = verified_credit_receipts.get(digest) if isinstance(digest, str) else None
+    if claim is None:
+        return False
+    expected = {
+        "record_id": record.get("record_id") or record_id(record),
+        "task_family": record.get("task_family"),
+        "route": record.get("route"),
+        "pair_id": record.get("pair_id"),
+        "policy_identity": record.get("policy_fingerprint")
+        or record.get("policy_version")
+        or "legacy-policy",
+        "acceptance_suite_identity": record.get("acceptance_suite_digest")
+        or record.get("acceptance_suite_id"),
+        "credit_value": record.get("credit_value"),
+        "credit_source": record.get("credit_source"),
+        "credit_uncertainty": record.get("credit_uncertainty"),
+        "billing_window_id": record.get("billing_window_id"),
+        "credit_receipt_ref": record.get("credit_receipt_ref"),
+        "receipt_digest": digest,
+        "runtime_identity_source": record.get("runtime_identity_source", ""),
+        "runtime_identity_uncertainty": record.get("runtime_identity_uncertainty", ""),
+        "observed_sol_model": record.get("observed_sol_model", ""),
+        "observed_luna_model": record.get("observed_luna_model", ""),
+    }
+    return (
+        record.get("credit_value") is not None
+        and record.get("credit_kind") == "exact"
+        and record.get("credit_uncertainty") == "none"
+        and record.get("credit_verification") == "PROVIDER_AUTHENTICATED"
+        and all(claim.get(field) == value for field, value in expected.items())
     )
 
 
@@ -505,6 +769,7 @@ def evidence_status(
     minimum_pairs: int = MIN_MATCHED_PAIRS,
     minimum_credit_savings_fraction: float = 0.15,
     minimum_first_pass_acceptance_rate: float = 0.80,
+    verified_credit_receipts: Any = None,
 ) -> dict[str, Any]:
     if minimum_pairs < MIN_MATCHED_PAIRS:
         raise LedgerError(f"minimum_pairs cannot be lower than {MIN_MATCHED_PAIRS}")
@@ -512,6 +777,7 @@ def evidence_status(
         raise LedgerError("minimum_credit_savings_fraction must be between 0 and 1")
     if not 0 <= minimum_first_pass_acceptance_rate <= 1:
         raise LedgerError("minimum_first_pass_acceptance_rate must be between 0 and 1")
+    verified_receipts = _normalize_verified_credit_receipts(verified_credit_receipts)
     grouped: dict[tuple[str, str], list[Mapping[str, Any]]] = defaultdict(list)
     for record in records:
         if record.get("task_family") == task_family and record.get("pair_id"):
@@ -547,7 +813,7 @@ def evidence_status(
         if not metric:
             rejected["no_comparable_cost_measurement"] += 1
             continue
-        cohorts[cohort_identity(left, metric)].append(
+        cohorts[cohort_identity(left, metric, right)].append(
             {
                 "campaign_id": campaign_id,
                 "pair_id": pair_id,
@@ -595,12 +861,29 @@ def evidence_status(
             phase = record.get("phase_credits") if metric == "credit_value" else record.get("phase_tokens")
             if phase and float(record[metric]) > 0:
                 coordination_shares.append(
-                    (float(phase.get("sol_planning", 0)) + float(phase.get("sol_review", 0)))
+                    (
+                        float(phase.get("sol_planning", 0))
+                        + float(phase.get("sol_review", 0))
+                        + float(phase.get("integration", 0))
+                    )
                     / float(record[metric])
                 )
         median_savings = median(paired_savings)
         median_elapsed_delta = median(elapsed_deltas)
-        credible_credit_metric = metric == "credit_value" and pairs[0]["source"].startswith("exact:")
+        independently_verified = metric == "credit_value" and all(
+            _credit_record_is_independently_verified(pair["routes"][route], verified_receipts)
+            for pair in pairs
+            for route in sorted(ROUTES)
+        )
+        credible_credit_metric = independently_verified and all(
+            pair["routes"]["SOL_ONLY"].get("billing_window_id")
+            == pair["routes"]["SOL_LUNA"].get("billing_window_id")
+            and pair["routes"]["SOL_ONLY"].get("credit_source")
+            == pair["routes"]["SOL_LUNA"].get("credit_source")
+            and pair["routes"]["SOL_ONLY"].get("credit_uncertainty")
+            == pair["routes"]["SOL_LUNA"].get("credit_uncertainty")
+            for pair in pairs
+        )
         gates = {
             "minimum_pairs": len(pairs) >= minimum_pairs,
             "independent_acceptance_equal_or_better": acceptance_rates["SOL_LUNA"]
@@ -622,6 +905,14 @@ def evidence_status(
                     "policy": identity[1],
                     "metric": identity[2],
                     "measurement_source": identity[3],
+                    "credit_uncertainty": _cohort_pair_output(identity, 4),
+                    "token_uncertainty": _cohort_pair_output(identity, 6),
+                    "runtime_identity_uncertainty": _cohort_pair_output(identity, 8),
+                    "luna_effort": _cohort_pair_output(identity, 10),
+                    "writer_count": _cohort_pair_output(identity, 12),
+                    "observed_luna_model": _cohort_pair_output(identity, 14),
+                    "review_depth": _cohort_pair_output(identity, 16),
+                    "billing_window_id": _cohort_pair_output(identity, 18),
                 },
                 "qualified_matched_pairs": len(pairs),
                 "observed_luna_efforts": sorted(
@@ -639,6 +930,11 @@ def evidence_status(
                 "final_defect_rate": defect_rates,
                 "first_pass_acceptance_rate": first_pass,
                 "median_sol_coordination_share": median(coordination_shares),
+                "independently_verified_credit_records": sum(
+                    _credit_record_is_independently_verified(pair["routes"][route], verified_receipts)
+                    for pair in pairs
+                    for route in sorted(ROUTES)
+                ),
                 "success_gates": gates,
                 "policy_change_eligible": all(gates.values()),
             }
@@ -650,6 +946,7 @@ def evidence_status(
         "task_family": task_family,
         "status": "eligible_for_human_review" if reviewable else "insufficient_evidence",
         "automatic_routing_allowed": False,
+        "verified_credit_receipt_count": len(verified_receipts),
         "qualified_matched_pairs": sum(item["qualified_matched_pairs"] for item in cohort_outputs),
         "largest_cohort_pairs": max((item["qualified_matched_pairs"] for item in cohort_outputs), default=0),
         "minimum_required_per_cohort": minimum_pairs,
@@ -670,6 +967,7 @@ def task_family_feedback(
     minimum_pairs: int = MIN_MATCHED_PAIRS,
     minimum_credit_savings_fraction: float = 0.15,
     minimum_first_pass_acceptance_rate: float = 0.80,
+    verified_credit_receipts: Any = None,
 ) -> dict[str, Any]:
     """Convert matched evidence into an advisory, fail-closed routing posture."""
     status = evidence_status(
@@ -678,6 +976,7 @@ def task_family_feedback(
         minimum_pairs=minimum_pairs,
         minimum_credit_savings_fraction=minimum_credit_savings_fraction,
         minimum_first_pass_acceptance_rate=minimum_first_pass_acceptance_rate,
+        verified_credit_receipts=verified_credit_receipts,
     )
     cohorts = list(status["cohorts"])
     eligible = [cohort for cohort in cohorts if cohort["policy_change_eligible"]]
@@ -716,6 +1015,7 @@ def task_family_feedback(
         "task_family": task_family,
         "posture": posture,
         "supported_luna_efforts": supported_efforts,
+        "verified_credit_receipt_count": len(_normalize_verified_credit_receipts(verified_credit_receipts)),
         "automatic_routing_allowed": False,
         "human_policy_review_required": bool(eligible),
         "reasons": reasons,
@@ -753,6 +1053,10 @@ def template() -> dict[str, Any]:
         "credit_kind": "estimated",
         "credit_source": "",
         "credit_uncertainty": "",
+        "credit_verification": "UNVERIFIED",
+        "credit_receipt_ref": "",
+        "credit_receipt_digest": "",
+        "billing_window_id": "",
         "observed_sol_model": "",
         "observed_luna_model": "",
         "runtime_identity_source": "",
@@ -779,6 +1083,7 @@ def parser() -> argparse.ArgumentParser:
         command.add_argument("--minimum-pairs", type=int, default=MIN_MATCHED_PAIRS)
         command.add_argument("--minimum-credit-savings-fraction", type=float, default=0.15)
         command.add_argument("--minimum-first-pass-acceptance-rate", type=float, default=0.80)
+        command.add_argument("--verified-credit-receipts", type=Path)
     return result
 
 
@@ -803,6 +1108,11 @@ def main() -> int:
                 minimum_pairs=args.minimum_pairs,
                 minimum_credit_savings_fraction=args.minimum_credit_savings_fraction,
                 minimum_first_pass_acceptance_rate=args.minimum_first_pass_acceptance_rate,
+                verified_credit_receipts=(
+                    load_verified_credit_receipts(args.verified_credit_receipts)
+                    if args.verified_credit_receipts
+                    else None
+                ),
             )
     except (OSError, json.JSONDecodeError, LedgerError) as exc:
         print(f"evidence ledger error: {exc}", file=sys.stderr)

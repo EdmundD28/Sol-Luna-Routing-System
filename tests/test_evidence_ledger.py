@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import subprocess
+import sys
 import tempfile
 import threading
 import unittest
@@ -63,6 +65,53 @@ def accepted_credit_record(
     return record
 
 
+def verified_credit_record(route: str, pair_id: str, *, digest_suffix: str = "a") -> dict:
+    record = accepted_credit_record(route, pair_id)
+    record.update(
+        {
+            "credit_verification": "PROVIDER_AUTHENTICATED",
+            "credit_receipt_ref": f"receipt-{pair_id}-{route.lower()}",
+            "credit_receipt_digest": "sha256:" + digest_suffix * 64,
+            "billing_window_id": "window-2026-08",
+        }
+    )
+    return record
+
+
+def verified_claim(record: dict) -> dict:
+    claim = {
+        "record_id": record["record_id"],
+        "task_family": record["task_family"],
+        "route": record["route"],
+        "pair_id": record["pair_id"],
+        "policy_identity": record.get("policy_fingerprint")
+        or record.get("policy_version")
+        or "legacy-policy",
+        "acceptance_suite_identity": record.get("acceptance_suite_digest")
+        or record["acceptance_suite_id"],
+        "credit_value": record["credit_value"],
+        "credit_source": record["credit_source"],
+        "credit_uncertainty": record["credit_uncertainty"],
+        "billing_window_id": record["billing_window_id"],
+        "credit_receipt_ref": record["credit_receipt_ref"],
+        "receipt_digest": record["credit_receipt_digest"],
+        "runtime_identity_source": record.get("runtime_identity_source", ""),
+        "runtime_identity_uncertainty": record.get("runtime_identity_uncertainty", ""),
+        "observed_sol_model": record.get("observed_sol_model", ""),
+        "observed_luna_model": record.get("observed_luna_model", ""),
+    }
+    claim["claim_digest"] = LEDGER._canonical_claim_digest(claim)
+    return claim
+
+
+def verified_index(records: list[dict]) -> dict:
+    return {
+        "schema_version": 1,
+        "verification_source": "provider-export-review-v1",
+        "claims": [verified_claim(record) for record in records],
+    }
+
+
 class EvidenceLedgerTests(unittest.TestCase):
     def test_append_redacts_run_ref_and_round_trips(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -87,6 +136,15 @@ class EvidenceLedgerTests(unittest.TestCase):
             with self.assertRaises(LEDGER.LedgerError):
                 LEDGER.append_record(path, record)
             self.assertEqual(len(LEDGER.load_records(path)), 1)
+
+    def test_receipt_digest_cannot_be_reused_by_multiple_ledger_records(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "ledger.jsonl"
+            first = verified_credit_record("SOL_ONLY", "pair-001")
+            LEDGER.append_record(path, first)
+            second = verified_credit_record("SOL_LUNA", "pair-001", digest_suffix="a")
+            with self.assertRaisesRegex(LEDGER.LedgerError, "duplicate credit_receipt_digest"):
+                LEDGER.append_record(path, second)
 
     def test_concurrent_appends_are_serialized_atomically(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -309,8 +367,8 @@ class EvidenceLedgerTests(unittest.TestCase):
         self.assertFalse(token_gate["success_gates"]["credible_credit_reduction"])
         self.assertFalse(displayed_gate["success_gates"]["credible_credit_reduction"])
         self.assertFalse(estimated_gate["success_gates"]["credible_credit_reduction"])
-        self.assertTrue(exact_gate["success_gates"]["credible_credit_reduction"])
-        self.assertTrue(exact_gate["policy_change_eligible"])
+        self.assertFalse(exact_gate["success_gates"]["credible_credit_reduction"])
+        self.assertFalse(exact_gate["policy_change_eligible"])
 
     def test_exact_credits_take_precedence_when_token_diagnostics_are_also_present(self) -> None:
         records = []
@@ -328,7 +386,7 @@ class EvidenceLedgerTests(unittest.TestCase):
                 records.append(LEDGER.validate_record(record))
         cohort = LEDGER.evidence_status(records, task_family="bounded-feature")["cohorts"][0]
         self.assertEqual(cohort["cohort"]["metric"], "credit_value")
-        self.assertTrue(cohort["policy_change_eligible"])
+        self.assertFalse(cohort["policy_change_eligible"])
 
     def test_low_first_pass_rate_blocks_policy_eligibility(self) -> None:
         records = []
@@ -392,10 +450,303 @@ class EvidenceLedgerTests(unittest.TestCase):
             luna["luna_effort"] = "xhigh"
             records.extend([LEDGER.validate_record(sol), LEDGER.validate_record(luna)])
         feedback = LEDGER.task_family_feedback(records, task_family="bounded-feature")
-        self.assertEqual(feedback["posture"], "SOL_LUNA_POLICY_REVIEW_CANDIDATE")
-        self.assertEqual(feedback["supported_luna_efforts"], ["xhigh"])
-        self.assertTrue(feedback["human_policy_review_required"])
+        self.assertEqual(feedback["posture"], "HOLD_SOL_ONLY")
+        self.assertEqual(feedback["supported_luna_efforts"], [])
+        self.assertFalse(feedback["human_policy_review_required"])
         self.assertFalse(feedback["automatic_routing_allowed"])
+
+    def test_legacy_schema_records_are_read_as_unverified(self) -> None:
+        record = accepted_credit_record("SOL_ONLY", "pair-001")
+        record["schema_version"] = 1
+        normalized = LEDGER.validate_record(record)
+        self.assertEqual(normalized["schema_version"], 4)
+        self.assertEqual(normalized["credit_verification"], "UNVERIFIED")
+
+    def test_provider_authenticated_credit_requires_exact_receipt_fields(self) -> None:
+        record = accepted_credit_record("SOL_ONLY", "pair-001")
+        record["credit_verification"] = "PROVIDER_AUTHENTICATED"
+        with self.assertRaises(LEDGER.LedgerError):
+            LEDGER.validate_record(record)
+        record = verified_credit_record("SOL_ONLY", "pair-001")
+        record["credit_kind"] = "estimated"
+        with self.assertRaises(LEDGER.LedgerError):
+            LEDGER.validate_record(record)
+        record = verified_credit_record("SOL_ONLY", "pair-001")
+        record["credit_receipt_digest"] = "not-a-digest"
+        with self.assertRaises(LEDGER.LedgerError):
+            LEDGER.validate_record(record)
+
+    def test_self_reported_exact_and_fake_receipt_set_cannot_pass_credit_gate(self) -> None:
+        records = []
+        for index in range(1, 6):
+            pair_id = f"pair-{index:03d}"
+            for route in ("SOL_ONLY", "SOL_LUNA"):
+                record = accepted_credit_record(route, pair_id)
+                suffix = format(index * 2 + (route == "SOL_LUNA"), "x")
+                digest = "sha256:" + (suffix * 64)
+                record.update(
+                    {
+                        "credit_receipt_digest": digest,
+                        "credit_receipt_ref": f"receipt-{pair_id}-{route.lower()}",
+                        "billing_window_id": "window-2026-08",
+                    }
+                )
+                records.append(LEDGER.validate_record(record))
+        fake_index = verified_index(records)
+        cohort = LEDGER.evidence_status(
+            records,
+            task_family="bounded-feature",
+            verified_credit_receipts=fake_index,
+        )["cohorts"][0]
+        self.assertFalse(cohort["success_gates"]["credible_credit_reduction"])
+
+        with self.assertRaises(LEDGER.LedgerError):
+            LEDGER.evidence_status(
+                records,
+                task_family="bounded-feature",
+                verified_credit_receipts={"sha256:" + "a" * 64},
+            )
+
+    def test_only_provider_authenticated_records_in_independent_set_pass(self) -> None:
+        records = []
+        verified_records = []
+        for index in range(1, 6):
+            pair_id = f"pair-{index:03d}"
+            for route in ("SOL_ONLY", "SOL_LUNA"):
+                suffix = format(index * 2 + (route == "SOL_LUNA"), "x")
+                record = verified_credit_record(route, pair_id, digest_suffix=suffix)
+                record = LEDGER.validate_record(record)
+                verified_records.append(record)
+                records.append(record)
+        status = LEDGER.evidence_status(
+            records,
+            task_family="bounded-feature",
+            verified_credit_receipts=verified_index(verified_records),
+        )
+        self.assertTrue(status["cohorts"][0]["success_gates"]["credible_credit_reduction"])
+        self.assertTrue(status["cohorts"][0]["policy_change_eligible"])
+
+    def test_verified_receipt_index_is_strict_and_cli_loadable(self) -> None:
+        record = LEDGER.validate_record(verified_credit_record("SOL_ONLY", "pair-001"))
+        index_document = verified_index([record])
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "receipts.json"
+            path.write_text(json.dumps(index_document), encoding="utf-8")
+            loaded = LEDGER.load_verified_credit_receipts(path)
+            self.assertEqual(loaded["claims"][0]["record_id"], record["record_id"])
+            path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "verification_source": "C:\\Users\\private",
+                        "claims": index_document["claims"],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaises(LEDGER.LedgerError):
+                LEDGER.load_verified_credit_receipts(path)
+
+    def test_cli_status_accepts_verified_receipt_index(self) -> None:
+        record = LEDGER.validate_record(verified_credit_record("SOL_ONLY", "pair-001"))
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            index = root / "receipts.json"
+            index.write_text(json.dumps(verified_index([record])), encoding="utf-8")
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "status",
+                    "--ledger",
+                    str(root / "ledger.jsonl"),
+                    "--task-family",
+                    "bounded-feature",
+                    "--verified-credit-receipts",
+                    str(index),
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(json.loads(result.stdout)["schema_version"], 4)
+
+    def test_cli_nonempty_ledger_rejects_claim_bound_to_wrong_record(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            ledger_path = root / "ledger.jsonl"
+            sol = LEDGER.append_record(ledger_path, verified_credit_record("SOL_ONLY", "pair-001"))
+            luna = LEDGER.append_record(ledger_path, verified_credit_record("SOL_LUNA", "pair-001", digest_suffix="b"))
+            index_document = verified_index([sol, luna])
+            index_document["claims"][1]["record_id"] = "record:tampered-claim"
+            index_document["claims"][1]["claim_digest"] = LEDGER._canonical_claim_digest(index_document["claims"][1])
+            index_path = root / "receipts.json"
+            index_path.write_text(json.dumps(index_document), encoding="utf-8")
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "status",
+                    "--ledger",
+                    str(ledger_path),
+                    "--task-family",
+                    "bounded-feature",
+                    "--verified-credit-receipts",
+                    str(index_path),
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            output = json.loads(result.stdout)
+            self.assertFalse(output["cohorts"][0]["success_gates"]["credible_credit_reduction"])
+
+    def test_cli_rejects_non_utf8_receipt_index_without_traceback(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            index_path = root / "receipts.json"
+            index_path.write_bytes(b"\xff\xfe\x00")
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "status",
+                    "--ledger",
+                    str(root / "ledger.jsonl"),
+                    "--task-family",
+                    "bounded-feature",
+                    "--verified-credit-receipts",
+                    str(index_path),
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 2)
+            self.assertIn("evidence ledger error", result.stderr)
+            self.assertNotIn("Traceback", result.stderr)
+
+    def test_cohort_identity_separates_effort_uncertainty_writer_and_integration_cost(self) -> None:
+        records = []
+        for index in range(1, 6):
+            pair_id = f"pair-{index:03d}"
+            sol = verified_credit_record("SOL_ONLY", pair_id, digest_suffix=format(index * 2, "x"))
+            luna = verified_credit_record("SOL_LUNA", pair_id, digest_suffix=format(index * 2 + 1, "x"))
+            sol["writer_count"] = luna["writer_count"] = 1
+            sol["review_depth"] = luna["review_depth"] = "STANDARD"
+            luna["luna_effort"] = "low" if index < 3 else "xhigh"
+            luna["phase_credits"] = {"sol_planning": 10, "luna_execution": 50, "sol_review": 10, "integration": 10}
+            sol["phase_credits"] = {"sol_execution": 100}
+            sol["credit_value"] = 100
+            luna["credit_value"] = 80
+            records.extend([LEDGER.validate_record(sol), LEDGER.validate_record(luna)])
+        status = LEDGER.evidence_status(
+            records,
+            task_family="bounded-feature",
+            verified_credit_receipts=verified_index(records),
+        )
+        self.assertGreaterEqual(len(status["cohorts"]), 2)
+        self.assertFalse(any(c["policy_change_eligible"] for c in status["cohorts"]))
+
+    def test_cohort_identity_separates_token_uncertainty(self) -> None:
+        records = []
+        for index in range(1, 6):
+            pair_id = f"pair-{index:03d}"
+            sol = accepted_record("SOL_ONLY", pair_id, tokens=1000)
+            luna = accepted_record("SOL_LUNA", pair_id, tokens=800)
+            uncertainty = "local-diagnostic" if index <= 2 else "provider-margin-unknown"
+            sol["token_uncertainty"] = uncertainty
+            luna["token_uncertainty"] = uncertainty
+            records.extend([LEDGER.validate_record(sol), LEDGER.validate_record(luna)])
+        status = LEDGER.evidence_status(records, task_family="bounded-feature")
+        self.assertGreaterEqual(len(status["cohorts"]), 2)
+
+    def test_legacy_schema_cannot_smuggle_explicit_provider_authentication(self) -> None:
+        record = verified_credit_record("SOL_ONLY", "pair-001")
+        record["schema_version"] = 3
+        with self.assertRaisesRegex(LEDGER.LedgerError, "schema 1-3"):
+            LEDGER.validate_record(record)
+
+    def test_cohort_identity_uses_structured_side_members_without_delimiter_collision(self) -> None:
+        left = accepted_record("SOL_ONLY", "pair-001", tokens=1000)
+        right = accepted_record("SOL_LUNA", "pair-001", tokens=800)
+        first = LEDGER.cohort_identity(
+            dict(left, token_uncertainty="left|right"),
+            ("total_tokens", "source"),
+            dict(right, token_uncertainty="value"),
+        )
+        second = LEDGER.cohort_identity(
+            dict(left, token_uncertainty="left"),
+            ("total_tokens", "source"),
+            dict(right, token_uncertainty="right|value"),
+        )
+        self.assertNotEqual(first, second)
+        self.assertEqual(first[6], ("token_uncertainty", json.dumps("left|right")))
+        self.assertEqual(first[7], ("token_uncertainty", json.dumps("value")))
+
+    def test_token_cohorts_include_both_billing_window_members(self) -> None:
+        records = []
+        for index in range(1, 6):
+            pair_id = f"pair-{index:03d}"
+            sol = accepted_record("SOL_ONLY", pair_id, tokens=1000)
+            luna = accepted_record("SOL_LUNA", pair_id, tokens=800)
+            sol["billing_window_id"] = "window-a"
+            luna["billing_window_id"] = "window-a" if index <= 2 else "window-b"
+            records.extend([LEDGER.validate_record(sol), LEDGER.validate_record(luna)])
+        status = LEDGER.evidence_status(records, task_family="bounded-feature")
+        self.assertEqual(len(status["cohorts"]), 2)
+        windows = {
+            (
+                cohort["cohort"]["billing_window_id"]["SOL_ONLY"],
+                cohort["cohort"]["billing_window_id"]["SOL_LUNA"],
+            )
+            for cohort in status["cohorts"]
+        }
+        self.assertEqual(windows, {("window-a", "window-a"), ("window-a", "window-b")})
+
+    def test_verified_index_rejects_duplicate_digest_and_claim_mismatch(self) -> None:
+        first = LEDGER.validate_record(verified_credit_record("SOL_ONLY", "pair-001", digest_suffix="a"))
+        second = LEDGER.validate_record(verified_credit_record("SOL_LUNA", "pair-001", digest_suffix="b"))
+        claims = verified_index([first, second])
+        claims["claims"][1]["receipt_digest"] = claims["claims"][0]["receipt_digest"]
+        claims["claims"][1]["claim_digest"] = LEDGER._canonical_claim_digest(claims["claims"][1])
+        with self.assertRaisesRegex(LEDGER.LedgerError, "reused"):
+            LEDGER.evidence_status([first, second], task_family="bounded-feature", verified_credit_receipts=claims)
+
+        claims = verified_index([first])
+        claims["claims"][0]["credit_value"] = 999
+        with self.assertRaisesRegex(LEDGER.LedgerError, "canonical claim JSON"):
+            LEDGER.evidence_status([first], task_family="bounded-feature", verified_credit_receipts=claims)
+
+    def test_verified_claims_cannot_replay_across_family_policy_or_suite(self) -> None:
+        records = []
+        for index in range(1, 6):
+            pair_id = f"pair-{index:03d}"
+            records.extend(
+                [
+                    LEDGER.validate_record(verified_credit_record("SOL_ONLY", pair_id, digest_suffix=format(index * 2, "x"))),
+                    LEDGER.validate_record(verified_credit_record("SOL_LUNA", pair_id, digest_suffix=format(index * 2 + 1, "x"))),
+                ]
+            )
+        claims = verified_index(records)
+        mutations = (
+            ("task_family", "relabelled-family"),
+            ("policy_fingerprint", "sha256:" + "c" * 64),
+            ("acceptance_suite_digest", "sha256:" + "d" * 64),
+        )
+        for field, value in mutations:
+            with self.subTest(field=field):
+                replayed = [dict(record, **{field: value}) for record in records]
+                task_family = "relabelled-family" if field == "task_family" else "bounded-feature"
+                status = LEDGER.evidence_status(
+                    replayed,
+                    task_family=task_family,
+                    verified_credit_receipts=claims,
+                )
+                self.assertFalse(status["cohorts"][0]["success_gates"]["credible_credit_reduction"])
+                self.assertFalse(status["cohorts"][0]["policy_change_eligible"])
 
 
 if __name__ == "__main__":
