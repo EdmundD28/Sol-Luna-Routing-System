@@ -23,7 +23,96 @@ Within one unchanged meter, the hidden capacity cancels:
 allowance advantage = Sol-only percentage-point consumption / Sol-Luna percentage-point consumption
 ```
 
-Use `scripts/allowance_meter.py assess` to aggregate the paired intervals. If integer display resolution makes the denominator indistinguishable from zero or the conservative lower bound misses the pre-registered threshold, enlarge the matched batch within the quota budget or report `HOLD`; do not manufacture precision.
+Use `allowance_campaign.py` to create and recover the append-only campaign ledger. It generates records accepted directly by `allowance_meter.validate_record()` and passes completed records to `allowance_meter.assess()`. If integer display resolution makes the denominator indistinguishable from zero or the conservative lower bound misses the pre-registered threshold, enlarge the matched batch within the quota budget or report `HOLD`; do not manufacture precision.
+
+## Record the campaign
+
+Keep the ledger and evidence captures outside the repository. Initialization is exclusive and refuses an existing ledger:
+
+```powershell
+python .agents/skills/sol-luna/scripts/allowance_campaign.py init `
+  --ledger C:\benchmark\campaign.jsonl `
+  --contract-digest sha256:0000000000000000000000000000000000000000000000000000000000000000 `
+  --usage-scope-digest sha256:1111111111111111111111111111111111111111111111111111111111111111 `
+  --task-family bounded-feature `
+  --batch-size 1 `
+  --reading-uncertainty 1 `
+  --first-routes SOL_ONLY,SOL_LUNA,SOL_LUNA,SOL_ONLY `
+  --five-hour-window-id five-hour-001 `
+  --five-hour-reset-at 2026-08-28T12:00:00+10:00 `
+  --weekly-window-id weekly-001 `
+  --weekly-reset-at 2026-09-01T00:00:00+10:00
+```
+
+Immediately before launching an arm, take settled readings and record them. The command derives the pair and position from the registered order:
+
+```powershell
+python .agents/skills/sol-luna/scripts/allowance_campaign.py begin-arm `
+  --ledger C:\benchmark\campaign.jsonl `
+  --route SOL_ONLY --route-revision v0.1.1 `
+  --observed-at 2026-08-28T09:00:00+10:00 `
+  --five-hour-remaining-percent 100 --weekly-remaining-percent 100 `
+  --start-evidence-digest sha256:2222222222222222222222222222222222222222222222222222222222222222
+```
+
+End the interval as soon as the tested Agent returns. `--elapsed-seconds` covers only that route interval. Independent acceptance still runs after the interval, but its result and defect count are attached to the route record:
+
+```powershell
+python .agents/skills/sol-luna/scripts/allowance_campaign.py end-arm `
+  --ledger C:\benchmark\campaign.jsonl `
+  --route SOL_ONLY --observed-at 2026-08-28T09:10:00+10:00 `
+  --five-hour-remaining-percent 92 --weekly-remaining-percent 99 `
+  --end-evidence-digest sha256:3333333333333333333333333333333333333333333333333333333333333333 `
+  --elapsed-seconds 600 --independent-acceptance PASSED --defects 0
+```
+
+`status` is lock-free and read-only. It reports the active arm, next route, last readings, completed pairs, and cumulative excluded controller/referee consumption for each window. `assess` refuses an active arm and keeps five-hour and weekly results separate:
+
+```powershell
+python .agents/skills/sol-luna/scripts/allowance_campaign.py status --ledger C:\benchmark\campaign.jsonl
+python .agents/skills/sol-luna/scripts/allowance_campaign.py assess `
+  --ledger C:\benchmark\campaign.jsonl `
+  --minimum-advantage-multiple 10 --minimum-pairs 4
+```
+
+Every ledger event is compact, sorted-key UTF-8 JSONL and links to the SHA-256 of the preceding canonical event. Before every write, the complete history is replayed semantically. Writers use an `O_EXCL` `.lock`, a flushed and `fsync`-ed same-directory temporary file, and `os.replace`; a foreign lock is never removed. A reset boundary, time reversal, wrong route, increased reading, damaged chain, unsupported field, or record inconsistent with its begin/end evidence fails closed.
+
+## Bind host-observed identities
+
+After generating strict `runtime_receipt.py` receipts, create a manifest with exactly one `SOL_ONLY` and one `SOL_LUNA` run per pair. Receipt paths are relative to the manifest directory:
+
+```json
+{
+  "schema_version": 1,
+  "campaign_id": "campaign-001",
+  "runs": [
+    {
+      "pair_id": "pair-001",
+      "route": "SOL_ONLY",
+      "controller_receipt": "receipts/sol-only.json",
+      "worker_receipts": []
+    },
+    {
+      "pair_id": "pair-001",
+      "route": "SOL_LUNA",
+      "controller_receipt": "receipts/controller.json",
+      "worker_receipts": ["receipts/luna-a.json"]
+    }
+  ]
+}
+```
+
+Build the immutable index once:
+
+```powershell
+python .agents/skills/sol-luna/scripts/benchmark_identity.py build `
+  --manifest C:\benchmark\manifest.json `
+  --output C:\benchmark\identity-index.json
+```
+
+The builder requires verified, fully readable explicit-session receipts with host-observed model, reasoning effort, role, and provider. `SOL_ONLY` is exactly one OpenAI `gpt-5.6-sol/high` controller and no worker. `SOL_LUNA` adds one or two OpenAI `gpt-5.6-luna/high` writers. A logical receipt cannot be reused anywhere in the campaign, even when whitespace, indentation, or JSON key order differs. Absolute paths, drive paths, traversal, control characters, Windows device names, symlinks, missing routes, role/model impersonation, self-report proof, unknown fields, and an existing output fail closed.
+
+The output allowlist contains only the campaign and pair identifiers, route, redacted controller/writer identity values, receipt SHA-256 values, verification status, schema version, and a SHA-256 over the canonical index without that digest field. Each `receipt_sha256` is computed over the parsed receipt's sorted-key, compact canonical JSON, so it is stable across equivalent serializations. The index never copies receipt paths, source/thread references, working directories, or agent paths. Output uses a same-directory flushed and `fsync`-ed temporary file followed by `os.replace`.
 
 ## Accept or hold
 
