@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import importlib.util
+import json
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -17,6 +19,14 @@ SPEC.loader.exec_module(TRACKER)
 
 
 class PhaseTrackerTests(unittest.TestCase):
+    def _run_cli(self, *arguments: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [sys.executable, str(SCRIPT_DIR / "phase_tracker.py"), *arguments],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
     def test_phase_duration_and_source_readings_are_accumulated(self) -> None:
         journal = TRACKER.initialize("private-run", "SOL_LUNA", at="2026-08-26T00:00:00+00:00")
         journal = TRACKER.start(journal, "sol_planning", at="2026-08-26T00:00:00+00:00")
@@ -99,6 +109,138 @@ class PhaseTrackerTests(unittest.TestCase):
         journal = TRACKER.start(journal, "sol_planning", at="2026-08-26T00:01:00+00:00")
         with self.assertRaisesRegex(TRACKER.TrackerError, "precedes"):
             TRACKER.stop(journal, "sol_planning", at="2026-08-26T00:00:00+00:00")
+
+    def test_cli_lifecycle_and_run_preserve_subprocess_exit_code(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            journal_path = Path(temp) / "phase.json"
+            init = self._run_cli(
+                "init",
+                "--journal",
+                str(journal_path),
+                "--run-ref",
+                "cli-smoke",
+                "--route",
+                "SOL_LUNA",
+                "--at",
+                "2026-08-26T00:00:00+00:00",
+            )
+            self.assertEqual(init.returncode, 0, init.stderr)
+            self.assertEqual(json.loads(init.stdout)["events"], 0)
+
+            start = self._run_cli(
+                "start",
+                "--journal",
+                str(journal_path),
+                "--phase",
+                "sol_planning",
+                "--at",
+                "2026-08-26T00:00:01+00:00",
+            )
+            self.assertEqual(start.returncode, 0, start.stderr)
+            stop = self._run_cli(
+                "stop",
+                "--journal",
+                str(journal_path),
+                "--phase",
+                "sol_planning",
+                "--at",
+                "2026-08-26T00:00:02+00:00",
+                "--tokens",
+                "3",
+                "--credits",
+                "1.5",
+            )
+            self.assertEqual(stop.returncode, 0, stop.stderr)
+            exported = self._run_cli("export", "--journal", str(journal_path))
+            self.assertEqual(exported.returncode, 0, exported.stderr)
+            self.assertEqual(json.loads(exported.stdout)["total_tokens"], 3)
+
+            run = self._run_cli(
+                "run",
+                "--journal",
+                str(journal_path),
+                "--phase",
+                "luna_execution",
+                "--tokens",
+                "4",
+                "--credits",
+                "2",
+                "--",
+                sys.executable,
+                "-c",
+                "raise SystemExit(7)",
+            )
+            self.assertEqual(run.returncode, 7, run.stderr)
+            result = json.loads(run.stdout)
+            self.assertEqual(result["command_exit_code"], 7)
+            self.assertEqual(result["total_tokens"], 7)
+            self.assertEqual(result["credit_value"], 3.5)
+            self.assertEqual(TRACKER.load(journal_path)["open_phases"], {})
+
+    def test_validate_journal_rejects_invalid_metrics_times_and_route_phases(self) -> None:
+        base = TRACKER.initialize("private-run", "SOL_LUNA", at="2026-08-26T00:00:00+00:00")
+        invalid_cases = (
+            ("phase_elapsed_seconds", {"sol_planning": -1}),
+            ("phase_elapsed_seconds", {"sol_planning": float("inf")}),
+            ("phase_tokens", {"sol_planning": True}),
+            ("phase_tokens", {"sol_planning": 1.5}),
+            ("phase_tokens", {"sol_planning": -1}),
+            ("phase_credits", {"sol_planning": True}),
+            ("phase_credits", {"sol_planning": -1}),
+            ("phase_credits", {"sol_planning": float("nan")}),
+        )
+        for field, value in invalid_cases:
+            with self.subTest(field=field, value=value):
+                candidate = dict(base)
+                candidate[field] = value
+                with self.assertRaises(TRACKER.TrackerError):
+                    TRACKER.validate_journal(candidate)
+
+        for field, value in (
+            ("events", True),
+            ("events", -1),
+            ("events", 1.5),
+            ("open_phases", {"luna_execution": "not-a-time"}),
+            ("open_phases", {"luna_execution": "2026-08-26T00:00:01"}),
+        ):
+            with self.subTest(field=field, value=value):
+                candidate = dict(base)
+                candidate[field] = value
+                with self.assertRaises(TRACKER.TrackerError):
+                    TRACKER.validate_journal(candidate)
+
+        candidate = dict(base)
+        candidate["phase_elapsed_seconds"] = {"sol_execution": 0}
+        with self.assertRaisesRegex(TRACKER.TrackerError, "sol_execution"):
+            TRACKER.validate_journal(candidate)
+
+        candidate = dict(base)
+        candidate["phase_tokens"] = {"sol_planning": 1}
+        with self.assertRaisesRegex(TRACKER.TrackerError, "no elapsed"):
+            TRACKER.validate_journal(candidate)
+
+        candidate = dict(base)
+        candidate["route"] = "SOL_ONLY"
+        candidate["open_phases"] = {"luna_execution": base["created_at"]}
+        with self.assertRaisesRegex(TRACKER.TrackerError, "luna_execution"):
+            TRACKER.validate_journal(candidate)
+
+        sol_only = TRACKER.initialize("private-run", "SOL_ONLY", at="2026-08-26T00:00:00+00:00")
+        with self.assertRaisesRegex(TRACKER.TrackerError, "luna_execution"):
+            TRACKER.start(sol_only, "luna_execution", at="2026-08-26T00:00:00+00:00")
+
+        luna = TRACKER.initialize("private-run", "SOL_LUNA", at="2026-08-26T00:00:00+00:00")
+        with self.assertRaisesRegex(TRACKER.TrackerError, "sol_execution"):
+            TRACKER.start(luna, "sol_execution", at="2026-08-26T00:00:00+00:00")
+
+    def test_validate_journal_rejects_unknown_top_level_fields(self) -> None:
+        journal = TRACKER.initialize("private-run", "SOL_ONLY", at="2026-08-26T00:00:00+00:00")
+        for field in ("raw_prompt", "extra"):
+            with self.subTest(field=field):
+                candidate = dict(journal)
+                candidate[field] = "must not be stored"
+                with self.assertRaisesRegex(TRACKER.TrackerError, "unsupported fields"):
+                    TRACKER.validate_journal(candidate)
 
 
 if __name__ == "__main__":
