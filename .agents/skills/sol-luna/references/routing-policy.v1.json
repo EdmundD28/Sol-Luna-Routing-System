@@ -1,10 +1,12 @@
 {
   "schema_version": 1,
-  "policy_version": "1.1.0",
+  "policy_version": "1.2.0",
   "minimum_expected_credit_savings_fraction": 0.15,
+  "minimum_expected_elapsed_savings_fraction": 0.0,
+  "maximum_coordination_credit_share": 0.5,
   "minimum_first_pass_probability": 0.80,
   "maximum_initial_writers": 2,
-  "maximum_evidence_backed_writers": 4,
+  "maximum_evidence_backed_writers": 2,
   "parallel_expansion_minimum_pairs": 5,
   "effort_order": [
     "low",

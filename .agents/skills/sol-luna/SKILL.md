@@ -7,7 +7,7 @@ description: "Run an explicit, evidence-driven Sol-Luna delivery workflow that p
 
 Sol is the accountable controller. Luna executes or independently reviews bounded packages. Optimize the **accepted result**, not the first attempt, worker count, or raw token total.
 
-Quality and safety are hard gates. Among routes that satisfy the same independent acceptance contract and do not increase predicted final defects, minimize expected credits and elapsed time, including Sol planning, Luna work, review, repair, and integration. Invocation authorizes subagent delegation only for this task; it does not broaden filesystem, network, destructive-action, deployment, or approval authority.
+Quality and safety are hard gates. Among routes that satisfy the same independent acceptance contract and do not increase predicted final defects, minimize the user's included plan allowance first and elapsed time second, including Sol planning, Luna work, review, repair, and integration. Purchased-credit estimates may guide planning but cannot replace matched five-hour plan-limit readings in a completed economic claim. Invocation authorizes subagent delegation only for this task; it does not broaden filesystem, network, destructive-action, deployment, or approval authority.
 
 ## Decide before dispatch
 
@@ -39,7 +39,7 @@ Every package binds a canonical repository root, then states one deliverable, re
 
 Before parallel dispatch, validate the ownership plan with `scripts/ownership_guard.py check-plan`; before acceptance, compare observed changed paths with `check-changes`. A violation blocks acceptance. This is an acceptance guard, not a filesystem security boundary.
 
-Start with at most **two concurrent writers**. More than two is allowed only when at least five matched measurements for the same task family and policy cohort show elapsed improvement with no credit or failure-rate regression; the versioned policy caps evidence-backed writers at four. Read-only review may overlap when it cannot race the candidate.
+Use at most **two concurrent writers**. Locally bound evidence may recommend human review but cannot expand this executable cap without a future trusted verifier and an explicit policy release. Read-only review may overlap when it cannot race the candidate.
 
 Give Luna only the context required for its objective, contracts, evidence, and constraints. Luna must not spawn agents. Shared entry points, lockfiles, status files, and common generated outputs stay with Sol or one named integrator.
 
@@ -61,7 +61,7 @@ python .agents/skills/sol-luna/scripts/routing_policy.py rework --input REWORK.j
 
 Never repeat the same correction without new evidence. Stop for user direction when the next action requires new authority, a product or architecture decision, destructive action, or expanded scope. Use `FAILED` for in-scope delivery failure and `BLOCKED` only for a missing external decision, input, permission, authority, or state change.
 
-Before completion, Sol verifies the exact final candidate, host-observed Sol/Luna model identity, fresh acceptance evidence, ownership cleanliness, integration behavior, and every required package disposition. Agent or profile labels are not runtime proof. Report route and effort decisions, policy fingerprint, Sol/Luna ownership, concurrency, repairs, review depth, acceptance results, elapsed time, available credits/tokens with source and uncertainty, and remaining unverified boundaries.
+Before completion, Sol verifies the exact final candidate, host-observed Sol/Luna model identity, fresh acceptance evidence, ownership cleanliness, integration behavior, and every required package disposition. Agent or profile labels are not runtime proof. Report route and effort decisions, policy fingerprint, Sol/Luna ownership, concurrency, repairs, review depth, acceptance results, elapsed time, five-hour and weekly allowance readings when measured, available purchased-credit or token diagnostics with source and uncertainty, and remaining unverified boundaries.
 
 ## Conditional tools
 
@@ -69,6 +69,8 @@ Before completion, Sol verifies the exact final candidate, host-observed Sol/Lun
 - For persistent phase evidence or routing comparisons, use `scripts/evidence_ledger.py`; its `feedback` command converts exact task-family cohorts into a fail-closed policy posture. Self-declared `exact` credit is insufficient: the gate also requires an independently supplied claim index bound to each record and receipt. It is advisory and never routes automatically.
 - For automatic phase-duration accumulation and optional source readings, use `scripts/phase_tracker.py`; overlapping active-phase totals are not wall-clock duration.
 - For matched Sol-only versus Sol-Luna evaluation, use `scripts/matched_eval.py` with the same starting commit, task digest, policy fingerprint, and independent acceptance-suite digest.
+- For a subscription-allowance benchmark, read [references/allowance-benchmark.md](references/allowance-benchmark.md) and assess the retained dashboard readings with `scripts/allowance_meter.py`. Five-hour percentage points are primary; weekly percentage points are separate corroboration.
+- For a secondary purchased-credit estimate only, use `scripts/credit_model.py` with a current fingerprinted rate card and complete classified phase usage. It cannot convert included plan percentages or authorize routing.
 - For package state transitions or stale-evidence checks, use `scripts/lifecycle_contract.py`; simulated transitions are not native runtime proof.
 - For opt-in native lifecycle acceptance, validate a host-produced receipt with `scripts/native_lifecycle_receipt.py`; requested settings or worker prose without matching host-observed identity, boundary, profile, and child continuity fail proof.
 - For detailed ownership, rolling-pipeline, review, and evidence contracts, read [references/orchestration-policy.md](references/orchestration-policy.md).

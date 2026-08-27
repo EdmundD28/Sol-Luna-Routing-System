@@ -10,13 +10,13 @@ This revision adds executable policy and evidence controls. It is still an exper
 
 - Predictive routing compares Sol-only delivery with Luna `low`, `medium`, `high`, `xhigh`, and `max` using expected accepted-result credits and time. The user-facing word `light` is accepted as an alias for Codex `low`.
 - A lower-effort failure is not required before direct XHigh or Max selection.
-- Initial parallel writing is capped at two; expansion requires matched non-regressive evidence and remains capped at four.
+- Executable parallel writing is capped at two. Locally bound evidence can recommend human review but cannot expand that cap.
 - Rework is limited to one evidence-backed focused repair, then repartition, one effort escalation, or Sol reclaim.
 - Risk-proportional review avoids replaying clean low-risk work while requiring deep review for material risk and discrepancies.
 - Runtime receipts compare expected identity and boundary values with host-observed records.
 - Ownership, frozen handoffs, lifecycle transitions, phase evidence, atomic ledger writes, and matched cohorts have executable validators.
 - Evidence-ledger schema 4 fails closed on credit trust: legacy records remain readable but unverified, self-declared exact sources cannot pass, and policy review requires an independently supplied claim index bound to each record and unique receipt. The ledger does not validate provider signatures or collect Codex desktop billing data.
-- A five-pair matched bounded-function campaign achieved equal independent acceptance and zero final defects, but Sol→Luna regressed to 4.08× the median diagnostic tokens and 5.42× the median elapsed time. It provides no credit proof, so the credit-saving gate remains closed.
+- A five-pair matched bounded-function campaign achieved equal independent acceptance and zero final defects, but Sol→Luna regressed to 4.08× the median diagnostic tokens and 5.42× the median elapsed time. It did not capture five-hour or weekly plan-limit readings, so it cannot decide subscription-allowance economics.
 - Local lifecycle tests validate the state machine. A [native desktop-app smoke](docs/validation/native-app-lifecycle-smoke-2026-08-26.md) exercised real Luna delegation, one repair, stale-evidence rejection, timeout/interruption, same-child continuation, and pre-dispatch ownership conflict rejection. It did not prove that the packaged custom TOML profile was loaded; the automated opt-in runner remains unavailable until Codex exposes a stable non-interactive custom-subagent surface.
 
 See [the matched bounded-function campaign](docs/benchmark/matched-bounded-campaign-2026-08-26.md) and the [older preliminary comparison](docs/benchmark/preliminary-comparison.md).
@@ -29,7 +29,7 @@ Invoke explicitly:
 $sol-luna <substantial task>
 ```
 
-Sol estimates each eligible route before dispatch. Policy `1.1.0` requires at least 80% predicted first-pass acceptance, no predicted final-defect regression, at least 15% expected credit reduction by default, and no expected elapsed regression. It then selects the lowest expected accepted-delivery cost—not automatically the lowest reasoning effort.
+Sol estimates each eligible route before dispatch. Policy `1.2.0` requires at least 80% predicted first-pass acceptance, no predicted final-defect regression, at least 15% expected credit reduction by default, and no expected elapsed regression. It then selects the lowest expected accepted-delivery cost—not automatically the lowest reasoning effort.
 
 ```powershell
 python .agents/skills/sol-luna/scripts/routing_policy.py template
@@ -72,6 +72,8 @@ The Skill uses standard-library Python tools:
 | `phase_tracker.py` | Accumulate explicit phase durations and optional source token/credit readings |
 | `evidence_ledger.py` | Validate schema-4 phase evidence, require record-bound external claims for credible credits, isolate exact policy cohorts, persist atomically, and emit fail-closed task-family feedback without automatic routing |
 | `matched_eval.py` | Freeze paired arms and reject mismatched starts, task specs, suites, policies, and metric cohorts |
+| `allowance_meter.py` | Quantify conservative Sol-only versus Sol-Luna advantage from matched five-hour and weekly plan-limit percentage readings |
+| `credit_model.py` | Estimate purchased credits from classified phase usage and a fingerprinted rate card; never convert included plan percentages |
 
 The matched harness binds each pair to the same starting candidate, task digest, independent acceptance-suite digest, policy fingerprint, and observed runtime identity. It does not launch paid model work. See [runtime and evidence details](.agents/skills/sol-luna/references/evidence-and-runtime.md) and [the orchestration policy](.agents/skills/sol-luna/references/orchestration-policy.md).
 
@@ -160,20 +162,22 @@ When a native runner can emit the strict receipt, opt in with `SOL_LUNA_NATIVE_R
 
 CI runs the behavioral suite on Windows and Ubuntu with Python 3.11 and 3.14. Tests cover predictive direct effort selection, hard quality/cost/time gates, writer caps, rework limits, review depth, runtime boundary mismatches, ownership conflicts, frozen handoffs, stale evidence, timeout and continuation states, atomic concurrent appends, phase reconciliation, matched-cohort isolation, and setup lifecycle.
 
-These tests and the one native app smoke do not prove routing economics. The completed five-pair campaign supplies diagnostic token and elapsed evidence, but not credible credit evidence; see the [objective completion audit](docs/validation/objective-completion-audit-2026-08-26.md). Token evidence may diagnose efficiency but cannot satisfy the credit-saving policy gate. Current public OpenAI documentation exposes per-response token usage for the Responses API and organization-level aggregate usage/cost endpoints, but it does not establish a Codex desktop task-level authenticated credit receipt. Until such evidence exists, the external record-bound claim index is an integration boundary, not proof manufactured by this repository.
+These tests and the native app smoke do not prove routing economics. The completed five-pair campaign supplies diagnostic token and elapsed evidence, but no plan-limit readings; see the [objective completion audit](docs/validation/objective-completion-audit-2026-08-26.md). A subscription benchmark uses matched changes on the same account meters: five-hour percentage points are the higher-resolution primary measure, while weekly percentage points are reported separately as corroboration. Purchased-credit estimates and raw diagnostic tokens remain secondary and cannot be substituted for included allowance.
+
+A locally bound claim index does not establish a Codex desktop task-level authenticated credit receipt. Without a cryptographically trusted provider verifier, externally bound ledger evidence may recommend human review but cannot raise the executable two-writer cap.
 
 ## Success gate
 
-Within each task family, do not call the system improved unless matched evidence shows:
+Within each task family, do not call the system improved unless a pre-registered matched campaign shows:
 
 - independent acceptance remains equal or better;
 - final defects do not increase;
-- median comparable credits fall by at least the policy threshold, currently 15%;
-- median elapsed time does not regress;
+- the conservative aggregate five-hour allowance advantage meets the declared benchmark threshold (10× for the first v0.1.1 comparison);
+- total elapsed time is strictly lower;
 - first-pass acceptance is at least 80%, keeping repair cost from consuming the saving;
 - Sol planning and review remain less than half of measured delivery cost.
 
-Five fully assessed pairs permit human review, not automatic policy change. Failed arms remain in acceptance, defect, and first-pass denominators. Ledger feedback is advisory and never dispatches work or edits policy.
+Counterbalance route order and keep both arms in the same unchanged account windows. Weekly readings are never added to five-hour readings. Failed arms remain in acceptance, defect, and first-pass denominators. Benchmark evidence permits human review only; it never dispatches work or edits policy automatically.
 
 ## License
 

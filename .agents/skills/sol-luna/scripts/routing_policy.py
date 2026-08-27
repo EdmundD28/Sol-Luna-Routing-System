@@ -10,12 +10,24 @@ import hashlib
 import importlib.util
 import json
 import math
+import re
 import sys
 from pathlib import Path
+from pathlib import PurePosixPath, PureWindowsPath
 from typing import Any, Mapping
 
 
 SCHEMA_VERSION = 1
+PACKAGES_SCHEMA_VERSION = 2
+PACKAGE_ID = re.compile(r"[a-z0-9][a-z0-9-]{0,63}")
+WINDOWS_RESERVED_NAMES = {
+    "con",
+    "prn",
+    "aux",
+    "nul",
+    *(f"com{index}" for index in range(1, 10)),
+    *(f"lpt{index}" for index in range(1, 10)),
+}
 # The routing policy consumes the versioned feedback document emitted by the
 # evidence ledger.  Keep this explicit: accepting an unknown feedback schema
 # would silently turn stale or incompatible evidence into routing authority.
@@ -26,6 +38,10 @@ DEFAULT_POLICY = Path(__file__).resolve().parents[1] / "references" / "routing-p
 
 class PolicyError(ValueError):
     """The routing input or policy violates the executable contract."""
+
+
+class _ExternallyBoundEvidence(dict[str, Any]):
+    """Private marker for advisory ledger evidence without provider proof."""
 
 
 def finite_number(value: Any, field: str, *, minimum: float = 0.0, maximum: float | None = None) -> float:
@@ -50,6 +66,12 @@ def require_object(value: Any, field: str) -> Mapping[str, Any]:
     return value
 
 
+def reject_unknown_fields(source: Mapping[str, Any], allowed: set[str], field: str) -> None:
+    unknown = set(source) - allowed
+    if unknown:
+        raise PolicyError(f"{field} has unknown fields: {sorted(unknown)}")
+
+
 def require_string(value: Any, field: str) -> str:
     if not isinstance(value, str) or not value.strip() or "\n" in value or "\r" in value:
         raise PolicyError(f"{field} must be a non-empty single-line string")
@@ -58,6 +80,17 @@ def require_string(value: Any, field: str) -> str:
 
 def canonical_json(document: Mapping[str, Any]) -> bytes:
     return json.dumps(document, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+
+def display_round(value: Any) -> Any:
+    """Round numeric presentation values without changing routing decisions."""
+    if isinstance(value, float):
+        return round(value, 6)
+    if isinstance(value, list):
+        return [display_round(item) for item in value]
+    if isinstance(value, Mapping):
+        return {key: display_round(item) for key, item in value.items()}
+    return value
 
 
 def load_policy(path: Path) -> dict[str, Any]:
@@ -80,6 +113,16 @@ def load_policy(path: Path) -> dict[str, Any]:
         maximum=1.0,
     )
     finite_number(policy.get("minimum_first_pass_probability"), "minimum_first_pass_probability", maximum=1.0)
+    finite_number(
+        policy.get("minimum_expected_elapsed_savings_fraction"),
+        "minimum_expected_elapsed_savings_fraction",
+        maximum=1.0,
+    )
+    finite_number(
+        policy.get("maximum_coordination_credit_share"),
+        "maximum_coordination_credit_share",
+        maximum=1.0,
+    )
     initial = integer(policy.get("maximum_initial_writers"), "maximum_initial_writers", minimum=1)
     expanded = integer(policy.get("maximum_evidence_backed_writers"), "maximum_evidence_backed_writers", minimum=initial)
     integer(policy.get("parallel_expansion_minimum_pairs"), "parallel_expansion_minimum_pairs", minimum=1)
@@ -103,7 +146,22 @@ def normalize_effort(value: Any, policy: Mapping[str, Any]) -> str:
     return effort
 
 
-def estimate(source: Mapping[str, Any], prefix: str) -> dict[str, float]:
+def estimate(source: Mapping[str, Any], prefix: str, *, allow_metadata: bool = False) -> dict[str, float]:
+    allowed = {
+        "first_pass_probability",
+        "final_defect_probability",
+        "execution_credits",
+        "execution_seconds",
+        "recovery_credits_if_failed",
+        "recovery_seconds_if_failed",
+    }
+    if allow_metadata:
+        allowed.update({"effort", "failure_impact"})
+    reject_unknown_fields(
+        source,
+        allowed,
+        prefix,
+    )
     return {
         "first_pass_probability": finite_number(
             source.get("first_pass_probability"), f"{prefix}.first_pass_probability", maximum=1.0
@@ -116,15 +174,194 @@ def estimate(source: Mapping[str, Any], prefix: str) -> dict[str, float]:
     }
 
 
-def phase_totals(source: Mapping[str, Any]) -> dict[str, float]:
-    allowed = ("sol_planning", "sol_review", "integration")
-    credits = 0.0
-    seconds = 0.0
-    for phase in allowed:
+def coordination_totals(source: Mapping[str, Any], *, multiwriter: bool) -> dict[str, Any]:
+    """Validate explicit coordination costs, including multiwriter overhead."""
+    required = ("sol_planning", "sol_review", "integration")
+    if multiwriter:
+        required += ("queue", "merge_contention")
+    reject_unknown_fields(source, set(required), "coordination")
+    phases: dict[str, dict[str, float]] = {}
+    for phase in required:
         value = require_object(source.get(phase), f"coordination.{phase}")
-        credits += finite_number(value.get("credits"), f"coordination.{phase}.credits")
-        seconds += finite_number(value.get("seconds"), f"coordination.{phase}.seconds")
-    return {"credits": credits, "seconds": seconds}
+        reject_unknown_fields(value, {"credits", "seconds"}, f"coordination.{phase}")
+        phases[phase] = {
+            "credits": finite_number(value.get("credits"), f"coordination.{phase}.credits"),
+            "seconds": finite_number(value.get("seconds"), f"coordination.{phase}.seconds"),
+        }
+    return {
+        "credits": sum(item["credits"] for item in phases.values()),
+        "seconds": sum(item["seconds"] for item in phases.values()),
+        "phases": phases,
+    }
+
+
+def _package_path(value: Any, field: str) -> str:
+    if not isinstance(value, str) or not value.strip() or "\n" in value or "\r" in value:
+        raise PolicyError(f"{field} must be a non-empty repository-relative path")
+    if value != value.strip():
+        raise PolicyError(f"{field} must not have leading or trailing whitespace")
+    raw = value.replace("\\", "/").rstrip("/")
+    if not raw or ":" in raw or PurePosixPath(raw).is_absolute() or PureWindowsPath(value).is_absolute():
+        raise PolicyError(f"{field} must be repository-relative")
+    parts = PurePosixPath(raw).parts
+    if any(
+        part in {"", ".", ".."}
+        or part.endswith((".", " "))
+        or any(ord(character) < 32 for character in part)
+        or part.split(".", 1)[0].casefold() in WINDOWS_RESERVED_NAMES
+        for part in parts
+    ):
+        raise PolicyError(f"{field} contains an unsafe path segment")
+    return "/".join(parts).casefold()
+
+
+def _paths_overlap(left: str, right: str) -> bool:
+    return left == right or left.startswith(right + "/") or right.startswith(left + "/")
+
+
+def _package_probability(value: Any, field: str) -> float:
+    return finite_number(value, field, maximum=1.0)
+
+
+def package_schedule(
+    candidate: Mapping[str, Any], *, requested_writers: int, prefix: str
+) -> dict[str, Any]:
+    """Validate a package DAG and return conservative cost/schedule metrics."""
+    requested_writers = integer(requested_writers, f"{prefix}.requested_writers", minimum=1)
+    packages_source = candidate.get("packages")
+    if not isinstance(packages_source, list) or not packages_source:
+        raise PolicyError(f"{prefix}.packages must be a non-empty JSON array")
+    packages: dict[str, dict[str, Any]] = {}
+    ownership: list[tuple[str, str]] = []
+    required = {
+        "package_id",
+        "depends_on",
+        "writable_paths",
+        "execution_credits",
+        "execution_seconds",
+        "first_pass_probability",
+        "repair_probability",
+        "repair_credits",
+        "repair_seconds",
+        "terminal_failure_probability",
+        "terminal_recovery_credits",
+        "terminal_recovery_seconds",
+        "final_defect_probability",
+    }
+    for index, raw in enumerate(packages_source):
+        package = require_object(raw, f"{prefix}.packages[{index}]")
+        missing = required - set(package)
+        if missing:
+            raise PolicyError(f"{prefix}.packages[{index}] missing fields: {sorted(missing)}")
+        unknown = set(package) - required
+        if unknown:
+            raise PolicyError(f"{prefix}.packages[{index}] has unknown fields: {sorted(unknown)}")
+        package_id = require_string(package.get("package_id"), f"{prefix}.packages[{index}].package_id")
+        if not PACKAGE_ID.fullmatch(package_id):
+            raise PolicyError(f"{prefix}.packages[{index}].package_id must be a stable hyphen-case identifier")
+        if package_id in packages:
+            raise PolicyError(f"duplicate package_id: {package_id}")
+        depends = package.get("depends_on")
+        if not isinstance(depends, list) or any(not isinstance(item, str) or not item.strip() for item in depends):
+            raise PolicyError(f"{prefix}.packages[{index}].depends_on must be a JSON array of identifiers")
+        if len(depends) != len(set(depends)):
+            raise PolicyError(f"{prefix}.packages[{index}].depends_on contains duplicates")
+        paths = package.get("writable_paths")
+        if not isinstance(paths, list) or not paths:
+            raise PolicyError(f"{prefix}.packages[{index}].writable_paths must be a non-empty JSON array")
+        normalized_paths = [_package_path(item, f"{prefix}.packages[{index}].writable_paths[{path_index}]") for path_index, item in enumerate(paths)]
+        if len(normalized_paths) != len(set(normalized_paths)):
+            raise PolicyError(f"{prefix}.packages[{index}].writable_paths contains duplicates")
+        for path in normalized_paths:
+            for other_id, other_path in ownership:
+                if _paths_overlap(path, other_path):
+                    raise PolicyError(f"writable ownership overlaps between {package_id} and {other_id}")
+            ownership.append((package_id, path))
+        first_pass = _package_probability(package.get("first_pass_probability"), f"{prefix}.packages[{index}].first_pass_probability")
+        repair_probability = _package_probability(package.get("repair_probability"), f"{prefix}.packages[{index}].repair_probability")
+        terminal_probability = _package_probability(package.get("terminal_failure_probability"), f"{prefix}.packages[{index}].terminal_failure_probability")
+        if not math.isclose(first_pass + repair_probability + terminal_probability, 1.0, rel_tol=0.0, abs_tol=1e-9):
+            raise PolicyError(f"{prefix}.packages[{index}] result probabilities must sum to 1")
+        execution_credits = finite_number(package.get("execution_credits"), f"{prefix}.packages[{index}].execution_credits")
+        execution_seconds = finite_number(package.get("execution_seconds"), f"{prefix}.packages[{index}].execution_seconds")
+        repair_credits = finite_number(package.get("repair_credits"), f"{prefix}.packages[{index}].repair_credits")
+        repair_seconds = finite_number(package.get("repair_seconds"), f"{prefix}.packages[{index}].repair_seconds")
+        terminal_credits = finite_number(package.get("terminal_recovery_credits"), f"{prefix}.packages[{index}].terminal_recovery_credits")
+        terminal_seconds = finite_number(package.get("terminal_recovery_seconds"), f"{prefix}.packages[{index}].terminal_recovery_seconds")
+        final_defect = _package_probability(package.get("final_defect_probability"), f"{prefix}.packages[{index}].final_defect_probability")
+        packages[package_id] = {
+            "package_id": package_id,
+            "depends_on": list(depends),
+            "execution_credits": execution_credits,
+            "execution_seconds": execution_seconds,
+            "expected_credits": execution_credits + repair_probability * repair_credits + terminal_probability * terminal_credits,
+            "expected_recovery_seconds": repair_probability * repair_seconds + terminal_probability * terminal_seconds,
+            "expected_recovery_credits": repair_probability * repair_credits + terminal_probability * terminal_credits,
+            "first_pass_probability": first_pass,
+            "terminal_failure_probability": terminal_probability,
+            "final_defect_probability": final_defect,
+        }
+    for package in packages.values():
+        unknown = set(package["depends_on"]) - set(packages)
+        if unknown:
+            raise PolicyError(f"{prefix}.{package['package_id']} has unknown dependencies: {sorted(unknown)}")
+
+    indegree = {package_id: len(package["depends_on"]) for package_id, package in packages.items()}
+    ready = sorted(package_id for package_id, degree in indegree.items() if degree == 0)
+    initial_ready_count = len(ready)
+    workers = max(1, min(requested_writers, len(packages)))
+    # Schedule package execution makespan; expected repair and terminal
+    # recovery seconds are accumulated separately and added by the route gate.
+    serial_seconds = sum(package["execution_seconds"] for package in packages.values())
+    finish: dict[str, float] = {}
+    active: list[tuple[float, int, str]] = []
+    completed: set[str] = set()
+    now = 0.0
+    while len(completed) < len(packages):
+        # At each event, only dependencies-complete packages may enter the
+        # queue.  Stable package-id ordering makes ties deterministic.
+        available = sorted(
+            package_id
+            for package_id, package in packages.items()
+            if package_id not in completed
+            and package_id not in {item[2] for item in active}
+            and all(dependency in completed for dependency in package["depends_on"])
+        )
+        available.sort(key=lambda package_id: (-packages[package_id]["execution_seconds"], package_id))
+        while available and len(active) < workers:
+            package_id = available.pop(0)
+            package = packages[package_id]
+            end = now + package["execution_seconds"]
+            active.append((end, len(active), package_id))
+            active.sort(key=lambda item: (item[0], item[2]))
+        if not active:
+            raise PolicyError(f"{prefix}.packages contains a dependency cycle")
+        next_end = active[0][0]
+        now = next_end
+        finished_now = [item for item in active if item[0] == next_end]
+        active = [item for item in active if item[0] != next_end]
+        for _, _, package_id in sorted(finished_now, key=lambda item: item[2]):
+            finish[package_id] = next_end
+            completed.add(package_id)
+    scheduled_seconds = max(finish.values(), default=0.0)
+    return {
+        "package_count": len(packages),
+        "effective_writers": workers,
+        "initial_ready_packages": initial_ready_count,
+        "serial_package_seconds": serial_seconds,
+        "scheduled_package_seconds": scheduled_seconds,
+        "expected_package_credits": sum(package["expected_credits"] for package in packages.values()),
+        "expected_recovery_credits": sum(package["expected_recovery_credits"] for package in packages.values()),
+        "expected_recovery_seconds": sum(package["expected_recovery_seconds"] for package in packages.values()),
+        "first_pass_probability": max(0.0, 1.0 - sum(1.0 - package["first_pass_probability"] for package in packages.values())),
+        "final_defect_probability": min(
+            1.0,
+            sum(
+                package["final_defect_probability"] + package["terminal_failure_probability"]
+                for package in packages.values()
+            ),
+        ),
+    }
 
 
 def allowed_writers(
@@ -134,8 +371,10 @@ def allowed_writers(
 ) -> dict[str, Any]:
     requested = integer(request.get("requested_writers", 1), "requested_writers", minimum=1)
     initial_cap = int(policy["maximum_initial_writers"])
-    expanded_cap = int(policy["maximum_evidence_backed_writers"])
-    evidence = require_object(verified_parallel_evidence or {}, "verified_parallel_evidence")
+    if verified_parallel_evidence is not None and not isinstance(verified_parallel_evidence, _ExternallyBoundEvidence):
+        evidence = {}
+    else:
+        evidence = require_object(verified_parallel_evidence or {}, "verified_parallel_evidence")
     evidence_ok = (
         evidence.get("source") == EVIDENCE_FEEDBACK_SOURCE
         and evidence.get("policy_change_eligible") is True
@@ -158,15 +397,24 @@ def allowed_writers(
         )
         == 0
     )
-    cap = expanded_cap if evidence_ok else initial_cap
+    # Local JSON evidence is advisory only.  Without a cryptographically
+    # trusted provider verifier, it must never raise the executable cap.
+    cap = min(initial_cap, 2)
     return {
         "requested": requested,
         "allowed": min(requested, cap),
+        "effective": min(requested, cap),
         "cap": cap,
-        "expanded_from_evidence": evidence_ok,
+        "expanded_from_evidence": False,
         "evidence_source": evidence.get("source", "none"),
+        "human_review_recommendation": evidence_ok,
+        "evidence_note": (
+            "externally-bound evidence is advisory; provider authentication is unverified"
+            if evidence_ok
+            else "no qualifying externally-bound evidence; initial cap applies"
+        ),
         "reason": (
-            "matched evidence permits expansion beyond the two-writer initial cap"
+            "matched evidence is available for human review but cannot expand the executable cap"
             if evidence_ok
             else "no qualifying non-regressive matched evidence; initial cap applies"
         ),
@@ -179,8 +427,24 @@ def evaluate_route(
     *,
     verified_parallel_evidence: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    if request.get("schema_version") != SCHEMA_VERSION:
+    schema_version = request.get("schema_version")
+    if schema_version not in {SCHEMA_VERSION, PACKAGES_SCHEMA_VERSION}:
         raise PolicyError("unsupported routing request schema_version")
+    reject_unknown_fields(
+        request,
+        {
+            "schema_version",
+            "task_family",
+            "quality_floor",
+            "minimum_credit_savings_fraction",
+            "latency_limit_seconds",
+            "requested_writers",
+            "sol_only",
+            "coordination",
+            "luna_candidates",
+        },
+        "request",
+    )
     task_family = require_string(request.get("task_family"), "task_family")
     quality_floor = finite_number(
         request.get("quality_floor", policy["minimum_first_pass_probability"]),
@@ -192,18 +456,34 @@ def evaluate_route(
         "minimum_credit_savings_fraction",
         maximum=1.0,
     )
+    policy_quality_floor = float(policy["minimum_first_pass_probability"])
+    policy_savings_floor = float(policy["minimum_expected_credit_savings_fraction"])
+    if quality_floor < policy_quality_floor:
+        raise PolicyError("quality_floor may not be lower than the policy minimum")
+    if savings_floor < policy_savings_floor:
+        raise PolicyError("minimum_credit_savings_fraction may not be lower than the policy minimum")
     latency_limit = request.get("latency_limit_seconds")
     if latency_limit is not None:
         latency_limit = finite_number(latency_limit, "latency_limit_seconds")
 
     sol_source = require_object(request.get("sol_only"), "sol_only")
+    if "recovery_credits_if_failed" not in sol_source or "recovery_seconds_if_failed" not in sol_source:
+        raise PolicyError("sol_only recovery credits and seconds are required")
     sol = estimate(sol_source, "sol_only")
     sol_recovery_credits = finite_number(sol_source.get("recovery_credits_if_failed", 0), "sol_only.recovery_credits_if_failed")
     sol_recovery_seconds = finite_number(sol_source.get("recovery_seconds_if_failed", 0), "sol_only.recovery_seconds_if_failed")
     sol_expected_credits = sol["execution_credits"] + (1 - sol["first_pass_probability"]) * sol_recovery_credits
     sol_expected_seconds = sol["execution_seconds"] + (1 - sol["first_pass_probability"]) * sol_recovery_seconds
 
-    coordination = phase_totals(require_object(request.get("coordination"), "coordination"))
+    requested_writers = integer(request.get("requested_writers", 1), "requested_writers", minimum=1)
+    if schema_version == SCHEMA_VERSION and requested_writers > 1:
+        raise PolicyError("schema_version 2 is required for multiwriter package inputs")
+    if schema_version == PACKAGES_SCHEMA_VERSION and requested_writers < 2:
+        raise PolicyError("schema_version 2 requires requested_writers greater than 1")
+    writer_limit = allowed_writers(request, policy, verified_parallel_evidence)
+    effective_writers = int(writer_limit["allowed"])
+    coordination_source = require_object(request.get("coordination"), "coordination")
+    coordination = coordination_totals(coordination_source, multiwriter=requested_writers > 1)
     candidates_source = request.get("luna_candidates")
     if not isinstance(candidates_source, list) or not candidates_source:
         raise PolicyError("luna_candidates must be a non-empty JSON array")
@@ -211,49 +491,109 @@ def evaluate_route(
     evaluated: list[dict[str, Any]] = []
     for index, raw in enumerate(candidates_source):
         candidate = require_object(raw, f"luna_candidates[{index}]")
+        package_mode = schema_version == PACKAGES_SCHEMA_VERSION
+        allowed_candidate_fields = (
+            {"effort", "failure_impact", "packages"}
+            if package_mode
+            else {
+                "effort",
+                "first_pass_probability",
+                "final_defect_probability",
+                "execution_credits",
+                "execution_seconds",
+                "recovery_credits_if_failed",
+                "recovery_seconds_if_failed",
+                "failure_impact",
+            }
+        )
+        unknown_candidate_fields = set(candidate) - allowed_candidate_fields
+        if unknown_candidate_fields:
+            raise PolicyError(
+                f"luna_candidates[{index}] has unknown fields: {sorted(unknown_candidate_fields)}"
+            )
         effort = normalize_effort(candidate.get("effort"), policy)
         if effort in seen:
             raise PolicyError(f"duplicate Luna effort candidate: {effort}")
         seen.add(effort)
-        values = estimate(candidate, f"luna_candidates[{index}]")
-        recovery_credits = finite_number(
-            candidate.get("recovery_credits_if_failed"), f"luna_candidates[{index}].recovery_credits_if_failed"
-        )
-        recovery_seconds = finite_number(
-            candidate.get("recovery_seconds_if_failed"), f"luna_candidates[{index}].recovery_seconds_if_failed"
-        )
-        expected_credits = coordination["credits"] + values["execution_credits"] + (
-            1 - values["first_pass_probability"]
-        ) * recovery_credits
-        expected_seconds = coordination["seconds"] + values["execution_seconds"] + (
-            1 - values["first_pass_probability"]
-        ) * recovery_seconds
+        if schema_version == PACKAGES_SCHEMA_VERSION:
+            packages_source = candidate.get("packages")
+            if not isinstance(packages_source, list):
+                raise PolicyError(
+                    f"luna_candidates[{index}].packages must be a non-empty JSON array"
+                )
+            schedule = package_schedule(candidate, requested_writers=effective_writers, prefix=f"luna_candidates[{index}]")
+            first_pass_probability = schedule["first_pass_probability"]
+            final_defect_probability = schedule["final_defect_probability"]
+            package_seconds = schedule["scheduled_package_seconds"]
+            serial_package_seconds = schedule["serial_package_seconds"]
+            package_credits = schedule["expected_package_credits"]
+            expected_recovery_seconds = schedule["expected_recovery_seconds"]
+            expected_recovery_credits = schedule["expected_recovery_credits"]
+            candidate_effective_writers = schedule["effective_writers"]
+        else:
+            values = estimate(candidate, f"luna_candidates[{index}]", allow_metadata=True)
+            recovery_credits = finite_number(
+                candidate.get("recovery_credits_if_failed"), f"luna_candidates[{index}].recovery_credits_if_failed"
+            )
+            recovery_seconds = finite_number(
+                candidate.get("recovery_seconds_if_failed"), f"luna_candidates[{index}].recovery_seconds_if_failed"
+            )
+            first_pass_probability = values["first_pass_probability"]
+            final_defect_probability = values["final_defect_probability"]
+            package_seconds = values["execution_seconds"]
+            serial_package_seconds = values["execution_seconds"]
+            package_credits = values["execution_credits"] + (1 - first_pass_probability) * recovery_credits
+            expected_recovery_seconds = (1 - first_pass_probability) * recovery_seconds
+            expected_recovery_credits = (1 - first_pass_probability) * recovery_credits
+            candidate_effective_writers = 1
+        expected_credits = coordination["credits"] + package_credits
+        expected_seconds = coordination["seconds"] + package_seconds + expected_recovery_seconds
+        scheduled_seconds = coordination["seconds"] + package_seconds + expected_recovery_seconds
         credit_savings = 1 - expected_credits / sol_expected_credits if sol_expected_credits else 0.0
+        elapsed_savings = 1 - scheduled_seconds / sol_expected_seconds if sol_expected_seconds else 0.0
+        coordination_share = coordination["credits"] / expected_credits if expected_credits else 0.0
         rejection_reasons: list[str] = []
-        if values["first_pass_probability"] < quality_floor:
+        if first_pass_probability < quality_floor:
             rejection_reasons.append("first_pass_probability_below_floor")
-        if values["final_defect_probability"] > sol["final_defect_probability"]:
+        if final_defect_probability > sol["final_defect_probability"]:
             rejection_reasons.append("predicted_defect_rate_regresses")
         if credit_savings < savings_floor:
             rejection_reasons.append("expected_credit_savings_below_floor")
-        if expected_seconds > sol_expected_seconds:
+        # Time is a hard requirement, but equality is not an improvement.  The
+        # policy value remains explicit for compatibility/documentation while
+        # the strict comparison prevents a zero-savings tie from routing.
+        if scheduled_seconds >= sol_expected_seconds or elapsed_savings <= float(
+            policy["minimum_expected_elapsed_savings_fraction"]
+        ):
             rejection_reasons.append("expected_elapsed_time_regresses")
+        if coordination_share >= float(policy["maximum_coordination_credit_share"]):
+            rejection_reasons.append("coordination_credit_share_too_high")
+        if candidate_effective_writers > 1 and package_seconds >= serial_package_seconds:
+            rejection_reasons.append("no_parallel_package_speedup")
         if latency_limit is not None and expected_seconds > latency_limit:
             rejection_reasons.append("latency_limit_exceeded")
         impact = require_string(candidate.get("failure_impact", "low"), f"luna_candidates[{index}].failure_impact")
         if impact not in {"low", "medium", "high", "critical"}:
             raise PolicyError("failure_impact must be low, medium, high, or critical")
-        if impact in {"high", "critical"} and values["first_pass_probability"] < max(quality_floor, 0.9):
+        if impact in {"high", "critical"} and first_pass_probability < max(quality_floor, 0.9):
             rejection_reasons.append("high_failure_impact_requires_0.9_first_pass_probability")
         evaluated.append(
             {
                 "effort": effort,
                 "eligible": not rejection_reasons,
-                "expected_accepted_credits": round(expected_credits, 6),
-                "expected_accepted_seconds": round(expected_seconds, 6),
-                "expected_credit_savings_fraction": round(credit_savings, 6),
-                "first_pass_probability": values["first_pass_probability"],
-                "final_defect_probability": values["final_defect_probability"],
+                "expected_accepted_credits": expected_credits,
+                "expected_accepted_seconds": expected_seconds,
+                "expected_credit_savings_fraction": credit_savings,
+                "expected_elapsed_savings_fraction": elapsed_savings,
+                "coordination_credit_share": coordination_share,
+                "expected_recovery_credits": round(expected_recovery_credits, 6),
+                "expected_recovery_seconds": round(expected_recovery_seconds, 6),
+                "first_pass_probability": first_pass_probability,
+                "final_defect_probability": final_defect_probability,
+                "serial_package_seconds": serial_package_seconds,
+                "scheduled_package_seconds": package_seconds,
+                "effective_writers": candidate_effective_writers,
+                "package_expected_seconds": package_seconds + expected_recovery_seconds,
                 "failure_impact": impact,
                 "rejection_reasons": rejection_reasons,
             }
@@ -271,8 +611,9 @@ def evaluate_route(
         default=None,
     )
     route = "SOL_LUNA" if selected else "SOL_ONLY"
+    actual_effective_writers = selected["effective_writers"] if selected else None
     return {
-        "schema_version": SCHEMA_VERSION,
+        "schema_version": schema_version,
         "policy_version": policy["policy_version"],
         "policy_fingerprint": policy_fingerprint(policy),
         "task_family": task_family,
@@ -286,14 +627,33 @@ def evaluate_route(
         "quality_floor": quality_floor,
         "minimum_credit_savings_fraction": savings_floor,
         "sol_only": {
-            "expected_accepted_credits": round(sol_expected_credits, 6),
-            "expected_accepted_seconds": round(sol_expected_seconds, 6),
+            "expected_accepted_credits": sol_expected_credits,
+            "expected_accepted_seconds": sol_expected_seconds,
             "first_pass_probability": sol["first_pass_probability"],
             "final_defect_probability": sol["final_defect_probability"],
         },
         "coordination": coordination,
-        "writer_limit": allowed_writers(request, policy, verified_parallel_evidence),
+        "writer_limit": writer_limit,
+        "requested_writers": requested_writers,
+         "effective_writers": actual_effective_writers,
         "candidates": evaluated,
+         "selected_metrics": (
+            {
+                field: selected[field]
+                for field in (
+                    "serial_package_seconds",
+                    "scheduled_package_seconds",
+                    "expected_accepted_credits",
+                    "expected_accepted_seconds",
+                    "expected_credit_savings_fraction",
+                    "expected_elapsed_savings_fraction",
+                     "coordination_credit_share",
+                    "effective_writers",
+                )
+            }
+            if selected
+            else None
+        ),
         "automatic_execution_allowed": False,
     }
 
@@ -364,7 +724,7 @@ def template() -> dict[str, Any]:
         "quality_floor": 0.8,
         "minimum_credit_savings_fraction": 0.15,
         "latency_limit_seconds": None,
-        "requested_writers": 2,
+        "requested_writers": 1,
         "sol_only": {
             "first_pass_probability": 0.9,
             "final_defect_probability": 0.02,
@@ -445,7 +805,7 @@ def verified_parallel_evidence_from_ledger(
     acceptance = strongest.get("independent_acceptance_rate") or {}
     defects = strongest.get("final_defect_rate") or {}
     policy_matches = cohort.get("policy") == policy_fingerprint(policy)
-    return {
+    return _ExternallyBoundEvidence({
         "source": EVIDENCE_FEEDBACK_SOURCE,
         "policy_change_eligible": bool(strongest.get("policy_change_eligible")),
         "policy_fingerprint_matches": policy_matches,
@@ -460,7 +820,7 @@ def verified_parallel_evidence_from_ledger(
             float(defects.get("SOL_LUNA", 0)) - float(defects.get("SOL_ONLY", 0)),
         ),
         "feedback_posture": feedback.get("posture"),
-    }
+    })
 
 
 def parser() -> argparse.ArgumentParser:
@@ -518,7 +878,7 @@ def main() -> int:
     except (OSError, json.JSONDecodeError, PolicyError) as exc:
         print(f"routing policy error: {exc}", file=sys.stderr)
         return 2
-    print(json.dumps(output, ensure_ascii=False, indent=2, sort_keys=True))
+    print(json.dumps(display_round(output), ensure_ascii=False, indent=2, sort_keys=True))
     return 0
 
 

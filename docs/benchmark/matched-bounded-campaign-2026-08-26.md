@@ -2,9 +2,9 @@
 
 ## Verdict
 
-This five-pair token cohort rejects the economic case for Sol→Luna on this task family. Both routes achieved 100% independent acceptance, zero final defects, and 100% first-code-attempt acceptance, but Sol→Luna used substantially more diagnostic tokens and elapsed time in every pair.
+This five-pair diagnostic cohort rejects the elapsed-time case for Sol→Luna on this tiny task family and shows substantially more diagnostic tokens in every pair. Both routes achieved 100% independent acceptance, zero final defects, and 100% first-code-attempt acceptance.
 
-It does **not** prove a credit result. Codex diagnostic token totals are not credits, cached input is included, and no authoritative token-to-credit conversion was available.
+It does **not** establish subscription-allowance economics. No five-hour or weekly plan-limit readings were captured, Codex diagnostic token totals are not the user-visible plan allowance, and cached input is included. The token result must not be generalized into a claim that Sol→Luna consumes more subscription allowance.
 
 ## Frozen comparison
 
@@ -49,7 +49,7 @@ For this narrow bounded-function family, keep the route `SOL_ONLY`. Do not spend
 
 Do not generalize this result to larger parallelizable packages. A future campaign should target tasks large enough for Luna execution to dominate fixed coordination cost, while preserving the same frozen-start, runtime-identity, independent-acceptance, phase, and metric-cohort controls.
 
-The status tool correctly reports `policy_change_eligible: false`: credible credit reduction is missing and elapsed time regressed. No automatic routing update is authorized.
+The status tool correctly reports `policy_change_eligible: false`: direct allowance reduction is missing and elapsed time regressed. No automatic routing update is authorized.
 
 ## Evidence location
 

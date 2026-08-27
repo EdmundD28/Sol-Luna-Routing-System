@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "rate_card_id": "chatgpt-codex-credits-2026-08-28",
+  "source": {
+    "url": "https://learn.chatgpt.com/docs/pricing",
+    "observed_at": "2026-08-28"
+  },
+  "unit": "ChatGPT credits per 1M tokens",
+  "validity": {
+    "not_before": "2026-08-28",
+    "not_after": "2026-11-21",
+    "not_after_inclusive": true,
+    "reason": "The official source states that gpt-5.6-sol promotional pricing applies at least through 2026-11-21; refresh and fingerprint a new card after this boundary."
+  },
+  "scope": {
+    "denomination": "ChatGPT credits",
+    "billing_context": "purchased_credits",
+    "included_plan_allowance_compatible": false,
+    "plan_limit_percentage_convertible": false,
+    "api_dollars_compatible": false,
+    "automatic_model_execution_allowed": false
+  },
+  "models": {
+    "gpt-5.6-sol": {
+      "input_credits_per_million_tokens": "100",
+      "cached_input_credits_per_million_tokens": "10",
+      "output_credits_per_million_tokens": "500"
+    },
+    "gpt-5.6-luna": {
+      "input_credits_per_million_tokens": "5",
+      "cached_input_credits_per_million_tokens": "0.5",
+      "output_credits_per_million_tokens": "30"
+    }
+  }
+}

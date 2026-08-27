@@ -10,7 +10,7 @@ This audit separates implemented controls from measured economic improvement. It
 | P0.2 Matched evaluation harness | Implemented | `matched_eval.py` freezes start, task, acceptance suite, policy, arm order, and runtime identity; the five-pair campaign exercised both arms. |
 | P0.3 Predictive Luna effort ladder | Implemented | Versioned policy and effort-specific profiles cover Low, Medium, High, XHigh, and Max. A lower-tier failure is not required before a higher initial selection. |
 | P0.4 Rework budget | Implemented | Policy and lifecycle validators allow one evidence-backed repair, then repartition, one escalation, or Sol reclaim. |
-| P0.5 Initial writer cap | Implemented | The default cap is two; expansion requires validated ledger feedback from at least five matched pairs under the current policy fingerprint, with elapsed improvement and no credit or failure regression. Caller-supplied route numbers cannot unlock expansion. |
+| P0.5 Writer cap | Implemented | The executable cap is two. Locally bound ledger evidence can recommend human review but cannot expand the cap because it is not provider-authenticated. |
 | P1.6 Phase evidence | Implemented | `phase_tracker.py` and ledger schema v3 distinguish `sol_planning`, `sol_execution`, `luna_execution`, `sol_review`, `repair`, and `integration`; wall-clock elapsed remains separate from potentially overlapping active-phase durations. Token and credit totals reconcile additively. |
 | P1.7 Risk-proportional review | Implemented | Targeted, Standard, and Deep review decisions are executable and tested. |
 | P1.8 Runtime boundaries and ownership | Implemented as acceptance guards | Runtime receipts compare expected and host-observed identity/boundaries. Ownership plans and changed paths fail closed. These are not an OS security boundary. |
@@ -38,8 +38,8 @@ The ledger feedback posture is therefore `HOLD_SOL_ONLY`, with no supported Luna
 
 ## Remaining priority
 
-1. Keep bounded tiny Python-function work in Sol. Do not spend more quota proving the same negative result.
-2. Collect credible credit telemetry opportunistically from ordinary authorized work if the host later exposes it; do not manufacture conversions from tokens or allowance percentages.
+1. Keep bounded tiny Python-function work in Sol when elapsed time matters; the old campaign does not decide subscription-allowance economics.
+2. Measure subscription economics directly from matched five-hour and weekly plan-limit percentage changes. Do not substitute diagnostic token totals or purchased-credit estimates for those readings.
 3. Re-evaluate a materially different task family only when the expected saving can plausibly exceed Sol coordination and review overhead, and only when the user authorizes the cost.
 4. Add a licence only if the owner later declares that external reuse is intended.
 

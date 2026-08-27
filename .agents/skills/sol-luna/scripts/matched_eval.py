@@ -136,7 +136,17 @@ def run_sheet(plan: Mapping[str, Any]) -> dict[str, Any]:
                     "policy_fingerprint": plan["policy_fingerprint"],
                     "evaluation_mode": "MATCHED",
                     "execution_order": len(runs) + 1,
-                    "required_isolation": "fresh checkout or worktree from starting_candidate_ref",
+                    "required_isolation": (
+                        "single formal checkout; verify a clean tree and restore starting_candidate_ref "
+                        "before each arm; do not clone, copy, or create a worktree"
+                    ),
+                    "required_external_evidence_location": (
+                        "store the campaign ledger and dashboard captures outside the repository"
+                    ),
+                    "required_allowance_measurement": (
+                        "capture settled five-hour and weekly remaining percentages immediately before "
+                        "and after each arm in the unchanged account windows"
+                    ),
                     "required_acceptance": "run the frozen independent suite only after the final candidate is fixed",
                     "required_runtime_identity": (
                         "host-observed gpt-5.6-sol"
@@ -222,7 +232,7 @@ def template() -> dict[str, Any]:
         "schema_version": 1,
         "campaign_id": "bounded-feature-v1",
         "task_family": "bounded-feature",
-        "policy_version": "1.1.0",
+        "policy_version": "1.2.0",
         "policy_fingerprint": placeholder,
         "pairs": [
             {

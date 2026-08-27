@@ -93,6 +93,9 @@ class MatchedEvalTests(unittest.TestCase):
         self.assertEqual(len(sheet["runs"]), 2)
         self.assertEqual({run["route"] for run in sheet["runs"]}, {"SOL_ONLY", "SOL_LUNA"})
         self.assertEqual(len({run["starting_candidate_ref"] for run in sheet["runs"]}), 1)
+        self.assertTrue(all("single formal checkout" in run["required_isolation"] for run in sheet["runs"]))
+        self.assertTrue(all("do not clone" in run["required_isolation"] for run in sheet["runs"]))
+        self.assertTrue(all("five-hour" in run["required_allowance_measurement"] for run in sheet["runs"]))
         self.assertFalse(sheet["automatic_model_execution_allowed"])
 
     def test_run_sheet_counterbalances_arm_order(self) -> None:
