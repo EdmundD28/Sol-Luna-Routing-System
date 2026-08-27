@@ -147,7 +147,10 @@ def run_sheet(plan: Mapping[str, Any]) -> dict[str, Any]:
                         "capture settled five-hour and weekly remaining percentages immediately before "
                         "and after each arm in the unchanged account windows"
                     ),
-                    "required_acceptance": "run the frozen independent suite only after the final candidate is fixed",
+                    "required_acceptance": (
+                        "after both tested agents return, run the same frozen independent suite outside "
+                        "both route intervals and report referee cost separately"
+                    ),
                     "required_runtime_identity": (
                         "host-observed gpt-5.6-sol"
                         if route == "SOL_ONLY"

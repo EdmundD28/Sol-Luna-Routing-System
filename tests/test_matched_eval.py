@@ -96,6 +96,7 @@ class MatchedEvalTests(unittest.TestCase):
         self.assertTrue(all("single formal checkout" in run["required_isolation"] for run in sheet["runs"]))
         self.assertTrue(all("do not clone" in run["required_isolation"] for run in sheet["runs"]))
         self.assertTrue(all("five-hour" in run["required_allowance_measurement"] for run in sheet["runs"]))
+        self.assertTrue(all("outside both route intervals" in run["required_acceptance"] for run in sheet["runs"]))
         self.assertFalse(sheet["automatic_model_execution_allowed"])
 
     def test_run_sheet_counterbalances_arm_order(self) -> None:

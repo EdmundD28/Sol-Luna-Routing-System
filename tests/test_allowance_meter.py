@@ -149,15 +149,34 @@ class AllowanceMeterTests(unittest.TestCase):
         with self.assertRaisesRegex(METER.AllowanceError, "duplicate"):
             METER.assess([sol, copy.deepcopy(sol), luna], minimum_advantage_multiple=5, minimum_pairs=2)
 
-    def test_requires_same_window_and_continuous_sequential_readings(self) -> None:
+    def test_requires_same_window_and_allows_excluded_nonoverlapping_referee_gap(self) -> None:
         sol = record("SOL_ONLY", before=100, after=60, elapsed=100)
         luna = record("SOL_LUNA", before=60, after=55, elapsed=80)
         luna["limits"]["five_hour"]["window_id"] = "another-window"
         with self.assertRaisesRegex(METER.AllowanceError, "window_id differs"):
             METER.assess([sol, luna], minimum_advantage_multiple=5, minimum_pairs=2)
         luna = record("SOL_LUNA", before=59, after=54, elapsed=80)
-        with self.assertRaisesRegex(METER.AllowanceError, "not continuous"):
+        result = METER.assess([sol, luna], minimum_advantage_multiple=5, minimum_pairs=2)
+        self.assertEqual(
+            result["pairs"][0]["limits"]["five_hour"][
+                "excluded_between_arm_consumption_percentage_points"
+            ],
+            1,
+        )
+        luna = record("SOL_LUNA", before=61, after=56, elapsed=80)
+        with self.assertRaisesRegex(METER.AllowanceError, "increased between arms"):
             METER.assess([sol, luna], minimum_advantage_multiple=5, minimum_pairs=2)
+        luna = record("SOL_LUNA", before=60, after=55, elapsed=80)
+        for limit in luna["limits"].values():
+            limit["before_observed_at"] = "2026-08-28T00:09:00+10:00"
+        with self.assertRaisesRegex(METER.AllowanceError, "times overlap"):
+            METER.assess([sol, luna], minimum_advantage_multiple=5, minimum_pairs=2)
+
+    def test_measurement_scope_excludes_referee_work(self) -> None:
+        source = record("SOL_ONLY", before=100, after=60, elapsed=100)
+        source["measurement_scope"] = "TASK_PLUS_REFEREE"
+        with self.assertRaisesRegex(METER.AllowanceError, "exclude referee"):
+            METER.validate_record(source)
 
     def test_four_pair_counterbalanced_campaign_proves_tenfold_lower_bound(self) -> None:
         records = []

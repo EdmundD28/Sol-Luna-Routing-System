@@ -31,6 +31,7 @@ RECORD_FIELDS = {
     "independent_acceptance",
     "defects",
     "elapsed_seconds",
+    "measurement_scope",
     "contamination_status",
     "source",
     "evidence_digest",
@@ -161,6 +162,8 @@ def validate_record(value: Any) -> dict[str, Any]:
         raise AllowanceError("defects must be a non-negative integer")
     if source["contamination_status"] != "NO_OTHER_SHARED_USAGE_OBSERVED":
         raise AllowanceError("contamination_status must confirm no other shared usage was observed")
+    if source["measurement_scope"] != "ROUTE_TASK_INTERVAL_ONLY":
+        raise AllowanceError("measurement_scope must exclude referee and between-arm work")
     if source["source"] != "chatgpt-usage-dashboard-v1":
         raise AllowanceError("source must be chatgpt-usage-dashboard-v1")
     raw_limits = require_object(source["limits"], "limits")
@@ -177,6 +180,7 @@ def validate_record(value: Any) -> dict[str, Any]:
         "independent_acceptance": acceptance,
         "defects": defects,
         "elapsed_seconds": finite_number(source["elapsed_seconds"], "elapsed_seconds"),
+        "measurement_scope": source["measurement_scope"],
         "contamination_status": source["contamination_status"],
         "source": source["source"],
         "evidence_digest": require_digest(source["evidence_digest"], "evidence_digest"),
@@ -271,20 +275,24 @@ def assess(
                 raise AllowanceError(f"{pair_id} {kind} window_id differs between arms")
             if sol_limit["window_reset_at"] != luna_limit["window_reset_at"]:
                 raise AllowanceError(f"{pair_id} {kind} window_reset_at differs between arms")
-            first_after = first["limits"][kind]["after_remaining_percent"]
-            second_before = second["limits"][kind]["before_remaining_percent"]
-            if first_after != second_before:
-                raise AllowanceError(f"{pair_id} {kind} arm readings are not continuous")
             first_after_at = datetime.fromisoformat(first["limits"][kind]["after_observed_at"])
             second_before_at = datetime.fromisoformat(second["limits"][kind]["before_observed_at"])
             if first_after_at > second_before_at:
                 raise AllowanceError(f"{pair_id} {kind} arm observation times overlap")
+            first_after = first["limits"][kind]["after_remaining_percent"]
+            second_before = second["limits"][kind]["before_remaining_percent"]
+            if second_before > first_after:
+                raise AllowanceError(
+                    f"{pair_id} {kind} remaining allowance increased between arms; "
+                    "a reset or inconsistent reading occurred"
+                )
             sol_interval = consumption_interval(sol_limit)
             luna_interval = consumption_interval(luna_limit)
             intervals[kind] = {
                 "sol_only": sol_interval,
                 "sol_luna": luna_interval,
                 "advantage": advantage_interval(sol_interval, luna_interval),
+                "excluded_between_arm_consumption_percentage_points": first_after - second_before,
             }
         quality_passed = (
             sol["independent_acceptance"] == "PASSED"
@@ -426,6 +434,7 @@ def template() -> dict[str, Any]:
         "defects": 0,
         "elapsed_seconds": 1,
         "contamination_status": "NO_OTHER_SHARED_USAGE_OBSERVED",
+        "measurement_scope": "ROUTE_TASK_INTERVAL_ONLY",
         "source": "chatgpt-usage-dashboard-v1",
         "evidence_digest": digest,
         "benchmark_contract_digest": digest,

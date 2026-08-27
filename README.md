@@ -177,7 +177,7 @@ Within each task family, do not call the system improved unless a pre-registered
 - first-pass acceptance is at least 80%, keeping repair cost from consuming the saving;
 - Sol planning and review remain less than half of measured delivery cost.
 
-Counterbalance route order and keep both arms in the same unchanged account windows. Weekly readings are never added to five-hour readings. Failed arms remain in acceptance, defect, and first-pass denominators. Benchmark evidence permits human review only; it never dispatches work or edits policy automatically.
+Counterbalance route order and keep both arms in the same unchanged account windows. Measure each route only from its settled pre-launch reading until that tested agent returns. Run the experiment controller's independent acceptance, commit, branch restoration, and next-arm preparation outside both route intervals, report that referee cost separately, and take a fresh reading before the next route. Weekly readings are never added to five-hour readings. Failed arms remain in acceptance, defect, and first-pass denominators. Benchmark evidence permits human review only; it never dispatches work or edits policy automatically.
 
 ## License
 

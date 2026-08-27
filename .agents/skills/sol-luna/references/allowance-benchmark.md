@@ -11,7 +11,9 @@ Use this protocol only when the task is to quantify Sol-only versus Sol-Luna sub
 
 ## Read the meters
 
-For each arm, wait for the usage dashboard to settle, then retain the before and after evidence for both the five-hour and weekly remaining percentages. Record the same window identifier and the display uncertainty. Stop and invalidate the pair if either window resets, the remaining value rises, another shared-pool task runs, the plan or speed changes, or the readings between sequential arms are not continuous.
+Measure only the route task interval: retain a settled dashboard reading immediately before launching the tested task and another immediately after that task returns. Route elapsed time uses the same boundaries. Do not include the experiment controller's independent acceptance, commit, branch restoration, dashboard-settlement wait, or between-arm preparation in either route. Run the same independent acceptance after both route results exist and report that referee cost separately.
+
+Before the next route, finish referee and repository preparation, then take a fresh starting reading. The two route intervals therefore need not be percentage-continuous. They must remain in the same window, must not overlap, and the later reading must not increase. Report any consumption in the excluded between-arm gap instead of assigning it to either route. Stop and invalidate an affected arm if either window resets, another shared-pool task runs during that arm, or the plan or speed changes.
 
 The five-hour meter is primary because its smaller allowance window usually magnifies the same usage into a larger percentage change. The weekly meter is a separate, coarser corroborating view of the same shared usage. Never add the two percentages or infer one window's hidden capacity from the other without calibration.
 
