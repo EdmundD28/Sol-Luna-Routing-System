@@ -82,6 +82,22 @@ Preview is non-mutating:
 python scripts/setup.py preview
 ```
 
+If Preview reports a legacy user Skill under `~/.codex/skills/sol-luna`,
+inspect a state-bound migration plan instead of overwriting or manually
+copying files:
+
+```powershell
+python scripts/setup.py migration-preview
+python scripts/setup.py migrate --confirm --plan-fingerprint sha256:REVIEWED_PLAN
+```
+
+The fingerprint binds the repository source, every existing managed target,
+and the complete legacy Skill tree. Migration recomputes it immediately before
+writing, backs up only the exact installation assets it replaces or retires,
+and fails if anything drifted after Preview. It refuses an overlapping
+`--skills-home ~/.codex/skills` layout; the supported target is the current
+user Skill location, `~/.agents/skills`.
+
 After reviewing the plan:
 
 ```powershell

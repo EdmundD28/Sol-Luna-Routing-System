@@ -5,6 +5,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -84,6 +85,113 @@ class SetupTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             with self.assertRaises(SETUP.SetupError):
                 SETUP.preview(Path(Path(temp).anchor), Path(temp) / "skills")
+
+    def test_legacy_preview_is_non_mutating_and_ordinary_preview_refuses(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            codex, skills = self.roots(Path(temp))
+            old = codex / "skills" / "sol-luna"
+            old.mkdir(parents=True)
+            (old / "old.txt").write_text("legacy", encoding="utf-8")
+            ordinary = SETUP.preview(codex, skills)
+            self.assertFalse(ordinary["safe_to_apply"])
+            before = (old / "old.txt").read_text(encoding="utf-8")
+            plan = SETUP.migration_plan(codex, skills)
+            self.assertFalse(plan["writes_performed"])
+            self.assertEqual(before, (old / "old.txt").read_text(encoding="utf-8"))
+
+    def test_migration_fingerprint_and_rollback_restore_legacy(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            codex, skills = self.roots(Path(temp))
+            old = codex / "skills" / "sol-luna"
+            old.mkdir(parents=True)
+            (old / "old.txt").write_text("legacy", encoding="utf-8")
+            old_agent = codex / "agents" / "luna-worker.toml"
+            old_agent.parent.mkdir(parents=True)
+            old_agent.write_text("legacy-agent", encoding="utf-8")
+            plan = SETUP.migration_plan(codex, skills)
+            snapshot = json.dumps({"old": (old / "old.txt").read_text(), "agent": old_agent.read_text()})
+            with self.assertRaises(SETUP.SetupError):
+                SETUP.migrate(codex, skills, "sha256:wrong")
+            self.assertEqual(snapshot, json.dumps({"old": (old / "old.txt").read_text(), "agent": old_agent.read_text()}))
+            migrated = SETUP.migrate(codex, skills, plan["plan_fingerprint"])
+            self.assertEqual(migrated["doctor"]["status"], "healthy")
+            self.assertFalse(old.exists())
+            self.assertEqual(SETUP.doctor(codex)["status"], "healthy")
+            old.mkdir(parents=True)
+            self.assertEqual(SETUP.doctor(codex)["status"], "drifted")
+            old.rmdir()
+            SETUP.rollback(codex, skills)
+            self.assertEqual((old / "old.txt").read_text(encoding="utf-8"), "legacy")
+            self.assertEqual(old_agent.read_text(encoding="utf-8"), "legacy-agent")
+
+    def test_migration_rejects_overlapping_skill_root(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            codex = Path(temp) / "codex-home"
+            old = codex / "skills" / "sol-luna"
+            old.mkdir(parents=True)
+            with self.assertRaises(SETUP.SetupError):
+                SETUP.migration_plan(codex, codex / "skills")
+
+    def test_migration_rejects_stale_fingerprint_after_legacy_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            codex, skills = self.roots(Path(temp))
+            old = codex / "skills" / "sol-luna"
+            old.mkdir(parents=True)
+            legacy = old / "old.txt"
+            legacy.write_text("before", encoding="utf-8")
+            plan = SETUP.migration_plan(codex, skills)
+            legacy.write_text("after", encoding="utf-8")
+            with self.assertRaises(SETUP.SetupError):
+                SETUP.migrate(codex, skills, plan["plan_fingerprint"])
+            self.assertEqual(legacy.read_text(encoding="utf-8"), "after")
+            self.assertFalse(SETUP.state_path(codex).exists())
+
+    def test_failed_post_migration_doctor_restores_everything_and_state(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            codex, skills = self.roots(Path(temp))
+            old = codex / "skills" / "sol-luna"
+            old.mkdir(parents=True)
+            (old / "old.txt").write_text("legacy", encoding="utf-8")
+            old_agent = codex / "agents" / "luna-worker.toml"
+            old_agent.parent.mkdir(parents=True)
+            old_agent.write_text("legacy-agent", encoding="utf-8")
+            plan = SETUP.migration_plan(codex, skills)
+            with mock.patch.object(SETUP, "doctor", return_value={"status": "drifted"}):
+                with self.assertRaises(SETUP.SetupError):
+                    SETUP.migrate(codex, skills, plan["plan_fingerprint"])
+            self.assertEqual((old / "old.txt").read_text(encoding="utf-8"), "legacy")
+            self.assertEqual(old_agent.read_text(encoding="utf-8"), "legacy-agent")
+            self.assertFalse((skills / "sol-luna").exists())
+            self.assertFalse(SETUP.state_path(codex).exists())
+
+    def test_migration_refuses_existing_managed_installation(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            codex, skills = self.roots(Path(temp))
+            SETUP.apply(codex, skills)
+            with self.assertRaises(SETUP.SetupError):
+                SETUP.migrate(codex, skills, "sha256:not-used")
+
+    def test_rollback_rejects_tampered_migration_paths_before_writing(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            codex, skills = self.roots(root)
+            old = codex / "skills" / "sol-luna"
+            old.mkdir(parents=True)
+            (old / "old.txt").write_text("legacy", encoding="utf-8")
+            plan = SETUP.migration_plan(codex, skills)
+            SETUP.migrate(codex, skills, plan["plan_fingerprint"])
+            managed = skills / "sol-luna" / "SKILL.md"
+            managed_before = managed.read_bytes()
+            outside = root / "outside"
+            outside.mkdir()
+            state_file = SETUP.state_path(codex)
+            state = json.loads(state_file.read_text(encoding="utf-8"))
+            state["migration"]["legacy_skill"] = str(outside)
+            state_file.write_text(json.dumps(state), encoding="utf-8")
+            with self.assertRaises(SETUP.SetupError):
+                SETUP.rollback(codex, skills)
+            self.assertEqual(managed.read_bytes(), managed_before)
+            self.assertTrue(outside.is_dir())
 
 
 if __name__ == "__main__":

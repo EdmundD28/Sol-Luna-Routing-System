@@ -23,6 +23,8 @@ STATE_SCHEMA = 1
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SKILL_SOURCE = REPO_ROOT / ".agents" / "skills" / "sol-luna"
 AGENT_SOURCE = REPO_ROOT / ".codex" / "agents"
+OLD_SKILL_RELATIVE = Path("skills") / "sol-luna"
+OLD_AGENT_NAME = "luna-worker.toml"
 
 
 class SetupError(ValueError):
@@ -45,6 +47,22 @@ def atomic_write(path: Path, data: bytes) -> None:
     finally:
         if temporary.exists():
             temporary.unlink()
+
+
+def remove_empty_parents(path: Path, stop: Path) -> None:
+    """Remove only empty directories below an exact root, stopping on content."""
+    stop = stop.resolve(strict=False)
+    current = path.resolve(strict=False)
+    while current != stop:
+        try:
+            current.relative_to(stop)
+        except ValueError as exc:
+            raise SetupError("cleanup path escapes its declared root") from exc
+        try:
+            current.rmdir()
+        except (FileNotFoundError, OSError):
+            break
+        current = current.parent
 
 
 def is_link_like(path: Path) -> bool:
@@ -107,6 +125,66 @@ def source_fingerprint(assets: list[Mapping[str, Any]]) -> str:
     return "sha256:" + hashlib.sha256("\n".join(rows).encode("utf-8")).hexdigest()
 
 
+def tree_manifest(path: Path) -> list[str]:
+    """Return a deterministic, file-only manifest for an exact legacy tree."""
+    if not path.exists():
+        return []
+    if not path.is_dir() or is_link_like(path):
+        raise SetupError("legacy skill path is not a normal directory")
+    rows = []
+    for item in sorted(path.rglob("*")):
+        if item.is_dir():
+            if is_link_like(item):
+                raise SetupError("legacy skill tree contains a symlink or reparse point")
+            continue
+        if is_link_like(item):
+            raise SetupError("legacy skill tree contains a symlink or reparse point")
+        rows.append(f"{item.relative_to(path).as_posix()}:{digest(item)}")
+    return rows
+
+
+def migration_plan(codex_home: Path, skills_home: Path) -> dict[str, Any]:
+    """Build a non-mutating, state-bound takeover plan for legacy installs."""
+    codex, skills = validate_roots(codex_home, skills_home)
+    # The legacy tree is inside codex_home. If the requested new skills root
+    # aliases that same tree, writing the new tree and retiring the old one
+    # would be destructive and ambiguous; require an explicit safe layout.
+    if skills == (codex / "skills").resolve(strict=False):
+        raise SetupError("migration requires a skills root distinct from codex_home/skills")
+    assets = managed_assets(codex, skills)
+    old_skill = codex / OLD_SKILL_RELATIVE
+    old_agent = codex / "agents" / OLD_AGENT_NAME
+    operations: list[dict[str, Any]] = []
+    conflicts: list[str] = []
+    for asset in assets:
+        target = asset["target"]
+        current = digest(target) if target.exists() and not is_link_like(target) else None
+        action = "replace" if target.exists() else "create"
+        if target.exists() and is_link_like(target):
+            action = "conflict"
+            conflicts.append(str(target))
+        operations.append({"kind": asset["kind"], "relative": asset["relative"],
+                           "action": action, "target": str(target),
+                           "existing_hash": current, "source_hash": digest(asset["source"])})
+    old_manifest = tree_manifest(old_skill)
+    if old_skill.exists():
+        operations.append({"kind": "legacy-skill", "action": "retire", "target": str(old_skill),
+                           "tree": old_manifest, "tree_fingerprint": "sha256:" + hashlib.sha256("\n".join(old_manifest).encode()).hexdigest()})
+    if old_agent.exists():
+        if is_link_like(old_agent):
+            conflicts.append(str(old_agent))
+        agent_action = "replace" if old_agent in {a["target"] for a in assets} else "retire"
+        operations.append({"kind": "legacy-agent", "action": agent_action, "target": str(old_agent),
+                           "existing_hash": None if is_link_like(old_agent) else digest(old_agent)})
+    body = {"schema_version": STATE_SCHEMA, "mode": "migrate",
+            "source_fingerprint": source_fingerprint(assets), "operations": operations,
+            "conflicts": sorted(conflicts), "safe_to_apply": not conflicts,
+            "writes_performed": False}
+    encoded = json.dumps(body, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    body["plan_fingerprint"] = "sha256:" + hashlib.sha256(encoded).hexdigest()
+    return body
+
+
 def state_path(codex_home: Path) -> Path:
     return codex_home / "sol-luna-install-state.json"
 
@@ -158,6 +236,31 @@ def validate_state_for_write(
         backup = Path(str(backup_value))
         assert_safe_target(backup, backup_root)
         normalized_previous[target_value] = backup
+
+    migration = state.get("migration")
+    if migration is not None:
+        if not isinstance(migration, Mapping):
+            raise SetupError("install state migration record is invalid")
+        expected_legacy = {
+            "legacy_skill": codex / OLD_SKILL_RELATIVE,
+            "legacy_agent": codex / "agents" / OLD_AGENT_NAME,
+        }
+        for field, expected in expected_legacy.items():
+            observed = Path(str(migration.get(field, ""))).resolve(strict=False)
+            if observed != expected.resolve(strict=False):
+                raise SetupError(f"install state {field} does not match the exact legacy path")
+        expected_backups = {
+            "legacy_skill_backup": backup_root / "legacy-skill",
+            "legacy_agent_backup": backup_root / "legacy-agent",
+        }
+        for field, expected in expected_backups.items():
+            value = migration.get(field)
+            if value is None:
+                continue
+            observed = Path(str(value)).resolve(strict=False)
+            assert_safe_target(observed, backup_root)
+            if observed != expected.resolve(strict=False):
+                raise SetupError(f"install state {field} does not match the exact backup path")
     return backup_root, normalized_previous
 
 
@@ -196,6 +299,11 @@ def preview(codex_home: Path, skills_home: Path, *, require_installed: bool = Fa
                 "target": target_key,
             }
         )
+    # A legacy user-level skill is never silently shadowed or removed by the
+    # ordinary lifecycle; only explicit migrate may retire this exact path.
+    legacy_skill = codex / OLD_SKILL_RELATIVE
+    if legacy_skill.exists():
+        conflicts.append("legacy:" + str(legacy_skill))
     return {
         "schema_version": STATE_SCHEMA,
         "mode": "update" if require_installed else "install",
@@ -205,6 +313,91 @@ def preview(codex_home: Path, skills_home: Path, *, require_installed: bool = Fa
         "safe_to_apply": not conflicts,
         "writes_performed": False,
     }
+
+
+def migrate(codex_home: Path, skills_home: Path, plan_fingerprint: str) -> dict[str, Any]:
+    codex, skills = validate_roots(codex_home, skills_home)
+    existing_state_path = state_path(codex)
+    existing_state = existing_state_path.read_bytes() if existing_state_path.exists() else None
+    prior_state = load_state(codex)
+    if prior_state and prior_state.get("status") == "installed":
+        raise SetupError("migrate refuses an existing managed installation; use update")
+    plan = migration_plan(codex, skills)
+    if not plan.get("safe_to_apply"):
+        raise SetupError(f"refusing conflicted migration: {plan['conflicts']}")
+    if plan.get("plan_fingerprint") != plan_fingerprint:
+        raise SetupError("migration plan fingerprint is stale or incorrect")
+    assets = managed_assets(codex, skills)
+    operation_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-" + uuid.uuid4().hex[:8]
+    backup_root = codex / "sol-luna-backups" / operation_id
+    previous: dict[str, str | None] = {}
+    old_skill = codex / OLD_SKILL_RELATIVE
+    old_agent = codex / "agents" / OLD_AGENT_NAME
+    written: list[Path] = []
+    retired: list[Path] = []
+    legacy_skill_backed = old_skill.exists()
+    legacy_agent_backed = old_agent.exists()
+    try:
+        if old_skill.exists():
+            shutil.copytree(old_skill, backup_root / "legacy-skill")
+        if old_agent.exists():
+            (backup_root / "legacy-agent").parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(old_agent, backup_root / "legacy-agent")
+        for asset in assets:
+            target = asset["target"]
+            key = str(target)
+            if target.exists():
+                previous[key] = str(backup_root / asset["kind"] / asset["relative"])
+                Path(previous[key]).parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(target, Path(previous[key]))
+            else:
+                previous[key] = None
+            if not target.exists() or digest(target) != digest(asset["source"]):
+                atomic_write(target, asset["source"].read_bytes())
+                written.append(target)
+        # Narrow, exact legacy paths only; no shell deletion is involved.
+        if old_skill.exists():
+            shutil.rmtree(old_skill)
+            retired.append(old_skill)
+        # luna-worker.toml is also a current managed target in this repository:
+        # it is replaced above and must remain present as the new agent.
+        managed_agent_targets = {a["target"] for a in assets if a["kind"] == "agent"}
+        if old_agent.exists() and old_agent not in managed_agent_targets:
+            old_agent.unlink()
+            retired.append(old_agent)
+        state = {"schema_version": STATE_SCHEMA, "status": "installed", "operation_id": operation_id,
+                 "installed_at": datetime.now(timezone.utc).isoformat(),
+                 "source_fingerprint": source_fingerprint(assets), "codex_home": str(codex),
+                 "skills_home": str(skills), "installed": {str(a["target"]): digest(a["source"]) for a in assets},
+                 "previous": previous, "backup_root": str(backup_root),
+                 "migration": {"legacy_skill": str(old_skill), "legacy_agent": str(old_agent),
+                                "legacy_skill_backup": str(backup_root / "legacy-skill") if (backup_root / "legacy-skill").exists() else None,
+                                "legacy_agent_backup": str(backup_root / "legacy-agent") if (backup_root / "legacy-agent").exists() else None}}
+        atomic_write(state_path(codex), (json.dumps(state, indent=2, sort_keys=True) + "\n").encode())
+        result = doctor(codex)
+        if result["status"] != "healthy":
+            raise SetupError("post-migration Doctor did not verify the managed state")
+    except Exception:
+        for target in reversed(written):
+            backup = previous.get(str(target))
+            if backup and Path(backup).exists(): atomic_write(target, Path(backup).read_bytes())
+            elif target.exists():
+                target.unlink()
+                root = codex if target.is_relative_to(codex) else skills
+                remove_empty_parents(target.parent, root)
+        # Restore the exact legacy trees if any later write, state update, or
+        # health check fails. This keeps migration transactional.
+        if legacy_skill_backed and not old_skill.exists() and (backup_root / "legacy-skill").exists():
+            shutil.copytree(backup_root / "legacy-skill", old_skill)
+        if legacy_agent_backed and not old_agent.exists() and (backup_root / "legacy-agent").exists():
+            old_agent.parent.mkdir(parents=True, exist_ok=True)
+            atomic_write(old_agent, (backup_root / "legacy-agent").read_bytes())
+        if existing_state is not None:
+            atomic_write(existing_state_path, existing_state)
+        elif existing_state_path.exists():
+            existing_state_path.unlink()
+        raise
+    return {"status": "migrated", "operation_id": operation_id, "doctor": result, "plan_fingerprint": plan_fingerprint}
 
 
 def apply(codex_home: Path, skills_home: Path, *, update: bool = False) -> dict[str, Any]:
@@ -280,6 +473,9 @@ def doctor(codex_home: Path) -> dict[str, Any]:
         return {"status": "not-installed", "checked": 0, "missing": [], "drifted": []}
     missing: list[str] = []
     drifted: list[str] = []
+    duplicate = codex / OLD_SKILL_RELATIVE
+    if duplicate.exists():
+        drifted.append("duplicate legacy skill")
     for target_value, expected_hash in state.get("installed", {}).items():
         target = Path(target_value)
         try:
@@ -319,6 +515,16 @@ def rollback(codex_home: Path, skills_home: Path) -> dict[str, Any]:
             conflicts.append(target.name)
     if conflicts:
         raise SetupError(f"rollback refuses user-modified managed files: {sorted(conflicts)}")
+    migration = state.get("migration")
+    if not isinstance(migration, Mapping):
+        migration = {}
+    legacy_skill = Path(str(migration.get("legacy_skill", codex / OLD_SKILL_RELATIVE)))
+    legacy_agent = Path(str(migration.get("legacy_agent", codex / "agents" / OLD_AGENT_NAME)))
+    if migration:
+        managed_targets = {Path(value) for value in state.get("installed", {})}
+        for legacy in (legacy_skill, legacy_agent):
+            if legacy.exists() and legacy not in managed_targets:
+                raise SetupError("rollback refuses legacy path conflict")
     restored = 0
     removed = 0
     for target_value in sorted(state.get("installed", {}), reverse=True):
@@ -330,6 +536,15 @@ def rollback(codex_home: Path, skills_home: Path) -> dict[str, Any]:
         elif target.exists():
             target.unlink()
             removed += 1
+    skill_backup = migration.get("legacy_skill_backup")
+    agent_backup = migration.get("legacy_agent_backup")
+    if skill_backup:
+        shutil.copytree(Path(skill_backup), legacy_skill)
+        restored += 1
+    if agent_backup:
+        legacy_agent.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(Path(agent_backup), legacy_agent)
+        restored += 1
     state["status"] = "rolled-back"
     state["rolled_back_at"] = datetime.now(timezone.utc).isoformat()
     atomic_write(state_path(codex), (json.dumps(state, indent=2, sort_keys=True) + "\n").encode("utf-8"))
@@ -342,6 +557,10 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--skills-home", type=Path, default=Path.home() / ".agents" / "skills")
     sub = result.add_subparsers(dest="command", required=True)
     sub.add_parser("preview")
+    sub.add_parser("migration-preview")
+    migrate_command = sub.add_parser("migrate")
+    migrate_command.add_argument("--confirm", action="store_true")
+    migrate_command.add_argument("--plan-fingerprint", required=True)
     for name in ("install", "update", "rollback"):
         command = sub.add_parser(name)
         command.add_argument("--confirm", action="store_true")
@@ -354,12 +573,16 @@ def main() -> int:
     try:
         if args.command == "preview":
             output = preview(args.codex_home, args.skills_home)
+        elif args.command == "migration-preview":
+            output = migration_plan(args.codex_home, args.skills_home)
         elif args.command == "doctor":
             output = doctor(args.codex_home)
         elif not args.confirm:
             raise SetupError(f"{args.command} requires --confirm after reviewing preview")
         elif args.command == "install":
             output = apply(args.codex_home, args.skills_home)
+        elif args.command == "migrate":
+            output = migrate(args.codex_home, args.skills_home, args.plan_fingerprint)
         elif args.command == "update":
             output = apply(args.codex_home, args.skills_home, update=True)
         else:
