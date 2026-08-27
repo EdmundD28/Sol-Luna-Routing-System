@@ -73,6 +73,8 @@ The Skill uses standard-library Python tools:
 | `evidence_ledger.py` | Validate schema-4 phase evidence, require record-bound external claims for credible credits, isolate exact policy cohorts, persist atomically, and emit fail-closed task-family feedback without automatic routing |
 | `matched_eval.py` | Freeze paired arms and reject mismatched starts, task specs, suites, policies, and metric cohorts |
 | `allowance_meter.py` | Quantify conservative Sol-only versus Sol-Luna advantage from matched five-hour and weekly plan-limit percentage readings |
+| `allowance_campaign.py` | Pre-register route order, atomically record route-only meter intervals, recover active arms, report excluded referee gaps, and assess completed pairs |
+| `benchmark_identity.py` | Build a path-free, host-observed Sol/Luna identity index using canonical receipt digests that reject equivalent JSON reserialization reuse |
 | `credit_model.py` | Estimate purchased credits from classified phase usage and a fingerprinted rate card; never convert included plan percentages |
 
 The matched harness binds each pair to the same starting candidate, task digest, independent acceptance-suite digest, policy fingerprint, and observed runtime identity. It does not launch paid model work. See [runtime and evidence details](.agents/skills/sol-luna/references/evidence-and-runtime.md) and [the orchestration policy](.agents/skills/sol-luna/references/orchestration-policy.md).
@@ -129,6 +131,7 @@ Setup manages only the Sol-Luna Skill and named agent TOMLs. It uses source hash
   references/
     orchestration-policy.md
     evidence-and-runtime.md
+    allowance-benchmark.md
     routing-policy.v1.json
   scripts/
     routing_policy.py
@@ -136,6 +139,8 @@ Setup manages only the Sol-Luna Skill and named agent TOMLs. It uses source hash
     lifecycle_contract.py
     native_lifecycle_receipt.py
     runtime_receipt.py
+    allowance_campaign.py
+    benchmark_identity.py
     phase_tracker.py
     evidence_ledger.py
     matched_eval.py
