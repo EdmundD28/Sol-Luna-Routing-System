@@ -45,7 +45,13 @@ def record(pair: dict, route: str, *, wrong_start: bool = False) -> dict:
     phases = (
         {"sol_execution": 1000}
         if route == "SOL_ONLY"
-        else {"sol_planning": 80, "luna_execution": 500, "sol_review": 60, "integration": 60}
+        else {
+            "sol_planning": 80,
+            "sol_retained_execution": 100,
+            "luna_execution": 400,
+            "sol_review": 60,
+            "integration": 60,
+        }
     )
     return LEDGER.validate_record(
         {
@@ -76,7 +82,13 @@ def record(pair: dict, route: str, *, wrong_start: bool = False) -> dict:
             "token_uncertainty": "complete diagnostic snapshots",
             "phase_elapsed_seconds": {"sol_execution": 1000}
             if route == "SOL_ONLY"
-            else {"sol_planning": 50, "luna_execution": 500, "sol_review": 75, "integration": 75},
+            else {
+                "sol_planning": 50,
+                "sol_retained_execution": 500,
+                "luna_execution": 500,
+                "sol_review": 75,
+                "integration": 75,
+            },
             "phase_tokens": phases,
             "observed_sol_model": "gpt-5.6-sol",
             "observed_luna_model": "gpt-5.6-luna" if route == "SOL_LUNA" else "",

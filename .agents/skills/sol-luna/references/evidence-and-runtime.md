@@ -60,15 +60,16 @@ python .agents/skills/sol-luna/scripts/evidence_ledger.py status `
 
 The status gate requires at least five fully assessed matched `SOL_ONLY` versus `SOL_LUNA` pairs inside one exact cohort. Cohort identity includes the independent acceptance suite, policy fingerprint, metric kind and source, credit/token/runtime uncertainty, Luna effort and observed model, writer count, review depth, and billing window. Failed arms remain in the cohort and count against independent acceptance, final-defect, and first-pass gates; they are never discarded to make the route look cleaner. Token and credit cohorts never share a readiness count. When both are recorded, exact credits take comparison precedence over diagnostic tokens.
 
-An `exact` label or a `credit_source` beginning with `exact:` is not trust evidence. Schema 4 credit records must declare `credit_verification`; old schema 1-3 records load as `UNVERIFIED` and may not carry schema-4 trust fields. To satisfy the credible-credit gate, every arm must be `PROVIDER_AUTHENTICATED`, exact, uncertainty-free, in the same billing window, and must match one unique claim in a separately supplied strict index:
+An `exact` label or a `credit_source` beginning with `exact:` is not trust evidence. Schema 4 introduced explicit credit trust and schema 5 adds retained Sol execution. Schema 1-3 records load as `UNVERIFIED`; schema 4 records remain readable but retain their legacy origin and cannot satisfy the schema-5 measurement gate. To satisfy the credible-credit gate, every current arm must be `PROVIDER_AUTHENTICATED`, exact, uncertainty-free, in the same billing window, and must match one unique claim in a separately supplied strict index:
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "verification_source": "independent-provider-export-review-v1",
   "claims": [
     {
       "record_id": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+      "record_digest": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
       "task_family": "bounded-feature",
       "route": "SOL_ONLY",
       "pair_id": "pair-001",
@@ -97,7 +98,7 @@ python .agents/skills/sol-luna/scripts/evidence_ledger.py status `
   --verified-credit-receipts runtime/sol-luna/verified-credit-receipts.json
 ```
 
-Keep that index outside worker control and produce it from an independently reviewed provider export or another host-authenticated source. Every claim binds the record ID, task family, route, pair, effective policy and acceptance-suite identities, numeric credit, source, uncertainty, billing window, receipt reference/digest, and runtime identity. Effective identities prefer the schema-4 digest and fall back to the validated legacy version/ID only when reading older routine records. `claim_digest` is SHA-256 over compact canonical JSON containing every other claim field with sorted keys; receipt digests, record IDs, and claim digests must be unique. The ledger checks those bindings, but it does **not** fetch billing data or validate a provider signature. If the host does not expose task-level authenticated credits, leave records `UNVERIFIED` and keep the policy gate closed. Diagnostic Responses API token usage and organization-level aggregate cost data must not be relabelled as a Codex desktop task-level credit receipt.
+Keep that index outside worker control and produce it from an independently reviewed provider export or another host-authenticated source. Every claim binds both the stable record ID and a SHA-256 digest of the complete normalized ledger record, plus the task family, route, pair, effective policy and acceptance-suite identities, numeric credit, source, uncertainty, billing window, receipt reference/digest, and runtime identity. The full-record binding prevents an old provider claim from being replayed after changing a schema marker or phase allocation. Effective identities prefer the current digest and fall back to the validated legacy version/ID only when reading older routine records. `claim_digest` is SHA-256 over compact canonical JSON containing every other claim field with sorted keys; receipt digests, record IDs, and claim digests must be unique. The ledger checks those bindings, but it does **not** fetch billing data or validate a provider signature. If the host does not expose task-level authenticated credits, leave records `UNVERIFIED` and keep the policy gate closed. Diagnostic Responses API token usage and organization-level aggregate cost data must not be relabelled as a Codex desktop task-level credit receipt.
 
 The default first-pass floor is 80%. Status returns either `insufficient_evidence` or `eligible_for_human_review`; success gates also expose paired reduction, elapsed regression, acceptance and defect rates, first-pass acceptance, and the Sol planning/review/integration share. It never edits routing.
 
@@ -111,7 +112,7 @@ python .agents/skills/sol-luna/scripts/matched_eval.py validate --plan runtime/s
 python .agents/skills/sol-luna/scripts/matched_eval.py run-sheet --plan runtime/sol-luna/plan.json
 ```
 
-Each pair produces `SOL_ONLY` and `SOL_LUNA` arms bound to the same starting candidate, task-spec digest, independent acceptance-suite digest, and policy fingerprint. The run sheet counterbalances arm order across pairs to reduce systematic order bias. Execute each arm in a fresh checkout or worktree, append its phase-aware matched record, then assess:
+Each pair produces `SOL_ONLY` and `SOL_LUNA` arms bound to the same starting candidate, task-spec digest, independent acceptance-suite digest, and policy fingerprint. The run sheet counterbalances arm order across pairs to reduce systematic order bias. Use the single formal checkout, verify a clean tree, and restore the registered starting candidate before each arm; do not clone, copy, or create a worktree. Append each phase-aware matched record, then assess:
 
 ```powershell
 python .agents/skills/sol-luna/scripts/matched_eval.py assess `
@@ -139,6 +140,6 @@ The harness freezes and validates comparability but deliberately does not launch
 - `BLOCKED` requires a concrete missing decision, authority, input, permission, ownership change, or external-state change.
 - One repair is the default. More than one repair requires a short justification and a new evidence reference.
 - Token and credit values require a source and uncertainty statement. A displayed allowance delta is not silently converted into exact credits. Self-declared exact credits and receipt metadata remain untrusted unless an independent record-bound claim index is supplied at assessment time.
-- Matched records identify `sol_execution` for the control arm and `sol_planning`, `luna_execution`, `sol_review`, `repair`, and `integration` for the delegated arm. `elapsed_seconds` is wall-clock duration; individual active-phase durations may overlap but none may exceed the run boundary. Token and credit phase totals remain additive and must reconcile with their recorded totals.
+- Matched records identify `sol_execution` for the control arm and `sol_planning`, `sol_retained_execution`, `luna_execution`, `sol_review`, `repair`, and `integration` for the delegated arm. Retained Sol execution is mandatory even when zero. `elapsed_seconds` is wall-clock duration; individual active-phase durations may overlap but none may exceed the run boundary. Token and credit phase totals remain additive and must reconcile with their recorded totals.
 - Matched evidence is invalid unless host-observed runtime identity proves Sol is `gpt-5.6-sol` and every delegated Luna execution is `gpt-5.6-luna`. Agent names, profile labels, prompts, and requested settings are not runtime proof.
 - Raw prompts and arbitrary extra fields are rejected. Run references are hashed before append, and private filesystem paths are rejected from summary fields.

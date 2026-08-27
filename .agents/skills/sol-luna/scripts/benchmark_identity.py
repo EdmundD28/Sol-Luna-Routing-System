@@ -16,10 +16,15 @@ from pathlib import Path
 from typing import Any, Mapping
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
+RUNTIME_RECEIPT_SCHEMA_VERSION = 1
 ROUTES = {"SOL_ONLY", "SOL_LUNA"}
+LUNA_EFFORTS = {"low", "medium", "high", "xhigh", "max"}
 LABEL = re.compile(r"[a-z0-9][a-z0-9-]{1,63}")
-MANIFEST_FIELDS = {"schema_version", "campaign_id", "runs"}
+MANIFEST_FIELDS = {
+    "schema_version", "campaign_id", "sol_luna_effort",
+    "sol_luna_writer_count", "runs",
+}
 RUN_FIELDS = {"pair_id", "route", "controller_receipt", "worker_receipts"}
 RECEIPT_FIELDS = {
     "schema_version", "status", "thread_ref", "source_ref", "source_kind",
@@ -35,7 +40,10 @@ OBSERVED_FIELDS = {
     "sandbox_policy_type", "permission_profile_type", "cwd_ref",
 }
 CONTROLLER_ROLES = {"default", "worker"}
-WRITER_ROLES = {"worker", "luna_worker", "luna_worker_high"}
+WRITER_ROLES = {
+    "worker", "luna_worker", "luna_worker_low", "luna_worker_medium",
+    "luna_worker_high", "luna_worker_xhigh", "luna_worker_max",
+}
 WINDOWS_DEVICE_NAMES = {
     "con", "prn", "aux", "nul", *(f"com{number}" for number in range(1, 10)),
     *(f"lpt{number}" for number in range(1, 10)),
@@ -156,7 +164,7 @@ def validate_receipt(value: Mapping[str, Any], name: str) -> dict[str, str]:
     if (
         not isinstance(source["schema_version"], int)
         or isinstance(source["schema_version"], bool)
-        or source["schema_version"] != SCHEMA_VERSION
+        or source["schema_version"] != RUNTIME_RECEIPT_SCHEMA_VERSION
     ):
         raise IdentityError(f"{name} has an unsupported schema_version")
     if source["status"] != "verified" or source["source_kind"] != "explicit_session_jsonl":
@@ -213,12 +221,14 @@ def _validate_controller(identity: Mapping[str, str], name: str) -> None:
         raise IdentityError(f"{name} must be a host-observed gpt-5.6-sol/high OpenAI controller")
 
 
-def _validate_writer(identity: Mapping[str, str], name: str) -> None:
+def _validate_writer(identity: Mapping[str, str], name: str, expected_effort: str) -> None:
     if (
-        identity["model"] != "gpt-5.6-luna" or identity["effort"] != "high"
+        identity["model"] != "gpt-5.6-luna" or identity["effort"] != expected_effort
         or identity["provider"] != "openai" or identity["role"] not in WRITER_ROLES
     ):
-        raise IdentityError(f"{name} must be a host-observed gpt-5.6-luna/high OpenAI writer")
+        raise IdentityError(
+            f"{name} must be a host-observed gpt-5.6-luna/{expected_effort} OpenAI writer"
+        )
 
 
 def build_index(manifest: Path) -> dict[str, Any]:
@@ -231,6 +241,16 @@ def build_index(manifest: Path) -> dict[str, Any]:
     ):
         raise IdentityError("manifest has an unsupported schema_version")
     campaign_id = require_label(source["campaign_id"], "campaign_id")
+    sol_luna_effort = source["sol_luna_effort"]
+    if sol_luna_effort not in LUNA_EFFORTS:
+        raise IdentityError("sol_luna_effort must be low, medium, high, xhigh, or max")
+    sol_luna_writer_count = source["sol_luna_writer_count"]
+    if (
+        isinstance(sol_luna_writer_count, bool)
+        or not isinstance(sol_luna_writer_count, int)
+        or sol_luna_writer_count not in {1, 2}
+    ):
+        raise IdentityError("sol_luna_writer_count must be 1 or 2")
     if not isinstance(source["runs"], list) or not source["runs"]:
         raise IdentityError("runs must be a non-empty JSON array")
     output_runs: list[dict[str, Any]] = []
@@ -252,8 +272,10 @@ def build_index(manifest: Path) -> dict[str, Any]:
             raise IdentityError(f"{run_name}.worker_receipts must be a JSON string array")
         if route == "SOL_ONLY" and workers:
             raise IdentityError("SOL_ONLY must not contain subordinate writers")
-        if route == "SOL_LUNA" and not 1 <= len(workers) <= 2:
-            raise IdentityError("SOL_LUNA must contain one or two writers")
+        if route == "SOL_LUNA" and len(workers) != sol_luna_writer_count:
+            raise IdentityError(
+                "SOL_LUNA worker receipts must match sol_luna_writer_count"
+            )
 
         def consume(receipt_ref: Any, receipt_name: str) -> tuple[dict[str, str], str]:
             path = safe_receipt_path(manifest, receipt_ref, receipt_name)
@@ -269,7 +291,11 @@ def build_index(manifest: Path) -> dict[str, Any]:
         writer_outputs: list[dict[str, str]] = []
         for worker_index, worker_ref in enumerate(workers):
             identity, digest = consume(worker_ref, f"{run_name}.worker_receipts[{worker_index}]")
-            _validate_writer(identity, f"{run_name}.worker_receipts[{worker_index}]")
+            _validate_writer(
+                identity,
+                f"{run_name}.worker_receipts[{worker_index}]",
+                sol_luna_effort,
+            )
             writer_outputs.append(_identity_output(identity, digest))
         output_runs.append({
             "pair_id": pair_id,
@@ -284,6 +310,8 @@ def build_index(manifest: Path) -> dict[str, Any]:
     content: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
         "campaign_id": campaign_id,
+        "sol_luna_effort": sol_luna_effort,
+        "sol_luna_writer_count": sol_luna_writer_count,
         "runs": output_runs,
         "verification_status": "verified",
     }

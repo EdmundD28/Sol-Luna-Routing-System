@@ -98,9 +98,14 @@ def initialize(run_ref: str, route: str, *, at: str | None = None) -> dict[str, 
 
 
 def _validate_route_phases(route: str, field: str, phases: Mapping[str, Any]) -> None:
-    forbidden = "luna_execution" if route == "SOL_ONLY" else "sol_execution"
-    if forbidden in phases:
-        raise TrackerError(f"{route} journal cannot contain {forbidden} in {field}")
+    forbidden = (
+        {"luna_execution", "sol_retained_execution"}
+        if route == "SOL_ONLY"
+        else {"sol_execution"}
+    )
+    present = forbidden.intersection(phases)
+    if present:
+        raise TrackerError(f"{route} journal cannot contain {sorted(present)[0]} in {field}")
 
 
 def validate_journal(source: Mapping[str, Any]) -> dict[str, Any]:

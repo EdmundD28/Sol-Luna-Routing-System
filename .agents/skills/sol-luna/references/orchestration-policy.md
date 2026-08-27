@@ -11,7 +11,7 @@ Apply the decision lexicographically:
 3. Among eligible routes, minimize expected accepted-result credits.
 4. Require no expected elapsed regression; when parallelism is the justification, require an expected improvement.
 
-Expected accepted cost includes initial execution, Sol coordination and review, integration, and failure probability multiplied by recovery cost. Expected accepted time uses the same phases. Do not convert token counts, displayed allowance percentages, API dollars, and Codex credits into one another without an authoritative conversion source.
+Expected accepted cost includes Luna execution, all retained Sol execution, Sol coordination and review, integration, and failure probability multiplied by recovery cost. Expected time counts serial Sol overhead plus the longer of retained Sol execution and Luna execution, then expected recovery; overlapping work saves wall time but never removes either side's cost. Do not convert token counts, displayed allowance percentages, API dollars, and Codex credits into one another without an authoritative conversion source.
 
 Predictions must name their basis: matched task-family evidence, a bounded feasibility map, or a disclosed estimate. Unknown inputs do not become zero.
 
@@ -43,6 +43,8 @@ Do not infer that the child's default current directory equals the target reposi
 
 Maintain `ready`, `awaiting review`, and `approved repair` queues. Dispatch ready non-conflicting work within the writer cap. While Luna runs, Sol performs only Sol-owned critical-path work: architecture, acceptance design, integration preparation, or review of another frozen candidate. Reuse retained worker context only when it saves more than it biases review.
 
+The normal production shape is one Sol controller plus one Luna writer. Sol receives the whole user task and carves out one high-leverage package; the remaining work is not represented as serial Sol packages and is not dispatched through the worker queue. Do not split a task solely to create concurrency. Use a second Luna writer only in a pre-registered benchmark until matched included-allowance and elapsed evidence supports a later policy release.
+
 Wait only when no ready package, review, integration preparation, or acceptance work remains. Inspect one compact status snapshot before interrupting a stalled worker; do not turn polling into its own workload.
 
 ## Risk-proportional review
@@ -68,10 +70,10 @@ Do not restart an unchanged vague package. `BLOCKED` is reserved for missing aut
 
 ## Evidence and success gate
 
-Record `sol_planning`, `luna_execution`, `sol_review`, `repair`, and `integration` separately. Track source-aware credits or tokens, elapsed seconds, first-pass acceptance, repair rounds, independent defects, final candidate, policy fingerprint, task digest, acceptance-suite digest, effort, writer count, and review depth.
+Record `sol_planning`, `sol_retained_execution`, `luna_execution`, `sol_review`, `repair`, and `integration` separately. A matched Sol-Luna record must include the retained phase even when its measured value is zero. Track source-aware credits or tokens, elapsed seconds, first-pass acceptance, repair rounds, independent defects, final candidate, policy fingerprint, task digest, acceptance-suite digest, effort, writer count, and review depth.
 
 A task-family policy change requires matched, independently assessed evidence. Five complete pairs permit human review; stronger claims should use a larger sample. Failed arms remain in the denominator. Improvement requires equal-or-better independent acceptance, no defect regression, at least the configured median credit reduction, no elapsed regression unless another explicit objective justifies it, and Sol planning plus review remaining a minority of total measured cost.
 
 Use `evidence_ledger.py feedback` to turn those gates into an advisory task-family posture. Missing, estimated-credit, token-only, allowance-delta, regressive, or under-sized evidence holds the posture at `HOLD_SOL_ONLY`. When exact credits and diagnostic tokens coexist, exact credits take comparison precedence. A passing exact-credit cohort exposes only its observed Luna efforts as candidates for human policy review; it never edits policy or dispatches work automatically. Concrete evidence for an unusual individual task may still justify a separately disclosed route estimate, but it must not be presented as learned task-family history.
 
-Writer-cap expansion has a stricter boundary: call `routing_policy.py evaluate --ledger LEDGER.jsonl --input ROUTE.json`. The router derives expansion evidence from the validated ledger and requires a passing cohort under the current policy fingerprint. Numbers embedded in the route request cannot unlock more writers.
+Concurrency evidence is advisory: call `routing_policy.py evaluate --ledger LEDGER.jsonl --input ROUTE.json` to surface a human-review recommendation under the current policy fingerprint. It cannot raise the executable one-writer cap. A later explicit policy release may change that cap after matched plan-meter evidence; numbers embedded in a route request never unlock more writers.

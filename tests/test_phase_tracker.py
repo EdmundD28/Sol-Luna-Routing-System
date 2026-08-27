@@ -233,6 +233,26 @@ class PhaseTrackerTests(unittest.TestCase):
         with self.assertRaisesRegex(TRACKER.TrackerError, "sol_execution"):
             TRACKER.start(luna, "sol_execution", at="2026-08-26T00:00:00+00:00")
 
+        with self.assertRaisesRegex(TRACKER.TrackerError, "sol_retained_execution"):
+            TRACKER.start(sol_only, "sol_retained_execution", at="2026-08-26T00:00:00+00:00")
+
+        retained = TRACKER.start(
+            luna,
+            "sol_retained_execution",
+            at="2026-08-26T00:00:00+00:00",
+        )
+        retained = TRACKER.stop(
+            retained,
+            "sol_retained_execution",
+            at="2026-08-26T00:00:05+00:00",
+            tokens=10,
+            credits=1,
+        )
+        self.assertEqual(
+            TRACKER.export(retained)["phase_elapsed_seconds"]["sol_retained_execution"],
+            5,
+        )
+
     def test_validate_journal_rejects_unknown_top_level_fields(self) -> None:
         journal = TRACKER.initialize("private-run", "SOL_ONLY", at="2026-08-26T00:00:00+00:00")
         for field in ("raw_prompt", "extra"):

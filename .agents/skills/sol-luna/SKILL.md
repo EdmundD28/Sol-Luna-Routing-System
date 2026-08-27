@@ -19,11 +19,13 @@ For a material package, read [references/orchestration-policy.md](references/orc
 python .agents/skills/sol-luna/scripts/routing_policy.py evaluate --input ROUTE.json
 ```
 
-The versioned [routing policy](references/routing-policy.v1.json) accounts for Sol-only execution, Sol planning/review/integration, each Luna effort's first-pass probability, execution, expected recovery, final-defect probability, latency, and a default 15% credit-saving floor. It never launches work. If inputs cannot be estimated from matched history or concrete task evidence, retain the work in Sol or run a short read-only `luna_scout` feasibility probe.
+The versioned [routing policy](references/routing-policy.v1.json) accounts for Sol-only execution, Sol planning, retained execution, review, integration, each Luna effort's first-pass probability, execution, expected recovery, final-defect probability, latency, and a default 50% accepted-cost saving floor. Retained Sol work overlaps Luna time but never disappears from cost. The policy never launches work. This prediction is a feasibility guard, not proof about a subscription meter. If inputs cannot be estimated from matched history or concrete task evidence, retain the work in Sol or run a short read-only `luna_scout` feasibility probe.
 
 ## Select Luna effort predictively
 
 Choose the initial effort with the lowest expected accepted-delivery credits among candidates that pass every quality, defect, savings, and latency gate. A failed cheaper attempt is not required before selecting a stronger tier.
+
+Start from the lowest effort that concrete task evidence can support. High or above needs an explicit reason that Low or Medium is unlikely to meet the same acceptance contract; do not use High merely because the parent Sol uses High.
 
 - `luna_worker_low`: mechanical and deterministic work with cheap authoritative verification. The user-facing word `light` maps to Codex `low`.
 - `luna_worker_medium`: clear bounded implementation with established architecture.
@@ -39,7 +41,7 @@ Every package binds a canonical repository root, then states one deliverable, re
 
 Before parallel dispatch, validate the ownership plan with `scripts/ownership_guard.py check-plan`; before acceptance, compare observed changed paths with `check-changes`. A violation blocks acceptance. This is an acceptance guard, not a filesystem security boundary.
 
-Use at most **two concurrent writers**. Locally bound evidence may recommend human review but cannot expand this executable cap without a future trusted verifier and an explicit policy release. Read-only review may overlap when it cannot race the candidate.
+Default to **one Luna writer**. Sol receives the complete user task, keeps architecture, integration, and a complementary Sol-owned critical-path slice, and delegates only one high-leverage bounded package; do not manufacture two Sol packages or keep Sol idle merely to make the comparison look parallel. A second Luna writer is benchmark-only until matched plan-meter evidence proves equal quality, lower allowance use, and lower elapsed time, followed by an explicit policy release. Read-only review may overlap when it cannot race the candidate.
 
 Give Luna only the context required for its objective, contracts, evidence, and constraints. Luna must not spawn agents. Shared entry points, lockfiles, status files, and common generated outputs stay with Sol or one named integrator.
 
@@ -61,7 +63,7 @@ python .agents/skills/sol-luna/scripts/routing_policy.py rework --input REWORK.j
 
 Never repeat the same correction without new evidence. Stop for user direction when the next action requires new authority, a product or architecture decision, destructive action, or expanded scope. Use `FAILED` for in-scope delivery failure and `BLOCKED` only for a missing external decision, input, permission, authority, or state change.
 
-Before completion, Sol verifies the exact final candidate, host-observed Sol/Luna model identity, fresh acceptance evidence, ownership cleanliness, integration behavior, and every required package disposition. Agent or profile labels are not runtime proof. Report route and effort decisions, policy fingerprint, Sol/Luna ownership, concurrency, repairs, review depth, acceptance results, elapsed time, five-hour and weekly allowance readings when measured, available purchased-credit or token diagnostics with source and uncertainty, and remaining unverified boundaries.
+Before completion, Sol verifies the exact final candidate, host-observed Sol/Luna model identity, fresh acceptance evidence, ownership cleanliness, integration behavior, and every required package disposition. Agent or profile labels are not runtime proof. Report route and effort decisions, policy fingerprint, Sol/Luna ownership, retained Sol execution, concurrency, repairs, review depth, acceptance results, elapsed time, five-hour and weekly allowance readings when measured, available purchased-credit or token diagnostics with source and uncertainty, and remaining unverified boundaries.
 
 ## Conditional tools
 
@@ -69,7 +71,7 @@ Before completion, Sol verifies the exact final candidate, host-observed Sol/Lun
 - For persistent phase evidence or routing comparisons, use `scripts/evidence_ledger.py`; its `feedback` command converts exact task-family cohorts into a fail-closed policy posture. Self-declared `exact` credit is insufficient: the gate also requires an independently supplied claim index bound to each record and receipt. It is advisory and never routes automatically.
 - For automatic phase-duration accumulation and optional source readings, use `scripts/phase_tracker.py`; overlapping active-phase totals are not wall-clock duration.
 - For matched Sol-only versus Sol-Luna evaluation, use `scripts/matched_eval.py` with the same starting commit, task digest, policy fingerprint, and independent acceptance-suite digest.
-- For a subscription-allowance benchmark, read [references/allowance-benchmark.md](references/allowance-benchmark.md) and assess the retained dashboard readings with `scripts/allowance_meter.py`. Five-hour percentage points are primary; weekly percentage points are separate corroboration.
+- For a subscription-allowance benchmark, read [references/allowance-benchmark.md](references/allowance-benchmark.md), record route-only intervals with `scripts/allowance_campaign.py`, bind host receipts with `scripts/benchmark_identity.py`, and assess the retained dashboard readings with `scripts/allowance_meter.py`. Five-hour percentage points are primary; weekly percentage points are separate corroboration.
 - For a secondary purchased-credit estimate only, use `scripts/credit_model.py` with a current fingerprinted rate card and complete classified phase usage. It cannot convert included plan percentages or authorize routing.
 - For package state transitions or stale-evidence checks, use `scripts/lifecycle_contract.py`; simulated transitions are not native runtime proof.
 - For opt-in native lifecycle acceptance, validate a host-produced receipt with `scripts/native_lifecycle_receipt.py`; requested settings or worker prose without matching host-observed identity, boundary, profile, and child continuity fail proof.

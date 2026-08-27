@@ -31,10 +31,10 @@ LEDGER = FIXTURES.LEDGER
 
 def request() -> dict:
     return {
-        "schema_version": 1,
+        "schema_version": 3,
         "task_family": "bounded-feature",
         "quality_floor": 0.80,
-        "minimum_credit_savings_fraction": 0.15,
+        "minimum_credit_savings_fraction": 0.50,
         "requested_writers": 1,
         "sol_only": {
             "first_pass_probability": 1.0,
@@ -45,28 +45,31 @@ def request() -> dict:
             "recovery_seconds_if_failed": 0,
         },
         "coordination": {
-            "sol_planning": {"credits": 8, "seconds": 50},
-            "sol_review": {"credits": 8, "seconds": 50},
-            "integration": {"credits": 4, "seconds": 25},
+            "sol_planning": {"credits": 5, "seconds": 50},
+            "sol_retained_execution": {"credits": 8, "seconds": 300},
+            "sol_review": {"credits": 5, "seconds": 50},
+            "integration": {"credits": 2, "seconds": 25},
         },
         "luna_candidates": [
             {
                 "effort": "high",
+                "effort_basis": "the task has substantial edge cases that the lower tiers are unlikely to cover",
                 "first_pass_probability": 0.65,
                 "final_defect_probability": 0.02,
-                "execution_credits": 20,
+                "execution_credits": 5,
                 "execution_seconds": 400,
-                "recovery_credits_if_failed": 80,
+                "recovery_credits_if_failed": 30,
                 "recovery_seconds_if_failed": 500,
                 "failure_impact": "low",
             },
             {
                 "effort": "xhigh",
+                "effort_basis": "the High estimate is below the required first-pass quality floor",
                 "first_pass_probability": 0.92,
                 "final_defect_probability": 0.01,
-                "execution_credits": 40,
+                "execution_credits": 15,
                 "execution_seconds": 420,
-                "recovery_credits_if_failed": 30,
+                "recovery_credits_if_failed": 20,
                 "recovery_seconds_if_failed": 250,
                 "failure_impact": "low",
             },
@@ -74,7 +77,7 @@ def request() -> dict:
     }
 
 
-def v4_feedback_records() -> list[dict]:
+def v5_feedback_records() -> list[dict]:
     records = []
     for index in range(1, 6):
         pair_id = f"pair-{index:03d}"
@@ -86,18 +89,26 @@ def v4_feedback_records() -> list[dict]:
             )
             record.update(
                 {
-                    "campaign_id": "routing-v4",
+                    "campaign_id": "routing-v5",
                     "policy_version": POLICY["policy_version"],
                     "policy_fingerprint": ROUTING.policy_fingerprint(POLICY),
                 }
             )
+            if route == "SOL_LUNA":
+                record["credit_value"] = 40
+                record["phase_credits"] = {
+                    "sol_planning": 5,
+                    "sol_retained_execution": 5,
+                    "luna_execution": 25,
+                    "sol_review": 5,
+                }
             records.append(LEDGER.validate_record(record))
     return records
 
 
-def v4_verified_index(records: list[dict]) -> dict:
+def v5_verified_index(records: list[dict]) -> dict:
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "verification_source": "provider-export-review-v1",
         "claims": [FIXTURES.verified_claim(record) for record in records],
     }
@@ -130,12 +141,12 @@ def package(package_id: str, seconds: float, *, credits: float | None = None, de
 
 def multiwriter_request() -> dict:
     source = request()
-    source["schema_version"] = 2
+    source["schema_version"] = 4
     source["requested_writers"] = 2
     source["coordination"].update(
         {
-            "queue": {"credits": 5, "seconds": 10},
-            "merge_contention": {"credits": 5, "seconds": 10},
+            "queue": {"credits": 2, "seconds": 10},
+            "merge_contention": {"credits": 2, "seconds": 10},
         }
     )
     source["luna_candidates"] = [
@@ -143,8 +154,8 @@ def multiwriter_request() -> dict:
             "effort": "medium",
             "failure_impact": "low",
             "packages": [
-                package("a", 300, credits=20),
-                package("b", 300, credits=20),
+                package("a", 300, credits=10),
+                package("b", 300, credits=10),
             ],
         }
     ]
@@ -152,16 +163,20 @@ def multiwriter_request() -> dict:
 
 
 class RoutingPolicyTests(unittest.TestCase):
-    def test_multiwriter_happy_path_and_effective_cap(self) -> None:
+    def test_multi_package_request_above_cap_falls_back_instead_of_running_serially(self) -> None:
         source = multiwriter_request()
         result = ROUTING.evaluate_route(source, POLICY)
-        self.assertEqual(result["route"], "SOL_LUNA")
-        self.assertEqual(result["effective_writers"], 2)
+        self.assertEqual(result["route"], "SOL_ONLY")
+        self.assertIsNone(result["effective_writers"])
+        self.assertIn(
+            "requested_parallelism_exceeds_executable_cap",
+            result["candidates"][0]["rejection_reasons"],
+        )
         source["requested_writers"] = 4
         result = ROUTING.evaluate_route(source, POLICY)
-        self.assertEqual(result["writer_limit"]["allowed"], 2)
-        self.assertEqual(result["effective_writers"], 2)
-        self.assertEqual(result["candidates"][0]["scheduled_package_seconds"], 300.0)
+        self.assertEqual(result["writer_limit"]["allowed"], 1)
+        self.assertIsNone(result["effective_writers"])
+        self.assertEqual(result["candidates"][0]["scheduled_package_seconds"], 600.0)
         self.assertIs(type(result), dict)
 
     def test_schema_version_separates_legacy_and_package_inputs(self) -> None:
@@ -186,12 +201,16 @@ class RoutingPolicyTests(unittest.TestCase):
         )
         self.assertEqual(schedule["scheduled_package_seconds"], 300.0)
         source = multiwriter_request()
-        source["luna_candidates"][0]["packages"] = [package("only", 100, credits=40)]
+        source["luna_candidates"][0]["packages"] = [package("only", 100, credits=30)]
         source["sol_only"]["final_defect_probability"] = 0.2
         result = ROUTING.evaluate_route(source, POLICY)
-        self.assertEqual(result["route"], "SOL_LUNA")
+        self.assertEqual(result["route"], "SOL_ONLY")
         self.assertEqual(result["candidates"][0]["effective_writers"], 1)
-        self.assertEqual(result["effective_writers"], 1)
+        self.assertIsNone(result["effective_writers"])
+        self.assertIn(
+            "requested_parallelism_exceeds_executable_cap",
+            result["candidates"][0]["rejection_reasons"],
+        )
 
     def test_sol_only_reports_no_actual_luna_writers(self) -> None:
         source = multiwriter_request()
@@ -213,7 +232,7 @@ class RoutingPolicyTests(unittest.TestCase):
             "failure_rate_regression": 0,
         }
         result = ROUTING.allowed_writers(source, POLICY, forged)
-        self.assertEqual(result["allowed"], 2)
+        self.assertEqual(result["allowed"], 1)
         self.assertFalse(result["expanded_from_evidence"])
 
     def test_windows_path_rules_are_case_insensitive_and_strict(self) -> None:
@@ -234,23 +253,24 @@ class RoutingPolicyTests(unittest.TestCase):
             with self.subTest(path=path), self.assertRaises(ROUTING.PolicyError):
                 ROUTING.package_schedule(candidate, requested_writers=2, prefix="candidate")
 
-    def test_credit_gate_uses_full_precision_below_and_at_exact_fifteen_percent(self) -> None:
+    def test_credit_gate_uses_full_precision_below_and_at_exact_fifty_percent(self) -> None:
         source = multiwriter_request()
+        parallel_policy = dict(POLICY, maximum_initial_writers=2)
         source["sol_only"]["final_defect_probability"] = 0.2
         source["luna_candidates"][0]["packages"] = [
-            package("a", 300, credits=27.50000002),
-            package("b", 300, credits=27.50000002),
+            package("a", 300, credits=13.00000002),
+            package("b", 300, credits=13.00000002),
         ]
-        result = ROUTING.evaluate_route(source, POLICY)
+        result = ROUTING.evaluate_route(source, parallel_policy)
         self.assertEqual(result["route"], "SOL_ONLY")
-        self.assertLess(result["candidates"][0]["expected_credit_savings_fraction"], 0.15)
+        self.assertLess(result["candidates"][0]["expected_credit_savings_fraction"], 0.50)
         source["luna_candidates"][0]["packages"] = [
-            package("a", 300, credits=27.5),
-            package("b", 300, credits=27.5),
+            package("a", 300, credits=13),
+            package("b", 300, credits=13),
         ]
-        result = ROUTING.evaluate_route(source, POLICY)
+        result = ROUTING.evaluate_route(source, parallel_policy)
         self.assertEqual(result["route"], "SOL_LUNA")
-        self.assertAlmostEqual(result["candidates"][0]["expected_credit_savings_fraction"], 0.15)
+        self.assertAlmostEqual(result["candidates"][0]["expected_credit_savings_fraction"], 0.50)
 
     def test_multiwriter_structural_fail_closed_cases(self) -> None:
         cases = []
@@ -290,6 +310,7 @@ class RoutingPolicyTests(unittest.TestCase):
 
     def test_multiwriter_rejects_probability_sum_and_no_parallel_gain(self) -> None:
         source = multiwriter_request()
+        parallel_policy = dict(POLICY, maximum_initial_writers=2)
         source["luna_candidates"][0]["packages"][0]["repair_probability"] = 0.2
         with self.assertRaises(ROUTING.PolicyError):
             ROUTING.evaluate_route(source, POLICY)
@@ -297,7 +318,7 @@ class RoutingPolicyTests(unittest.TestCase):
         source["luna_candidates"][0]["packages"] = [
             package("a", 300), package("b", 0)
         ]
-        result = ROUTING.evaluate_route(source, POLICY)
+        result = ROUTING.evaluate_route(source, parallel_policy)
         self.assertEqual(result["route"], "SOL_ONLY")
         self.assertIn("no_parallel_package_speedup", result["candidates"][0]["rejection_reasons"])
 
@@ -305,15 +326,16 @@ class RoutingPolicyTests(unittest.TestCase):
         for item in source["luna_candidates"][0]["packages"]:
             item["first_pass_probability"] = 0.9
             item["repair_probability"] = 0.1
-        result = ROUTING.evaluate_route(source, POLICY)
+        result = ROUTING.evaluate_route(source, parallel_policy)
         self.assertEqual(result["candidates"][0]["first_pass_probability"], 0.8)
         self.assertEqual(result["route"], "SOL_LUNA")
         source["luna_candidates"][0]["packages"][0]["first_pass_probability"] = 0.899
         source["luna_candidates"][0]["packages"][0]["repair_probability"] = 0.101
-        self.assertEqual(ROUTING.evaluate_route(source, POLICY)["route"], "SOL_ONLY")
+        self.assertEqual(ROUTING.evaluate_route(source, parallel_policy)["route"], "SOL_ONLY")
 
     def test_multiwriter_expected_metrics_include_repair_and_terminal_recovery(self) -> None:
         source = multiwriter_request()
+        parallel_policy = dict(POLICY, maximum_initial_writers=2)
         source["sol_only"]["final_defect_probability"] = 0.2
         for item in source["luna_candidates"][0]["packages"]:
             item.update(
@@ -327,12 +349,12 @@ class RoutingPolicyTests(unittest.TestCase):
                     "terminal_recovery_seconds": 200,
                 }
             )
-        result = ROUTING.evaluate_route(source, POLICY)
+        result = ROUTING.evaluate_route(source, parallel_policy)
         candidate = result["candidates"][0]
         self.assertEqual(result["route"], "SOL_LUNA")
         self.assertEqual(candidate["expected_recovery_credits"], 3.0)
         self.assertEqual(candidate["expected_recovery_seconds"], 30.0)
-        self.assertEqual(candidate["expected_accepted_credits"], 73.0)
+        self.assertEqual(candidate["expected_accepted_credits"], 47.0)
         self.assertEqual(candidate["expected_accepted_seconds"], 475.0)
 
     def test_quality_and_credit_boundaries_are_strict_and_non_lowerable(self) -> None:
@@ -347,21 +369,21 @@ class RoutingPolicyTests(unittest.TestCase):
         with self.assertRaises(ROUTING.PolicyError):
             ROUTING.evaluate_route(source, POLICY)
         source = request()
-        source["minimum_credit_savings_fraction"] = 0.149
+        source["minimum_credit_savings_fraction"] = 0.499
         with self.assertRaises(ROUTING.PolicyError):
             ROUTING.evaluate_route(source, POLICY)
 
     def test_credit_gate_includes_coordination_and_recovery_costs(self) -> None:
         source = request()
         candidate = source["luna_candidates"][0]
-        candidate.update({"execution_credits": 65, "first_pass_probability": 1.0})
+        candidate.update({"execution_credits": 30, "first_pass_probability": 1.0})
         source["luna_candidates"] = [candidate]
         self.assertEqual(ROUTING.evaluate_route(source, POLICY)["route"], "SOL_LUNA")
-        candidate["execution_credits"] = 65.1
+        candidate["execution_credits"] = 30.1
         self.assertEqual(ROUTING.evaluate_route(source, POLICY)["route"], "SOL_ONLY")
         source = request()
         candidate = source["luna_candidates"][0]
-        candidate.update({"execution_credits": 70, "first_pass_probability": 0.8, "recovery_credits_if_failed": 100})
+        candidate.update({"execution_credits": 25, "first_pass_probability": 0.8, "recovery_credits_if_failed": 100})
         source["luna_candidates"] = [candidate]
         result = ROUTING.evaluate_route(source, POLICY)
         self.assertEqual(result["route"], "SOL_ONLY")
@@ -370,7 +392,7 @@ class RoutingPolicyTests(unittest.TestCase):
     def test_elapsed_gate_is_strict_and_counts_recovery(self) -> None:
         source = request()
         candidate = source["luna_candidates"][0]
-        candidate.update({"execution_credits": 65, "execution_seconds": 875, "first_pass_probability": 1.0})
+        candidate.update({"execution_credits": 30, "execution_seconds": 875, "first_pass_probability": 1.0})
         source["luna_candidates"] = [candidate]
         self.assertEqual(ROUTING.evaluate_route(source, POLICY)["route"], "SOL_ONLY")
         candidate["execution_seconds"] = 874.999
@@ -387,8 +409,8 @@ class RoutingPolicyTests(unittest.TestCase):
         source = request()
         source["sol_only"]["execution_credits"] = 130
         source["luna_candidates"] = [
-            dict(source["luna_candidates"][0], effort="medium", execution_credits=60, execution_seconds=700, first_pass_probability=1.0),
-            dict(source["luna_candidates"][0], effort="xhigh", execution_credits=75, execution_seconds=500, first_pass_probability=1.0),
+            dict(source["luna_candidates"][0], effort="medium", execution_credits=35, execution_seconds=700, first_pass_probability=1.0),
+            dict(source["luna_candidates"][0], effort="xhigh", execution_credits=40, execution_seconds=500, first_pass_probability=1.0),
         ]
         result = ROUTING.evaluate_route(source, POLICY)
         self.assertEqual(result["selected_luna_effort"], "medium")
@@ -398,15 +420,43 @@ class RoutingPolicyTests(unittest.TestCase):
         source["luna_candidates"][0]["execution_credit"] = 1
         with self.assertRaises(ROUTING.PolicyError):
             ROUTING.evaluate_route(source, POLICY)
+
+    def test_high_or_above_requires_an_explicit_effort_basis(self) -> None:
+        source = request()
+        del source["luna_candidates"][1]["effort_basis"]
+        with self.assertRaisesRegex(ROUTING.PolicyError, "effort_basis"):
+            ROUTING.evaluate_route(source, POLICY)
+
+    def test_sol_retained_execution_is_required_and_overlaps_luna_time(self) -> None:
+        source = request()
+        del source["coordination"]["sol_retained_execution"]
+        with self.assertRaises(ROUTING.PolicyError):
+            ROUTING.evaluate_route(source, POLICY)
+        result = ROUTING.evaluate_route(request(), POLICY)
+        selected = result["selected_metrics"]
+        self.assertIsNotNone(selected)
+        # 125 serial Sol seconds + max(300 retained, 420 Luna) + 20 expected recovery.
+        self.assertEqual(selected["expected_accepted_seconds"], 565.0)
         source = request()
         source["sol_only"]["execution_credit"] = 1
         with self.assertRaises(ROUTING.PolicyError):
             ROUTING.evaluate_route(source, POLICY)
 
-    def test_single_writer_legacy_input_remains_compatible(self) -> None:
-        result = ROUTING.evaluate_route(request(), POLICY)
-        self.assertEqual(result["route"], "SOL_LUNA")
-        self.assertEqual(result["effective_writers"], 1)
+    def test_single_writer_legacy_input_remains_readable_but_fails_closed(self) -> None:
+        source = request()
+        source["schema_version"] = 1
+        del source["coordination"]["sol_retained_execution"]
+        for candidate in source["luna_candidates"]:
+            candidate.pop("effort_basis", None)
+        result = ROUTING.evaluate_route(source, POLICY)
+        self.assertEqual(result["route"], "SOL_ONLY")
+        self.assertIsNone(result["effective_writers"])
+        self.assertTrue(
+            all(
+                "legacy_routing_schema_requires_refresh" in candidate["rejection_reasons"]
+                for candidate in result["candidates"]
+            )
+        )
 
     def test_event_driven_schedule_does_not_preoccupy_worker_for_unready_package(self) -> None:
         candidate = {
@@ -424,9 +474,9 @@ class RoutingPolicyTests(unittest.TestCase):
         result = ROUTING.evaluate_route(request(), POLICY)
         self.assertEqual(result["route"], "SOL_LUNA")
         self.assertEqual(result["selected_luna_effort"], "xhigh")
-        self.assertLess(
-            result["candidates"][1]["expected_accepted_credits"],
-            result["candidates"][0]["expected_accepted_credits"],
+        self.assertIn(
+            "first_pass_probability_below_floor",
+            result["candidates"][0]["rejection_reasons"],
         )
 
     def test_light_alias_normalizes_to_actual_low_effort(self) -> None:
@@ -455,17 +505,17 @@ class RoutingPolicyTests(unittest.TestCase):
             },
         )
 
-    def test_writer_cap_stays_two_without_non_regressive_evidence(self) -> None:
+    def test_writer_cap_stays_one_without_non_regressive_evidence(self) -> None:
         source = request()
         source["requested_writers"] = 3
         result = ROUTING.allowed_writers(source, POLICY)
-        self.assertEqual(result["allowed"], 2)
+        self.assertEqual(result["allowed"], 1)
         self.assertFalse(result["expanded_from_evidence"])
 
-    def test_writer_cap_expands_only_with_matched_non_regressive_evidence(self) -> None:
+    def test_matched_non_regressive_evidence_recommends_review_without_expansion(self) -> None:
         source = request()
         evidence = {
-            "source": "evidence-ledger-feedback-v4",
+            "source": "evidence-ledger-feedback-v5",
             "policy_change_eligible": True,
             "policy_fingerprint_matches": True,
             "qualified_pairs": 5,
@@ -475,7 +525,7 @@ class RoutingPolicyTests(unittest.TestCase):
         }
         source["requested_writers"] = 3
         result = ROUTING.allowed_writers(source, POLICY, verified_parallel_evidence=evidence)
-        self.assertEqual(result["allowed"], 2)
+        self.assertEqual(result["allowed"], 1)
         self.assertFalse(result["expanded_from_evidence"])
 
     def test_legacy_v3_feedback_cannot_expand_writer_cap(self) -> None:
@@ -491,7 +541,7 @@ class RoutingPolicyTests(unittest.TestCase):
         }
         source["requested_writers"] = 3
         result = ROUTING.allowed_writers(source, POLICY, verified_parallel_evidence=evidence)
-        self.assertEqual(result["allowed"], 2)
+        self.assertEqual(result["allowed"], 1)
         self.assertFalse(result["expanded_from_evidence"])
 
     def test_unknown_feedback_version_fails_closed(self) -> None:
@@ -507,22 +557,22 @@ class RoutingPolicyTests(unittest.TestCase):
         }
         source["requested_writers"] = 3
         result = ROUTING.allowed_writers(source, POLICY, verified_parallel_evidence=evidence)
-        self.assertEqual(result["allowed"], 2)
+        self.assertEqual(result["allowed"], 1)
         self.assertFalse(result["expanded_from_evidence"])
 
-    def test_ledger_feedback_adapter_emits_current_v4_source(self) -> None:
+    def test_ledger_feedback_adapter_emits_current_v5_source(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             evidence = ROUTING.verified_parallel_evidence_from_ledger(
                 Path(temp) / "missing-ledger.jsonl",
                 "bounded-feature",
                 POLICY,
             )
-        self.assertEqual(evidence["source"], "evidence-ledger-feedback-v4")
+        self.assertEqual(evidence["source"], "evidence-ledger-feedback-v5")
         self.assertEqual(evidence["source"], ROUTING.EVIDENCE_FEEDBACK_SOURCE)
         self.assertIsInstance(evidence, ROUTING._ExternallyBoundEvidence)
 
     def test_ledger_feedback_without_receipt_index_stays_closed(self) -> None:
-        records = v4_feedback_records()
+        records = v5_feedback_records()
         with tempfile.TemporaryDirectory() as temp:
             ledger_path = Path(temp) / "ledger.jsonl"
             write_feedback_ledger(ledger_path, records)
@@ -535,9 +585,9 @@ class RoutingPolicyTests(unittest.TestCase):
         self.assertIs(type(result), dict)
         self.assertEqual(result["writer_limit"]["allowed"], 1)
 
-    def test_valid_v4_receipt_index_stays_cap_two_and_recommends_human_review(self) -> None:
-        records = v4_feedback_records()
-        index = v4_verified_index(records)
+    def test_valid_v5_receipt_index_stays_cap_one_and_recommends_human_review(self) -> None:
+        records = v5_feedback_records()
+        index = v5_verified_index(records)
         with tempfile.TemporaryDirectory() as temp:
             ledger_path = Path(temp) / "ledger.jsonl"
             write_feedback_ledger(ledger_path, records)
@@ -551,7 +601,7 @@ class RoutingPolicyTests(unittest.TestCase):
         self.assertTrue(evidence["policy_change_eligible"])
         capped = dict(request(), requested_writers=4)
         limit = ROUTING.allowed_writers(capped, POLICY, evidence)
-        self.assertEqual(limit["allowed"], 2)
+        self.assertEqual(limit["allowed"], 1)
         self.assertFalse(limit["expanded_from_evidence"])
         self.assertTrue(limit["human_review_recommendation"])
         result = ROUTING.evaluate_route(request(), POLICY, verified_parallel_evidence=evidence)
@@ -559,8 +609,8 @@ class RoutingPolicyTests(unittest.TestCase):
         self.assertEqual(result["writer_limit"]["allowed"], 1)
 
     def test_mismatched_receipt_claim_stays_closed(self) -> None:
-        records = v4_feedback_records()
-        index = v4_verified_index(records)
+        records = v5_feedback_records()
+        index = v5_verified_index(records)
         index["claims"][0]["credit_value"] += 1
         index["claims"][0]["claim_digest"] = LEDGER._canonical_claim_digest(index["claims"][0])
         with tempfile.TemporaryDirectory() as temp:
@@ -577,7 +627,7 @@ class RoutingPolicyTests(unittest.TestCase):
         self.assertEqual(result["writer_limit"]["allowed"], 1)
 
     def test_invalid_receipt_index_is_rejected(self) -> None:
-        records = v4_feedback_records()
+        records = v5_feedback_records()
         with tempfile.TemporaryDirectory() as temp:
             ledger_path = Path(temp) / "ledger.jsonl"
             index_path = Path(temp) / "receipts.json"

@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Any, Iterator, Mapping
 
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 MIN_MATCHED_PAIRS = 5
 ROUTES = {"SOL_ONLY", "SOL_LUNA"}
 OUTCOMES = {"ACCEPTED", "FAILED", "BLOCKED", "CANCELLED_OR_OBSOLETE", "NOT_ASSESSED"}
@@ -37,8 +37,16 @@ FAILURE_CLASSES = {
 }
 CREDIT_KINDS = {"exact", "estimated", "displayed_allowance_delta"}
 CREDIT_VERIFICATIONS = {"UNVERIFIED", "PROVIDER_AUTHENTICATED"}
-VERIFIED_RECEIPTS_SCHEMA_VERSION = 1
-PHASES = {"sol_planning", "sol_execution", "luna_execution", "sol_review", "repair", "integration"}
+VERIFIED_RECEIPTS_SCHEMA_VERSION = 2
+PHASES = {
+    "sol_planning",
+    "sol_execution",
+    "sol_retained_execution",
+    "luna_execution",
+    "sol_review",
+    "repair",
+    "integration",
+}
 EFFORTS = {"low", "medium", "high", "xhigh", "max"}
 REVIEW_DEPTHS = {"TARGETED", "STANDARD", "DEEP", "NOT_APPLICABLE"}
 ALLOWED_FIELDS = {
@@ -91,6 +99,7 @@ ALLOWED_FIELDS = {
     "phase_tokens",
     "phase_credits",
     "note",
+    "upgraded_from_schema_version",
 }
 REQUIRED_FIELDS = {
     "run_ref",
@@ -205,6 +214,24 @@ def record_id(record: Mapping[str, Any]) -> str:
     return f"record:{digest}"
 
 
+def record_binding_digest(record: Mapping[str, Any]) -> str:
+    """Bind a claim to the complete normalized ledger record, not only its stable ID."""
+    payload = {
+        field: record[field]
+        for field in sorted(record)
+        if field in ALLOWED_FIELDS
+    }
+    digest = hashlib.sha256(
+        json.dumps(
+            payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    return f"sha256:{digest}"
+
+
 def validate_record(
     source: Mapping[str, Any], *, normalize_run_ref: bool = False, now: datetime | None = None
 ) -> dict[str, Any]:
@@ -217,9 +244,9 @@ def validate_record(
     if missing:
         raise LedgerError(f"record missing fields: {sorted(missing)}")
     incoming_schema = source.get("schema_version", SCHEMA_VERSION)
-    if not isinstance(incoming_schema, int) or isinstance(incoming_schema, bool) or incoming_schema not in {1, 2, 3, SCHEMA_VERSION}:
+    if not isinstance(incoming_schema, int) or isinstance(incoming_schema, bool) or incoming_schema not in {1, 2, 3, 4, SCHEMA_VERSION}:
         raise LedgerError(f"unsupported schema_version: {incoming_schema}")
-    if incoming_schema < SCHEMA_VERSION and any(
+    if incoming_schema < 4 and any(
         field in source
         for field in (
             "credit_verification",
@@ -228,12 +255,25 @@ def validate_record(
             "billing_window_id",
         )
     ):
-        raise LedgerError("schema 1-3 records may not carry schema 4 credit trust fields")
+        raise LedgerError("schemas before 4 may not carry schema 4 credit trust fields")
 
     record = dict(source)
     record["schema_version"] = SCHEMA_VERSION
-    # Schema 1-3 records predate provider-authenticated billing receipts.  Keep
-    # them readable, but explicitly fail closed for the credit gate.
+    upgraded_from = record.get("upgraded_from_schema_version")
+    if incoming_schema < SCHEMA_VERSION:
+        if upgraded_from is not None:
+            raise LedgerError("legacy input may not self-declare upgraded_from_schema_version")
+        record["upgraded_from_schema_version"] = incoming_schema
+    elif upgraded_from is not None:
+        if (
+            isinstance(upgraded_from, bool)
+            or not isinstance(upgraded_from, int)
+            or upgraded_from not in {1, 2, 3, 4}
+        ):
+            raise LedgerError("upgraded_from_schema_version must be 1, 2, 3, or 4")
+    # Schemas 1-3 predate provider-authenticated billing receipts. Keep every
+    # legacy schema readable, but preserve its origin and fail closed for new
+    # measurement-policy gates rather than inventing missing history.
     record["credit_verification"] = record.get("credit_verification", "UNVERIFIED")
     run_ref = require_string(record, "run_ref", required=True)
     if PRIVATE_PATH.search(run_ref) or normalize_run_ref:
@@ -319,9 +359,10 @@ def validate_record(
         record["observed_sol_model"] = observed_sol
         observed_luna = require_string(record, "observed_luna_model")
         if record["route"] == "SOL_LUNA":
-            if observed_luna != "gpt-5.6-luna":
+            if not record.get("upgraded_from_schema_version") and observed_luna != "gpt-5.6-luna":
                 raise LedgerError("matched SOL_LUNA records require observed_luna_model gpt-5.6-luna")
-            record["observed_luna_model"] = observed_luna
+            if observed_luna:
+                record["observed_luna_model"] = observed_luna
         elif observed_luna:
             raise LedgerError("matched SOL_ONLY records must not report observed_luna_model")
         record["runtime_identity_source"] = safe_summary(
@@ -411,6 +452,14 @@ def validate_record(
             raise LedgerError(f"matched {record['route']} token phases require {execution_phase}")
         if credit_value is not None and phase_credits and execution_phase not in phase_credits:
             raise LedgerError(f"matched {record['route']} credit phases require {execution_phase}")
+        if record["route"] == "SOL_LUNA" and not record.get("upgraded_from_schema_version"):
+            retained = "sol_retained_execution"
+            if retained not in phase_elapsed:
+                raise LedgerError("matched SOL_LUNA records require sol_retained_execution elapsed evidence")
+            if total_tokens is not None and phase_tokens and retained not in phase_tokens:
+                raise LedgerError("matched SOL_LUNA token phases require sol_retained_execution")
+            if credit_value is not None and phase_credits and retained not in phase_credits:
+                raise LedgerError("matched SOL_LUNA credit phases require sol_retained_execution")
     if elapsed_seconds is not None and phase_elapsed and any(
         float(value) > float(elapsed_seconds) + 1e-6 for value in phase_elapsed.values()
     ):
@@ -600,6 +649,7 @@ def cohort_identity(
 
 VERIFIED_CLAIM_FIELDS = {
     "record_id",
+    "record_digest",
     "task_family",
     "route",
     "pair_id",
@@ -637,6 +687,9 @@ def _validate_verified_claim(claim: Mapping[str, Any]) -> dict[str, Any]:
     record_id = require_string(normalized, "record_id", required=True)
     if len(record_id) > 128 or PRIVATE_PATH.search(record_id):
         raise LedgerError("verified claim record_id must be a short non-path identifier")
+    normalized["record_digest"] = require_digest(
+        normalized, "record_digest", required=True
+    )
     if normalized.get("route") not in ROUTES:
         raise LedgerError("verified claim route must be SOL_ONLY or SOL_LUNA")
     normalized["task_family"] = require_label(normalized, "task_family", required=True)
@@ -734,6 +787,7 @@ def _credit_record_is_independently_verified(
         return False
     expected = {
         "record_id": record.get("record_id") or record_id(record),
+        "record_digest": record_binding_digest(record),
         "task_family": record.get("task_family"),
         "route": record.get("route"),
         "pair_id": record.get("pair_id"),
@@ -767,7 +821,7 @@ def evidence_status(
     *,
     task_family: str,
     minimum_pairs: int = MIN_MATCHED_PAIRS,
-    minimum_credit_savings_fraction: float = 0.15,
+    minimum_credit_savings_fraction: float = 0.50,
     minimum_first_pass_acceptance_rate: float = 0.80,
     verified_credit_receipts: Any = None,
 ) -> dict[str, Any]:
@@ -886,6 +940,11 @@ def evidence_status(
         )
         gates = {
             "minimum_pairs": len(pairs) >= minimum_pairs,
+            "current_measurement_schema": all(
+                not pair["routes"][route].get("upgraded_from_schema_version")
+                for pair in pairs
+                for route in sorted(ROUTES)
+            ),
             "independent_acceptance_equal_or_better": acceptance_rates["SOL_LUNA"]
             >= acceptance_rates["SOL_ONLY"],
             "credible_credit_reduction": credible_credit_metric
@@ -965,7 +1024,7 @@ def task_family_feedback(
     *,
     task_family: str,
     minimum_pairs: int = MIN_MATCHED_PAIRS,
-    minimum_credit_savings_fraction: float = 0.15,
+    minimum_credit_savings_fraction: float = 0.50,
     minimum_first_pass_acceptance_rate: float = 0.80,
     verified_credit_receipts: Any = None,
 ) -> dict[str, Any]:
@@ -1081,7 +1140,7 @@ def parser() -> argparse.ArgumentParser:
         command.add_argument("--ledger", required=True, type=Path)
         command.add_argument("--task-family", required=True)
         command.add_argument("--minimum-pairs", type=int, default=MIN_MATCHED_PAIRS)
-        command.add_argument("--minimum-credit-savings-fraction", type=float, default=0.15)
+        command.add_argument("--minimum-credit-savings-fraction", type=float, default=0.50)
         command.add_argument("--minimum-first-pass-acceptance-rate", type=float, default=0.80)
         command.add_argument("--verified-credit-receipts", type=Path)
     return result

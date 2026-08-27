@@ -10,16 +10,17 @@ This revision adds executable policy and evidence controls. It is still an exper
 
 - Predictive routing compares Sol-only delivery with Luna `low`, `medium`, `high`, `xhigh`, and `max` using expected accepted-result credits and time. The user-facing word `light` is accepted as an alias for Codex `low`.
 - A lower-effort failure is not required before direct XHigh or Max selection.
-- Executable parallel writing is capped at two. Locally bound evidence can recommend human review but cannot expand that cap.
+- Production routing defaults to one Luna writer. A second writer remains benchmark-only until matched plan-meter evidence supports an explicit policy release.
 - Rework is limited to one evidence-backed focused repair, then repartition, one effort escalation, or Sol reclaim.
 - Risk-proportional review avoids replaying clean low-risk work while requiring deep review for material risk and discrepancies.
 - Runtime receipts compare expected identity and boundary values with host-observed records.
 - Ownership, frozen handoffs, lifecycle transitions, phase evidence, atomic ledger writes, and matched cohorts have executable validators.
-- Evidence-ledger schema 4 fails closed on credit trust: legacy records remain readable but unverified, self-declared exact sources cannot pass, and policy review requires an independently supplied claim index bound to each record and unique receipt. The ledger does not validate provider signatures or collect Codex desktop billing data.
+- Evidence-ledger schema 5 requires retained Sol execution in new matched Sol-Luna records. Older schemas remain readable with their origin preserved but cannot satisfy the current measurement-policy gate. Schema 4 credit trust remains fail-closed: self-declared exact sources cannot pass, and claim-index schema 2 binds each external claim to the complete normalized record and a unique receipt. The ledger does not validate provider signatures or collect Codex desktop billing data.
 - A five-pair matched bounded-function campaign achieved equal independent acceptance and zero final defects, but Sol→Luna regressed to 4.08× the median diagnostic tokens and 5.42× the median elapsed time. It did not capture five-hour or weekly plan-limit readings, so it cannot decide subscription-allowance economics.
+- A later [matched allowance pilot p002](docs/benchmark/matched-allowance-p002-2026-08-28.md) found that two Luna High writers failed equal acceptance, consumed no less displayed five-hour allowance, and were 4.72% slower. Policy 1.3.0 therefore defaults to one Luna and a 50% predictive accepted-cost saving floor; that correction still needs a new matched meter campaign.
 - Local lifecycle tests validate the state machine. A [native desktop-app smoke](docs/validation/native-app-lifecycle-smoke-2026-08-26.md) exercised real Luna delegation, one repair, stale-evidence rejection, timeout/interruption, same-child continuation, and pre-dispatch ownership conflict rejection. It did not prove that the packaged custom TOML profile was loaded; the automated opt-in runner remains unavailable until Codex exposes a stable non-interactive custom-subagent surface.
 
-See [the matched bounded-function campaign](docs/benchmark/matched-bounded-campaign-2026-08-26.md) and the [older preliminary comparison](docs/benchmark/preliminary-comparison.md).
+See [the matched allowance pilot p002](docs/benchmark/matched-allowance-p002-2026-08-28.md), [the matched bounded-function campaign](docs/benchmark/matched-bounded-campaign-2026-08-26.md), and the [older preliminary comparison](docs/benchmark/preliminary-comparison.md).
 
 ## Core workflow
 
@@ -29,7 +30,7 @@ Invoke explicitly:
 $sol-luna <substantial task>
 ```
 
-Sol estimates each eligible route before dispatch. Policy `1.2.0` requires at least 80% predicted first-pass acceptance, no predicted final-defect regression, at least 15% expected credit reduction by default, and no expected elapsed regression. It then selects the lowest expected accepted-delivery cost—not automatically the lowest reasoning effort.
+Sol estimates each eligible route before dispatch. Policy `1.3.0` requires at least 80% predicted first-pass acceptance, no predicted final-defect regression, at least 50% expected accepted-cost reduction by default, and no expected elapsed regression. It starts from one Luna at the lowest task-supported effort and selects the lowest expected accepted-delivery cost—not automatically the lowest reasoning effort. The estimate includes retained Sol execution cost and overlaps its time with Luna execution. It is a route guard; only matched account-meter readings prove subscription-allowance savings.
 
 ```powershell
 python .agents/skills/sol-luna/scripts/routing_policy.py template
@@ -69,12 +70,12 @@ The Skill uses standard-library Python tools:
 | `lifecycle_contract.py` | Replay package transitions, stale evidence, timeout, repair, escalation, continuation, and acceptance |
 | `native_lifecycle_receipt.py` | Fail closed unless a native runner proves profile loading, requested/observed identity and boundaries, timeout, child continuity, stale rejection, repair, and ownership blocking |
 | `runtime_receipt.py` | Compare expected identity and boundaries with one explicit host session record |
-| `phase_tracker.py` | Accumulate explicit phase durations and optional source token/credit readings |
-| `evidence_ledger.py` | Validate schema-4 phase evidence, require record-bound external claims for credible credits, isolate exact policy cohorts, persist atomically, and emit fail-closed task-family feedback without automatic routing |
+| `phase_tracker.py` | Accumulate explicit phase durations and optional source token/credit readings, including retained Sol execution during Sol-Luna work |
+| `evidence_ledger.py` | Validate schema-5 phase evidence, preserve legacy readability without inventing retained Sol cost, require record-bound external claims for credible credits, and emit fail-closed task-family feedback |
 | `matched_eval.py` | Freeze paired arms and reject mismatched starts, task specs, suites, policies, and metric cohorts |
 | `allowance_meter.py` | Quantify conservative Sol-only versus Sol-Luna advantage from matched five-hour and weekly plan-limit percentage readings |
 | `allowance_campaign.py` | Pre-register route order, atomically record route-only meter intervals, recover active arms, report excluded referee gaps, and assess completed pairs |
-| `benchmark_identity.py` | Build a path-free, host-observed Sol/Luna identity index using canonical receipt digests that reject equivalent JSON reserialization reuse |
+| `benchmark_identity.py` | Bind host-observed Sol/Luna models, effort, and an explicitly declared one- or two-writer benchmark shape while rejecting logical receipt reuse |
 | `credit_model.py` | Estimate purchased credits from classified phase usage and a fingerprinted rate card; never convert included plan percentages |
 
 The matched harness binds each pair to the same starting candidate, task digest, independent acceptance-suite digest, policy fingerprint, and observed runtime identity. It does not launch paid model work. See [runtime and evidence details](.agents/skills/sol-luna/references/evidence-and-runtime.md) and [the orchestration policy](.agents/skills/sol-luna/references/orchestration-policy.md).
@@ -169,7 +170,7 @@ CI runs the behavioral suite on Windows and Ubuntu with Python 3.11 and 3.14. Te
 
 These tests and the native app smoke do not prove routing economics. The completed five-pair campaign supplies diagnostic token and elapsed evidence, but no plan-limit readings; see the [objective completion audit](docs/validation/objective-completion-audit-2026-08-26.md). A subscription benchmark uses matched changes on the same account meters: five-hour percentage points are the higher-resolution primary measure, while weekly percentage points are reported separately as corroboration. Purchased-credit estimates and raw diagnostic tokens remain secondary and cannot be substituted for included allowance.
 
-A locally bound claim index does not establish a Codex desktop task-level authenticated credit receipt. Without a cryptographically trusted provider verifier, externally bound ledger evidence may recommend human review but cannot raise the executable two-writer cap.
+A locally bound claim index does not establish a Codex desktop task-level authenticated credit receipt. Without a cryptographically trusted provider verifier, externally bound ledger evidence may recommend human review but cannot raise the executable one-writer cap.
 
 ## Success gate
 

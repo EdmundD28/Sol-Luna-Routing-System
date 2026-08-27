@@ -27,7 +27,7 @@ def requested(value: str | None) -> dict:
     return {"value": value, "provenance": "requested"}
 
 
-def receipt(*, model: str, role: str, marker: str) -> dict:
+def receipt(*, model: str, role: str, marker: str, effort: str = "high") -> dict:
     return {
         "schema_version": 1,
         "status": "verified",
@@ -39,7 +39,7 @@ def receipt(*, model: str, role: str, marker: str) -> dict:
         "requested": {
             "agent": requested(role),
             "model": requested(model),
-            "effort": requested("high"),
+            "effort": requested(effort),
             "sandbox_policy_type": requested(None),
             "permission_profile_type": requested(None),
         },
@@ -48,7 +48,7 @@ def receipt(*, model: str, role: str, marker: str) -> dict:
             "agent_path_ref": observed(f"redacted:agent-path:{marker}"),
             "model_provider": observed("openai"),
             "model": observed(model),
-            "effort": observed("high"),
+            "effort": observed(effort),
             "sandbox_policy_type": observed("workspace-write"),
             "permission_profile_type": observed("managed"),
             "cwd_ref": observed(f"redacted:cwd:{marker}"),
@@ -76,8 +76,10 @@ class BenchmarkIdentityTests(unittest.TestCase):
 
     def valid_manifest(self) -> dict:
         return {
-            "schema_version": 1,
+            "schema_version": 2,
             "campaign_id": "campaign-001",
+            "sol_luna_effort": "medium",
+            "sol_luna_writer_count": 1,
             "runs": [
                 {
                     "pair_id": "pair-001",
@@ -95,10 +97,13 @@ class BenchmarkIdentityTests(unittest.TestCase):
                     ),
                     "worker_receipts": [
                         self.write_receipt(
-                            "luna-a.json", receipt(model="gpt-5.6-luna", role="luna_worker", marker="luna-a")
-                        ),
-                        self.write_receipt(
-                            "luna-b.json", receipt(model="gpt-5.6-luna", role="worker", marker="luna-b")
+                            "luna-a.json",
+                            receipt(
+                                model="gpt-5.6-luna",
+                                role="luna_worker_medium",
+                                marker="luna-a",
+                                effort="medium",
+                            ),
                         ),
                     ],
                 },
@@ -119,7 +124,9 @@ class BenchmarkIdentityTests(unittest.TestCase):
             self.assertNotIn(secret, rendered)
         self.assertEqual(index["verification_status"], "verified")
         luna_run = next(run for run in index["runs"] if run["route"] == "SOL_LUNA")
-        self.assertEqual(len(luna_run["workers"]), 2)
+        self.assertEqual(len(luna_run["workers"]), 1)
+        self.assertEqual(index["sol_luna_effort"], "medium")
+        self.assertEqual(index["sol_luna_writer_count"], 1)
         self.assertTrue(all(run["controller"]["provider"] == "openai" for run in index["runs"]))
 
     def test_host_observed_sol_worker_role_is_valid_as_sol_only_controller(self) -> None:
@@ -157,6 +164,41 @@ class BenchmarkIdentityTests(unittest.TestCase):
         self.write_manifest(manifest)
         with self.assertRaisesRegex(IDENTITY.IdentityError, "Luna|gpt-5.6-luna"):
             IDENTITY.build_index(self.manifest)
+
+    def test_writer_effort_and_count_must_match_manifest(self) -> None:
+        manifest = self.valid_manifest()
+        mismatch = receipt(
+            model="gpt-5.6-luna", role="luna_worker_high", marker="wrong-effort", effort="high"
+        )
+        manifest["runs"][1]["worker_receipts"] = [
+            self.write_receipt("wrong-effort.json", mismatch)
+        ]
+        self.write_manifest(manifest)
+        with self.assertRaisesRegex(IDENTITY.IdentityError, "medium"):
+            IDENTITY.build_index(self.manifest)
+
+        manifest = self.valid_manifest()
+        manifest["runs"][1]["worker_receipts"].append(
+            self.write_receipt(
+                "luna-b.json",
+                receipt(
+                    model="gpt-5.6-luna",
+                    role="worker",
+                    marker="luna-b",
+                    effort="medium",
+                ),
+            )
+        )
+        self.write_manifest(manifest)
+        with self.assertRaisesRegex(IDENTITY.IdentityError, "worker receipts"):
+            IDENTITY.build_index(self.manifest)
+
+        manifest["sol_luna_writer_count"] = 2
+        self.write_manifest(manifest)
+        index = IDENTITY.build_index(self.manifest)
+        luna_run = next(run for run in index["runs"] if run["route"] == "SOL_LUNA")
+        self.assertEqual(len(luna_run["workers"]), 2)
+        self.assertEqual(index["sol_luna_writer_count"], 2)
 
     def test_self_report_unknown_identity_and_non_host_provenance_fail_closed(self) -> None:
         variants = []

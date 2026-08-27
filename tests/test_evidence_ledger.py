@@ -81,6 +81,7 @@ def verified_credit_record(route: str, pair_id: str, *, digest_suffix: str = "a"
 def verified_claim(record: dict) -> dict:
     claim = {
         "record_id": record["record_id"],
+        "record_digest": LEDGER.record_binding_digest(record),
         "task_family": record["task_family"],
         "route": record["route"],
         "pair_id": record["pair_id"],
@@ -106,7 +107,7 @@ def verified_claim(record: dict) -> dict:
 
 def verified_index(records: list[dict]) -> dict:
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "verification_source": "provider-export-review-v1",
         "claims": [verified_claim(record) for record in records],
     }
@@ -292,7 +293,10 @@ class EvidenceLedgerTests(unittest.TestCase):
                 "policy_version": "1.1.0",
                 "policy_fingerprint": "sha256:" + "3" * 64,
                 "luna_effort": "high",
-                "phase_elapsed_seconds": {"luna_execution": 80},
+                "phase_elapsed_seconds": {
+                    "sol_retained_execution": 0,
+                    "luna_execution": 80,
+                },
                 "observed_sol_model": "gpt-5.6-sol",
                 "observed_luna_model": "gpt-5.6-luna",
                 "runtime_identity_source": "codex-session-turn-context-v1",
@@ -333,6 +337,41 @@ class EvidenceLedgerTests(unittest.TestCase):
         record["first_pass_accepted"] = True
         record.pop("elapsed_seconds")
         with self.assertRaises(LEDGER.LedgerError):
+            LEDGER.validate_record(record)
+
+    def test_matched_sol_luna_requires_retained_sol_phase_even_when_zero(self) -> None:
+        record = accepted_record("SOL_LUNA", "pair-001", tokens=900)
+        record.update(
+            {
+                "campaign_id": "campaign-v1",
+                "evaluation_mode": "MATCHED",
+                "acceptance_suite_digest": "sha256:" + "1" * 64,
+                "task_spec_digest": "sha256:" + "2" * 64,
+                "starting_candidate_ref": "git:start",
+                "policy_version": "1.3.0",
+                "policy_fingerprint": "sha256:" + "3" * 64,
+                "luna_effort": "medium",
+                "writer_count": 1,
+                "phase_elapsed_seconds": {
+                    "sol_retained_execution": 0,
+                    "luna_execution": 80,
+                },
+                "phase_tokens": {
+                    "sol_retained_execution": 100,
+                    "luna_execution": 800,
+                },
+                "observed_sol_model": "gpt-5.6-sol",
+                "observed_luna_model": "gpt-5.6-luna",
+                "runtime_identity_source": "codex-session-turn-context-v1",
+                "runtime_identity_uncertainty": "none",
+            }
+        )
+        self.assertIn(
+            "sol_retained_execution",
+            LEDGER.validate_record(record)["phase_elapsed_seconds"],
+        )
+        del record["phase_elapsed_seconds"]["sol_retained_execution"]
+        with self.assertRaisesRegex(LEDGER.LedgerError, "sol_retained_execution"):
             LEDGER.validate_record(record)
 
     def test_only_credible_credit_can_satisfy_policy_savings_gate(self) -> None:
@@ -459,8 +498,96 @@ class EvidenceLedgerTests(unittest.TestCase):
         record = accepted_credit_record("SOL_ONLY", "pair-001")
         record["schema_version"] = 1
         normalized = LEDGER.validate_record(record)
-        self.assertEqual(normalized["schema_version"], 4)
+        self.assertEqual(normalized["schema_version"], 5)
+        self.assertEqual(normalized["upgraded_from_schema_version"], 1)
         self.assertEqual(normalized["credit_verification"], "UNVERIFIED")
+
+    def test_schema_four_matched_sol_luna_stays_readable_but_ineligible(self) -> None:
+        records = []
+        for index in range(1, 6):
+            pair_id = f"pair-{index:03d}"
+            for route in ("SOL_ONLY", "SOL_LUNA"):
+                record = accepted_record(route, pair_id, tokens=1000 if route == "SOL_ONLY" else 800)
+                record.update(
+                    {
+                        "schema_version": 4,
+                        "campaign_id": "legacy-campaign",
+                        "evaluation_mode": "MATCHED",
+                        "acceptance_suite_digest": "sha256:" + "1" * 64,
+                        "task_spec_digest": "sha256:" + "2" * 64,
+                        "starting_candidate_ref": "git:legacy-start",
+                        "policy_version": "1.2.0",
+                        "policy_fingerprint": "sha256:" + "3" * 64,
+                        "writer_count": 0 if route == "SOL_ONLY" else 1,
+                        "luna_effort": "" if route == "SOL_ONLY" else "high",
+                        "phase_elapsed_seconds": {"sol_execution": 100}
+                        if route == "SOL_ONLY"
+                        else {"luna_execution": 80},
+                        "phase_tokens": {"sol_execution": 1000}
+                        if route == "SOL_ONLY"
+                        else {"luna_execution": 800},
+                        "observed_sol_model": "gpt-5.6-sol",
+                        "runtime_identity_source": "legacy-host-receipt",
+                        "runtime_identity_uncertainty": "none",
+                    }
+                )
+                if route == "SOL_LUNA":
+                    record["observed_luna_model"] = "gpt-5.6-luna"
+                records.append(LEDGER.validate_record(record))
+        self.assertTrue(all(item["schema_version"] == 5 for item in records))
+        self.assertTrue(all(item["upgraded_from_schema_version"] == 4 for item in records))
+        self.assertEqual(
+            LEDGER.validate_record(records[1])["upgraded_from_schema_version"],
+            4,
+        )
+        status = LEDGER.evidence_status(records, task_family="bounded-feature")
+        self.assertFalse(status["cohorts"][0]["success_gates"]["current_measurement_schema"])
+        self.assertFalse(status["cohorts"][0]["policy_change_eligible"])
+
+    def test_schema_four_claim_cannot_be_replayed_after_schema_five_laundering(self) -> None:
+        source = verified_credit_record("SOL_LUNA", "pair-001")
+        source.update(
+            {
+                "schema_version": 4,
+                "campaign_id": "legacy-campaign",
+                "evaluation_mode": "MATCHED",
+                "acceptance_suite_digest": "sha256:" + "1" * 64,
+                "task_spec_digest": "sha256:" + "2" * 64,
+                "starting_candidate_ref": "git:legacy-start",
+                "policy_version": "1.2.0",
+                "policy_fingerprint": "sha256:" + "3" * 64,
+                "writer_count": 1,
+                "luna_effort": "high",
+                "phase_elapsed_seconds": {"luna_execution": 80},
+                "observed_sol_model": "gpt-5.6-sol",
+                "observed_luna_model": "gpt-5.6-luna",
+                "runtime_identity_source": "legacy-host-receipt",
+                "runtime_identity_uncertainty": "none",
+            }
+        )
+        legacy = LEDGER.validate_record(source)
+        claims = verified_index([legacy])
+
+        laundered_source = dict(legacy)
+        laundered_source.pop("upgraded_from_schema_version")
+        laundered_source["phase_elapsed_seconds"] = {
+            **laundered_source["phase_elapsed_seconds"],
+            "sol_retained_execution": 0,
+        }
+        laundered_source["phase_credits"] = {
+            **laundered_source["phase_credits"],
+            "sol_retained_execution": 0,
+        }
+        laundered = LEDGER.validate_record(laundered_source)
+        verified = LEDGER._normalize_verified_credit_receipts(claims)
+        self.assertEqual(legacy["record_id"], laundered["record_id"])
+        self.assertNotEqual(
+            LEDGER.record_binding_digest(legacy),
+            LEDGER.record_binding_digest(laundered),
+        )
+        self.assertFalse(
+            LEDGER._credit_record_is_independently_verified(laundered, verified)
+        )
 
     def test_provider_authenticated_credit_requires_exact_receipt_fields(self) -> None:
         record = accepted_credit_record("SOL_ONLY", "pair-001")
@@ -515,6 +642,14 @@ class EvidenceLedgerTests(unittest.TestCase):
             for route in ("SOL_ONLY", "SOL_LUNA"):
                 suffix = format(index * 2 + (route == "SOL_LUNA"), "x")
                 record = verified_credit_record(route, pair_id, digest_suffix=suffix)
+                if route == "SOL_LUNA":
+                    record["credit_value"] = 40
+                    record["phase_credits"] = {
+                        "sol_planning": 5,
+                        "sol_retained_execution": 5,
+                        "luna_execution": 25,
+                        "sol_review": 5,
+                    }
                 record = LEDGER.validate_record(record)
                 verified_records.append(record)
                 records.append(record)
@@ -525,6 +660,32 @@ class EvidenceLedgerTests(unittest.TestCase):
         )
         self.assertTrue(status["cohorts"][0]["success_gates"]["credible_credit_reduction"])
         self.assertTrue(status["cohorts"][0]["policy_change_eligible"])
+
+    def test_default_credit_reduction_gate_is_fifty_percent(self) -> None:
+        records = []
+        for index in range(1, 6):
+            pair_id = f"pair-{index:03d}"
+            for route in ("SOL_ONLY", "SOL_LUNA"):
+                suffix = format(index * 2 + (route == "SOL_LUNA"), "x")
+                records.append(
+                    LEDGER.validate_record(
+                        verified_credit_record(route, pair_id, digest_suffix=suffix)
+                    )
+                )
+        claims = verified_index(records)
+        default = LEDGER.evidence_status(
+            records,
+            task_family="bounded-feature",
+            verified_credit_receipts=claims,
+        )
+        legacy_override = LEDGER.evidence_status(
+            records,
+            task_family="bounded-feature",
+            minimum_credit_savings_fraction=0.15,
+            verified_credit_receipts=claims,
+        )
+        self.assertFalse(default["cohorts"][0]["success_gates"]["credible_credit_reduction"])
+        self.assertTrue(legacy_override["cohorts"][0]["success_gates"]["credible_credit_reduction"])
 
     def test_verified_receipt_index_is_strict_and_cli_loadable(self) -> None:
         record = LEDGER.validate_record(verified_credit_record("SOL_ONLY", "pair-001"))
@@ -537,7 +698,7 @@ class EvidenceLedgerTests(unittest.TestCase):
             path.write_text(
                 json.dumps(
                     {
-                        "schema_version": 1,
+                        "schema_version": 2,
                         "verification_source": "C:\\Users\\private",
                         "claims": index_document["claims"],
                     }
@@ -570,7 +731,7 @@ class EvidenceLedgerTests(unittest.TestCase):
                 check=False,
             )
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertEqual(json.loads(result.stdout)["schema_version"], 4)
+            self.assertEqual(json.loads(result.stdout)["schema_version"], 5)
 
     def test_cli_nonempty_ledger_rejects_claim_bound_to_wrong_record(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -666,7 +827,7 @@ class EvidenceLedgerTests(unittest.TestCase):
     def test_legacy_schema_cannot_smuggle_explicit_provider_authentication(self) -> None:
         record = verified_credit_record("SOL_ONLY", "pair-001")
         record["schema_version"] = 3
-        with self.assertRaisesRegex(LEDGER.LedgerError, "schema 1-3"):
+        with self.assertRaisesRegex(LEDGER.LedgerError, "schemas before 4"):
             LEDGER.validate_record(record)
 
     def test_cohort_identity_uses_structured_side_members_without_delimiter_collision(self) -> None:

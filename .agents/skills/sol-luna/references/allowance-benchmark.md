@@ -5,6 +5,8 @@ Use this protocol only when the task is to quantify Sol-only versus Sol-Luna sub
 ## Freeze the comparison
 
 - Use one account, plan, speed setting, formal repository checkout, task family, starting Git reference, task specification, independent acceptance suite, and Sol-Luna revision.
+- Give Sol-only one complete top-level task in one Sol run. Do not split it into separately dispatched or artificially serialized packages. In the Sol-Luna arm, give its Sol controller that same complete task and measure the controller's full route interval, including every Luna child it launches.
+- Test the production default first: one Luna writer at the lowest task-supported effort while Sol performs complementary Sol-owned work. Treat additional Luna writers as a separate concurrency experiment rather than silently changing the route under test.
 - Store the campaign ledger and dashboard captures outside the repository. Do not create a clone, copied project, or worktree.
 - Pre-register the route order, pair count, batch size, quality gate, time gate, and minimum allowance advantage. For the first v0.1.1 campaign, test a conservative lower bound of at least 10×.
 - Run counterbalanced pairs. Four pairs in `ABBA` or `BAAB` order are the minimum pilot; use more pairs when the meter remains too coarse.
@@ -83,8 +85,10 @@ After generating strict `runtime_receipt.py` receipts, create a manifest with ex
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "campaign_id": "campaign-001",
+  "sol_luna_effort": "medium",
+  "sol_luna_writer_count": 1,
   "runs": [
     {
       "pair_id": "pair-001",
@@ -110,9 +114,9 @@ python .agents/skills/sol-luna/scripts/benchmark_identity.py build `
   --output C:\benchmark\identity-index.json
 ```
 
-The builder requires verified, fully readable explicit-session receipts with host-observed model, reasoning effort, role, and provider. `SOL_ONLY` is exactly one OpenAI `gpt-5.6-sol/high` controller and no worker. `SOL_LUNA` adds one or two OpenAI `gpt-5.6-luna/high` writers. A logical receipt cannot be reused anywhere in the campaign, even when whitespace, indentation, or JSON key order differs. Absolute paths, drive paths, traversal, control characters, Windows device names, symlinks, missing routes, role/model impersonation, self-report proof, unknown fields, and an existing output fail closed.
+The builder requires verified, fully readable explicit-session receipts with host-observed model, reasoning effort, role, and provider. `SOL_ONLY` is exactly one OpenAI `gpt-5.6-sol/high` controller and no worker. `SOL_LUNA` uses the same controller plus the manifest's explicitly declared one or two OpenAI `gpt-5.6-luna` writers at the declared effort. The production benchmark sets `sol_luna_writer_count` to `1`; `2` is reserved for a separately pre-registered concurrency experiment and does not raise the production routing cap. Every Sol-Luna arm in one campaign must use the same shape and effort. A logical receipt cannot be reused anywhere in the campaign, even when whitespace, indentation, or JSON key order differs. Absolute paths, drive paths, traversal, control characters, Windows device names, symlinks, missing routes, role/model/effort impersonation, self-report proof, unknown fields, and an existing output fail closed.
 
-The output allowlist contains only the campaign and pair identifiers, route, redacted controller/writer identity values, receipt SHA-256 values, verification status, schema version, and a SHA-256 over the canonical index without that digest field. Each `receipt_sha256` is computed over the parsed receipt's sorted-key, compact canonical JSON, so it is stable across equivalent serializations. The index never copies receipt paths, source/thread references, working directories, or agent paths. Output uses a same-directory flushed and `fsync`-ed temporary file followed by `os.replace`.
+The output allowlist contains only the campaign and pair identifiers, declared Luna effort and writer count, route, redacted controller/writer identity values, receipt SHA-256 values, verification status, schema version, and a SHA-256 over the canonical index without that digest field. Each `receipt_sha256` is computed over the parsed receipt's sorted-key, compact canonical JSON, so it is stable across equivalent serializations. The index never copies receipt paths, source/thread references, working directories, or agent paths. Output uses a same-directory flushed and `fsync`-ed temporary file followed by `os.replace`.
 
 ## Accept or hold
 

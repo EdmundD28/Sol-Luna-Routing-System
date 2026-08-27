@@ -17,8 +17,14 @@ from pathlib import PurePosixPath, PureWindowsPath
 from typing import Any, Mapping
 
 
-SCHEMA_VERSION = 1
-PACKAGES_SCHEMA_VERSION = 2
+POLICY_SCHEMA_VERSION = 1
+LEGACY_SINGLE_SCHEMA_VERSION = 1
+LEGACY_PACKAGES_SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
+PACKAGES_SCHEMA_VERSION = 4
+LEGACY_REQUEST_SCHEMAS = {LEGACY_SINGLE_SCHEMA_VERSION, LEGACY_PACKAGES_SCHEMA_VERSION}
+SINGLE_REQUEST_SCHEMAS = {LEGACY_SINGLE_SCHEMA_VERSION, SCHEMA_VERSION}
+PACKAGE_REQUEST_SCHEMAS = {LEGACY_PACKAGES_SCHEMA_VERSION, PACKAGES_SCHEMA_VERSION}
 PACKAGE_ID = re.compile(r"[a-z0-9][a-z0-9-]{0,63}")
 WINDOWS_RESERVED_NAMES = {
     "con",
@@ -31,7 +37,7 @@ WINDOWS_RESERVED_NAMES = {
 # The routing policy consumes the versioned feedback document emitted by the
 # evidence ledger.  Keep this explicit: accepting an unknown feedback schema
 # would silently turn stale or incompatible evidence into routing authority.
-EVIDENCE_LEDGER_SCHEMA_VERSION = 4
+EVIDENCE_LEDGER_SCHEMA_VERSION = 5
 EVIDENCE_FEEDBACK_SOURCE = f"evidence-ledger-feedback-v{EVIDENCE_LEDGER_SCHEMA_VERSION}"
 DEFAULT_POLICY = Path(__file__).resolve().parents[1] / "references" / "routing-policy.v1.json"
 
@@ -99,7 +105,7 @@ def load_policy(path: Path) -> dict[str, Any]:
     except (OSError, json.JSONDecodeError) as exc:
         raise PolicyError(f"cannot load routing policy: {exc}") from exc
     require_object(policy, "policy")
-    if policy.get("schema_version") != SCHEMA_VERSION:
+    if policy.get("schema_version") != POLICY_SCHEMA_VERSION:
         raise PolicyError("unsupported routing policy schema_version")
     efforts = policy.get("effort_order")
     if efforts != ["low", "medium", "high", "xhigh", "max"]:
@@ -123,9 +129,8 @@ def load_policy(path: Path) -> dict[str, Any]:
         "maximum_coordination_credit_share",
         maximum=1.0,
     )
-    initial = integer(policy.get("maximum_initial_writers"), "maximum_initial_writers", minimum=1)
-    expanded = integer(policy.get("maximum_evidence_backed_writers"), "maximum_evidence_backed_writers", minimum=initial)
-    integer(policy.get("parallel_expansion_minimum_pairs"), "parallel_expansion_minimum_pairs", minimum=1)
+    integer(policy.get("maximum_initial_writers"), "maximum_initial_writers", minimum=1)
+    integer(policy.get("parallel_review_minimum_pairs"), "parallel_review_minimum_pairs", minimum=1)
     budget = require_object(policy.get("rework_budget"), "rework_budget")
     if integer(budget.get("focused_repairs"), "rework_budget.focused_repairs") != 1:
         raise PolicyError("the policy permits exactly one focused repair")
@@ -156,7 +161,7 @@ def estimate(source: Mapping[str, Any], prefix: str, *, allow_metadata: bool = F
         "recovery_seconds_if_failed",
     }
     if allow_metadata:
-        allowed.update({"effort", "failure_impact"})
+        allowed.update({"effort", "failure_impact", "effort_basis"})
     reject_unknown_fields(
         source,
         allowed,
@@ -174,23 +179,33 @@ def estimate(source: Mapping[str, Any], prefix: str, *, allow_metadata: bool = F
     }
 
 
-def coordination_totals(source: Mapping[str, Any], *, multiwriter: bool) -> dict[str, Any]:
-    """Validate explicit coordination costs, including multiwriter overhead."""
+def coordination_totals(
+    source: Mapping[str, Any], *, multiwriter: bool, require_retained_execution: bool
+) -> dict[str, Any]:
+    """Validate all Sol-side cost plus serial overhead and retained execution."""
     required = ("sol_planning", "sol_review", "integration")
     if multiwriter:
         required += ("queue", "merge_contention")
-    reject_unknown_fields(source, set(required), "coordination")
+    allowed = set(required) | {"sol_retained_execution"}
+    reject_unknown_fields(source, allowed, "coordination")
+    if require_retained_execution and "sol_retained_execution" not in source:
+        raise PolicyError("coordination.sol_retained_execution is required by the current routing schema")
     phases: dict[str, dict[str, float]] = {}
-    for phase in required:
+    present = (*required, *(("sol_retained_execution",) if "sol_retained_execution" in source else ()))
+    for phase in present:
         value = require_object(source.get(phase), f"coordination.{phase}")
         reject_unknown_fields(value, {"credits", "seconds"}, f"coordination.{phase}")
         phases[phase] = {
             "credits": finite_number(value.get("credits"), f"coordination.{phase}.credits"),
             "seconds": finite_number(value.get("seconds"), f"coordination.{phase}.seconds"),
         }
+    retained = phases.get("sol_retained_execution", {"credits": 0.0, "seconds": 0.0})
+    overhead_phases = [phase for name, phase in phases.items() if name != "sol_retained_execution"]
     return {
         "credits": sum(item["credits"] for item in phases.values()),
-        "seconds": sum(item["seconds"] for item in phases.values()),
+        "overhead_credits": sum(item["credits"] for item in overhead_phases),
+        "serial_seconds": sum(item["seconds"] for item in overhead_phases),
+        "retained_execution_seconds": retained["seconds"],
         "phases": phases,
     }
 
@@ -380,7 +395,7 @@ def allowed_writers(
         and evidence.get("policy_change_eligible") is True
         and evidence.get("policy_fingerprint_matches") is True
         and integer(evidence.get("qualified_pairs", 0), "parallel_evidence.qualified_pairs")
-        >= int(policy["parallel_expansion_minimum_pairs"])
+        >= int(policy["parallel_review_minimum_pairs"])
         and finite_number(
             evidence.get("elapsed_improvement_fraction", 0.0),
             "parallel_evidence.elapsed_improvement_fraction",
@@ -399,7 +414,7 @@ def allowed_writers(
     )
     # Local JSON evidence is advisory only.  Without a cryptographically
     # trusted provider verifier, it must never raise the executable cap.
-    cap = min(initial_cap, 2)
+    cap = initial_cap
     return {
         "requested": requested,
         "allowed": min(requested, cap),
@@ -428,7 +443,7 @@ def evaluate_route(
     verified_parallel_evidence: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     schema_version = request.get("schema_version")
-    if schema_version not in {SCHEMA_VERSION, PACKAGES_SCHEMA_VERSION}:
+    if schema_version not in SINGLE_REQUEST_SCHEMAS | PACKAGE_REQUEST_SCHEMAS:
         raise PolicyError("unsupported routing request schema_version")
     reject_unknown_fields(
         request,
@@ -476,14 +491,20 @@ def evaluate_route(
     sol_expected_seconds = sol["execution_seconds"] + (1 - sol["first_pass_probability"]) * sol_recovery_seconds
 
     requested_writers = integer(request.get("requested_writers", 1), "requested_writers", minimum=1)
-    if schema_version == SCHEMA_VERSION and requested_writers > 1:
-        raise PolicyError("schema_version 2 is required for multiwriter package inputs")
-    if schema_version == PACKAGES_SCHEMA_VERSION and requested_writers < 2:
-        raise PolicyError("schema_version 2 requires requested_writers greater than 1")
+    package_mode = schema_version in PACKAGE_REQUEST_SCHEMAS
+    legacy_schema = schema_version in LEGACY_REQUEST_SCHEMAS
+    if schema_version in SINGLE_REQUEST_SCHEMAS and requested_writers > 1:
+        raise PolicyError("a package routing schema is required for multiwriter inputs")
+    if package_mode and requested_writers < 2:
+        raise PolicyError("package routing schemas require requested_writers greater than 1")
     writer_limit = allowed_writers(request, policy, verified_parallel_evidence)
     effective_writers = int(writer_limit["allowed"])
     coordination_source = require_object(request.get("coordination"), "coordination")
-    coordination = coordination_totals(coordination_source, multiwriter=requested_writers > 1)
+    coordination = coordination_totals(
+        coordination_source,
+        multiwriter=requested_writers > 1,
+        require_retained_execution=not legacy_schema,
+    )
     candidates_source = request.get("luna_candidates")
     if not isinstance(candidates_source, list) or not candidates_source:
         raise PolicyError("luna_candidates must be a non-empty JSON array")
@@ -491,9 +512,8 @@ def evaluate_route(
     evaluated: list[dict[str, Any]] = []
     for index, raw in enumerate(candidates_source):
         candidate = require_object(raw, f"luna_candidates[{index}]")
-        package_mode = schema_version == PACKAGES_SCHEMA_VERSION
         allowed_candidate_fields = (
-            {"effort", "failure_impact", "packages"}
+            {"effort", "failure_impact", "effort_basis", "packages"}
             if package_mode
             else {
                 "effort",
@@ -504,6 +524,7 @@ def evaluate_route(
                 "recovery_credits_if_failed",
                 "recovery_seconds_if_failed",
                 "failure_impact",
+                "effort_basis",
             }
         )
         unknown_candidate_fields = set(candidate) - allowed_candidate_fields
@@ -512,10 +533,21 @@ def evaluate_route(
                 f"luna_candidates[{index}] has unknown fields: {sorted(unknown_candidate_fields)}"
             )
         effort = normalize_effort(candidate.get("effort"), policy)
+        effort_basis = candidate.get("effort_basis")
+        if not legacy_schema and effort in {"high", "xhigh", "max"}:
+            effort_basis = require_string(
+                effort_basis,
+                f"luna_candidates[{index}].effort_basis",
+            )
+        elif effort_basis is not None:
+            effort_basis = require_string(
+                effort_basis,
+                f"luna_candidates[{index}].effort_basis",
+            )
         if effort in seen:
             raise PolicyError(f"duplicate Luna effort candidate: {effort}")
         seen.add(effort)
-        if schema_version == PACKAGES_SCHEMA_VERSION:
+        if package_mode:
             packages_source = candidate.get("packages")
             if not isinstance(packages_source, list):
                 raise PolicyError(
@@ -547,12 +579,20 @@ def evaluate_route(
             expected_recovery_credits = (1 - first_pass_probability) * recovery_credits
             candidate_effective_writers = 1
         expected_credits = coordination["credits"] + package_credits
-        expected_seconds = coordination["seconds"] + package_seconds + expected_recovery_seconds
-        scheduled_seconds = coordination["seconds"] + package_seconds + expected_recovery_seconds
+        scheduled_seconds = (
+            coordination["serial_seconds"]
+            + max(coordination["retained_execution_seconds"], package_seconds)
+            + expected_recovery_seconds
+        )
+        expected_seconds = scheduled_seconds
         credit_savings = 1 - expected_credits / sol_expected_credits if sol_expected_credits else 0.0
         elapsed_savings = 1 - scheduled_seconds / sol_expected_seconds if sol_expected_seconds else 0.0
-        coordination_share = coordination["credits"] / expected_credits if expected_credits else 0.0
+        coordination_share = coordination["overhead_credits"] / expected_credits if expected_credits else 0.0
         rejection_reasons: list[str] = []
+        if legacy_schema:
+            rejection_reasons.append("legacy_routing_schema_requires_refresh")
+        if package_mode and requested_writers > effective_writers:
+            rejection_reasons.append("requested_parallelism_exceeds_executable_cap")
         if first_pass_probability < quality_floor:
             rejection_reasons.append("first_pass_probability_below_floor")
         if final_defect_probability > sol["final_defect_probability"]:
@@ -580,6 +620,7 @@ def evaluate_route(
         evaluated.append(
             {
                 "effort": effort,
+                "effort_basis": effort_basis,
                 "eligible": not rejection_reasons,
                 "expected_accepted_credits": expected_credits,
                 "expected_accepted_seconds": expected_seconds,
@@ -719,10 +760,10 @@ def rework_decision(source: Mapping[str, Any], policy: Mapping[str, Any]) -> dic
 
 def template() -> dict[str, Any]:
     return {
-        "schema_version": 1,
+        "schema_version": SCHEMA_VERSION,
         "task_family": "bounded-feature",
         "quality_floor": 0.8,
-        "minimum_credit_savings_fraction": 0.15,
+        "minimum_credit_savings_fraction": 0.50,
         "latency_limit_seconds": None,
         "requested_writers": 1,
         "sol_only": {
@@ -734,28 +775,30 @@ def template() -> dict[str, Any]:
             "recovery_seconds_if_failed": 300,
         },
         "coordination": {
-            "sol_planning": {"credits": 8, "seconds": 90},
-            "sol_review": {"credits": 10, "seconds": 120},
-            "integration": {"credits": 5, "seconds": 60},
+            "sol_planning": {"credits": 5, "seconds": 90},
+            "sol_retained_execution": {"credits": 10, "seconds": 300},
+            "sol_review": {"credits": 5, "seconds": 120},
+            "integration": {"credits": 3, "seconds": 60},
         },
         "luna_candidates": [
             {
                 "effort": "medium",
                 "first_pass_probability": 0.78,
                 "final_defect_probability": 0.02,
-                "execution_credits": 30,
+                "execution_credits": 15,
                 "execution_seconds": 480,
-                "recovery_credits_if_failed": 45,
+                "recovery_credits_if_failed": 25,
                 "recovery_seconds_if_failed": 420,
                 "failure_impact": "low",
             },
             {
                 "effort": "xhigh",
+                "effort_basis": "the Medium estimate is below the required first-pass quality floor",
                 "first_pass_probability": 0.92,
                 "final_defect_probability": 0.01,
-                "execution_credits": 45,
+                "execution_credits": 20,
                 "execution_seconds": 500,
-                "recovery_credits_if_failed": 35,
+                "recovery_credits_if_failed": 20,
                 "recovery_seconds_if_failed": 300,
                 "failure_impact": "low",
             },
@@ -788,7 +831,7 @@ def verified_parallel_evidence_from_ledger(
         feedback = module.task_family_feedback(
             module.load_records(ledger_path),
             task_family=task_family,
-            minimum_pairs=int(policy["parallel_expansion_minimum_pairs"]),
+            minimum_pairs=int(policy["parallel_review_minimum_pairs"]),
             minimum_credit_savings_fraction=float(policy["minimum_expected_credit_savings_fraction"]),
             minimum_first_pass_acceptance_rate=float(policy["minimum_first_pass_probability"]),
             verified_credit_receipts=verified_credit_receipts,
