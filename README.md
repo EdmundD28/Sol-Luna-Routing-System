@@ -82,7 +82,8 @@ Preview is non-mutating:
 python scripts/setup.py preview
 ```
 
-If Preview reports a legacy user Skill under `~/.codex/skills/sol-luna`,
+The default user Skill location is `~/.agents/skills`. If Preview reports a
+legacy user Skill under `~/.codex/skills/sol-luna`,
 inspect a state-bound migration plan instead of overwriting or manually
 copying files:
 
@@ -94,9 +95,13 @@ python scripts/setup.py migrate --confirm --plan-fingerprint sha256:REVIEWED_PLA
 The fingerprint binds the repository source, every existing managed target,
 and the complete legacy Skill tree. Migration recomputes it immediately before
 writing, backs up only the exact installation assets it replaces or retires,
-and fails if anything drifted after Preview. It refuses an overlapping
-`--skills-home ~/.codex/skills` layout; the supported target is the current
-user Skill location, `~/.agents/skills`.
+and fails if anything drifted after Preview. An explicitly overlapping or
+unsafe skills root is rejected rather than deleting a newly written tree.
+When many skills are installed, the initial skill list may omit some entries
+because it is budgeted; restart Codex if a changed skill is not detected. See
+the official [Codex skill discovery documentation](https://learn.chatgpt.com/docs/build-skills#where-codex-loads-local-skills).
+Update any links or scripts that still point at the old `~/.codex/skills`
+location; do not create a duplicate skill tree.
 
 After reviewing the plan:
 
