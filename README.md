@@ -34,7 +34,7 @@ Sol estimates each eligible route before dispatch. Policy `1.1.0` requires at le
 ```powershell
 python .agents/skills/sol-luna/scripts/routing_policy.py template
 python .agents/skills/sol-luna/scripts/routing_policy.py evaluate --input route.json
-python .agents/skills/sol-luna/scripts/routing_policy.py evaluate --ledger runtime/sol-luna/ledger.jsonl --input route.json
+python .agents/skills/sol-luna/scripts/routing_policy.py evaluate --ledger runtime/sol-luna/ledger.jsonl --verified-credit-receipts runtime/sol-luna/verified-credit-receipts.json --input route.json
 python .agents/skills/sol-luna/scripts/routing_policy.py review --input review.json
 python .agents/skills/sol-luna/scripts/routing_policy.py rework --input rework.json
 python .agents/skills/sol-luna/scripts/routing_policy.py fingerprint
@@ -114,6 +114,10 @@ python scripts/setup.py rollback --confirm
 ```
 
 Setup manages only the Sol-Luna Skill and named agent TOMLs. It uses source hashes, conflict refusal, atomic writes, backups, install state, post-write Doctor verification, and rollback refusal when a managed target has user drift. Tests use isolated temporary homes; this repository does not install itself during validation.
+
+## Release safety
+
+`v0.1.1` remains the pinned Latest release because it is the current user-validated baseline. Publish later milestones with `scripts/publish_release.py`; it refuses to proceed unless Latest is still `v0.1.1`, forces `--latest=false`, and verifies the pin again after publication. Omit `--confirm` for a non-mutating preview.
 
 ## Repository layout
 

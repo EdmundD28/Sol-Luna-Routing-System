@@ -16,6 +16,11 @@ from typing import Any, Mapping
 
 
 SCHEMA_VERSION = 1
+# The routing policy consumes the versioned feedback document emitted by the
+# evidence ledger.  Keep this explicit: accepting an unknown feedback schema
+# would silently turn stale or incompatible evidence into routing authority.
+EVIDENCE_LEDGER_SCHEMA_VERSION = 4
+EVIDENCE_FEEDBACK_SOURCE = f"evidence-ledger-feedback-v{EVIDENCE_LEDGER_SCHEMA_VERSION}"
 DEFAULT_POLICY = Path(__file__).resolve().parents[1] / "references" / "routing-policy.v1.json"
 
 
@@ -132,7 +137,7 @@ def allowed_writers(
     expanded_cap = int(policy["maximum_evidence_backed_writers"])
     evidence = require_object(verified_parallel_evidence or {}, "verified_parallel_evidence")
     evidence_ok = (
-        evidence.get("source") == "evidence-ledger-feedback-v3"
+        evidence.get("source") == EVIDENCE_FEEDBACK_SOURCE
         and evidence.get("policy_change_eligible") is True
         and evidence.get("policy_fingerprint_matches") is True
         and integer(evidence.get("qualified_pairs", 0), "parallel_evidence.qualified_pairs")
@@ -399,7 +404,11 @@ def template() -> dict[str, Any]:
 
 
 def verified_parallel_evidence_from_ledger(
-    ledger_path: Path, task_family: str, policy: Mapping[str, Any]
+    ledger_path: Path,
+    task_family: str,
+    policy: Mapping[str, Any],
+    *,
+    verified_credit_receipts: Mapping[str, Any] | Path | None = None,
 ) -> dict[str, Any]:
     script = Path(__file__).with_name("evidence_ledger.py")
     spec = importlib.util.spec_from_file_location("sol_luna_evidence_ledger", script)
@@ -408,15 +417,26 @@ def verified_parallel_evidence_from_ledger(
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     try:
+        if isinstance(verified_credit_receipts, Path):
+            verified_credit_receipts = module.load_verified_credit_receipts(verified_credit_receipts)
+        elif verified_credit_receipts is not None:
+            # Validate caller-supplied objects with the ledger's own strict
+            # schema checker before passing them into feedback aggregation.
+            if not isinstance(verified_credit_receipts, Mapping):
+                raise PolicyError("verified credit receipts must be a JSON object or path")
+            module._validate_verified_receipt_index(verified_credit_receipts)
         feedback = module.task_family_feedback(
             module.load_records(ledger_path),
             task_family=task_family,
             minimum_pairs=int(policy["parallel_expansion_minimum_pairs"]),
             minimum_credit_savings_fraction=float(policy["minimum_expected_credit_savings_fraction"]),
             minimum_first_pass_acceptance_rate=float(policy["minimum_first_pass_probability"]),
+            verified_credit_receipts=verified_credit_receipts,
         )
     except (OSError, ValueError) as exc:
         raise PolicyError(f"cannot verify parallel evidence: {exc}") from exc
+    if feedback.get("schema_version") != EVIDENCE_LEDGER_SCHEMA_VERSION:
+        raise PolicyError("unsupported evidence ledger feedback schema_version")
     strongest = feedback.get("strongest_cohort") or {}
     cohort = strongest.get("cohort") or {}
     sol_elapsed = float(strongest.get("median_sol_elapsed_seconds") or 0)
@@ -426,7 +446,7 @@ def verified_parallel_evidence_from_ledger(
     defects = strongest.get("final_defect_rate") or {}
     policy_matches = cohort.get("policy") == policy_fingerprint(policy)
     return {
-        "source": "evidence-ledger-feedback-v3",
+        "source": EVIDENCE_FEEDBACK_SOURCE,
         "policy_change_eligible": bool(strongest.get("policy_change_eligible")),
         "policy_fingerprint_matches": policy_matches,
         "qualified_pairs": int(strongest.get("qualified_matched_pairs") or 0),
@@ -452,6 +472,7 @@ def parser() -> argparse.ArgumentParser:
     evaluate = sub.add_parser("evaluate")
     evaluate.add_argument("--input", required=True, type=Path)
     evaluate.add_argument("--ledger", type=Path)
+    evaluate.add_argument("--verified-credit-receipts", type=Path)
     for name in ("review", "rework"):
         command = sub.add_parser(name)
         command.add_argument("--input", required=True, type=Path)
@@ -461,6 +482,8 @@ def parser() -> argparse.ArgumentParser:
 def main() -> int:
     args = parser().parse_args()
     try:
+        if args.command == "evaluate" and args.verified_credit_receipts and not args.ledger:
+            raise PolicyError("--verified-credit-receipts requires --ledger")
         policy = load_policy(args.policy)
         if args.command == "template":
             output = template()
@@ -478,6 +501,7 @@ def main() -> int:
                         args.ledger,
                         require_string(source.get("task_family"), "task_family"),
                         policy,
+                        verified_credit_receipts=args.verified_credit_receipts,
                     )
                     if args.ledger
                     else None
