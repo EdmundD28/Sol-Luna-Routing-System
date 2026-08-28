@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "policy_version": "1.5.0",
+  "policy_version": "1.6.0",
   "minimum_expected_credit_savings_fraction": 0.50,
   "minimum_expected_elapsed_savings_fraction": 0.0,
   "maximum_coordination_credit_share": 0.5,
@@ -20,7 +20,7 @@
     "light": "low"
   },
   "rework_budget": {
-    "focused_repairs": 1,
+    "focused_repairs": 3,
     "effort_escalations": 1
   }
 }

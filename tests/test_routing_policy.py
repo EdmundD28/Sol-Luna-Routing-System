@@ -883,7 +883,7 @@ class RoutingPolicyTests(unittest.TestCase):
         with self.assertRaises(ROUTING.PolicyError):
             ROUTING.evaluate_route(source, POLICY)
 
-    def test_rework_allows_one_repair_then_repartition_escalation_or_reclaim(self) -> None:
+    def test_rework_allows_bounded_evidence_backed_repairs_then_fallbacks(self) -> None:
         repair = ROUTING.rework_decision(
             {
                 "current_effort": "high",
@@ -894,11 +894,22 @@ class RoutingPolicyTests(unittest.TestCase):
             POLICY,
         )
         self.assertEqual(repair["action"], "FOCUSED_REPAIR")
+        self.assertEqual(repair["remaining_focused_repairs"], 0)
+        second = ROUTING.rework_decision(
+            {
+                "current_effort": "high",
+                "new_evidence": True,
+                "focused_repairs_used": 1,
+                "effort_escalations_used": 0,
+            },
+            POLICY,
+        )
+        self.assertEqual(second["action"], "ESCALATE_ONCE")
         repartition = ROUTING.rework_decision(
             {
                 "current_effort": "high",
                 "new_evidence": False,
-                "focused_repairs_used": 1,
+                "focused_repairs_used": 3,
                 "effort_escalations_used": 0,
                 "can_repartition": True,
             },
@@ -909,7 +920,7 @@ class RoutingPolicyTests(unittest.TestCase):
             {
                 "current_effort": "high",
                 "new_evidence": False,
-                "focused_repairs_used": 1,
+                "focused_repairs_used": 3,
                 "effort_escalations_used": 0,
             },
             POLICY,
@@ -923,12 +934,50 @@ class RoutingPolicyTests(unittest.TestCase):
             {
                 "current_effort": "max",
                 "new_evidence": False,
-                "focused_repairs_used": 1,
+                "focused_repairs_used": 3,
                 "effort_escalations_used": 1,
             },
             POLICY,
         )
         self.assertEqual(reclaim["action"], "SOL_RECLAIM")
+
+    def test_strict_closure_repair_requires_target_evidence_and_positive_margin(self) -> None:
+        request = {
+            "current_effort": "high",
+            "new_evidence": True,
+            "focused_repairs_used": 1,
+            "effort_escalations_used": 0,
+            "failure_evidence_ref": "receipt-review-two",
+            "target_action_ids": ["restore-economic-gate"],
+            "marginal_net_substitution": 0.3,
+            "repair_cost_weight": 0.1,
+            "repair_cost_weight_used": 0.1,
+            "repair_cost_weight_limit": 0.5,
+        }
+        result = ROUTING.rework_decision(request, POLICY)
+        self.assertEqual(result["action"], "FOCUSED_REPAIR")
+        self.assertEqual(result["remaining_focused_repairs"], 1)
+        self.assertEqual(result["target_action_ids"], ["restore-economic-gate"])
+        self.assertAlmostEqual(result["remaining_repair_cost_weight"], 0.3)
+
+        third = dict(request, focused_repairs_used=2, repair_cost_weight_used=0.2)
+        third_result = ROUTING.rework_decision(third, POLICY)
+        self.assertEqual(third_result["action"], "FOCUSED_REPAIR")
+        self.assertEqual(third_result["remaining_focused_repairs"], 0)
+
+        regressive = dict(request, marginal_net_substitution=0)
+        self.assertEqual(ROUTING.rework_decision(regressive, POLICY)["action"], "SOL_RECLAIM")
+        exhausted = dict(request, repair_cost_weight=0.5)
+        self.assertEqual(ROUTING.rework_decision(exhausted, POLICY)["action"], "REPAIR_LOCKED")
+        attempts_exhausted = dict(request, focused_repairs_used=3)
+        self.assertEqual(ROUTING.rework_decision(attempts_exhausted, POLICY)["action"], "REPAIR_LOCKED")
+        missing_new_evidence = dict(request, new_evidence=False)
+        self.assertEqual(ROUTING.rework_decision(missing_new_evidence, POLICY)["action"], "REPAIR_LOCKED")
+        for missing in ("failure_evidence_ref", "target_action_ids", "marginal_net_substitution", "repair_cost_weight_limit"):
+            malformed = dict(request)
+            del malformed[missing]
+            with self.subTest(missing=missing), self.assertRaises(ROUTING.PolicyError):
+                ROUTING.rework_decision(malformed, POLICY)
 
     def test_review_depth_is_risk_proportional(self) -> None:
         targeted = ROUTING.review_depth(

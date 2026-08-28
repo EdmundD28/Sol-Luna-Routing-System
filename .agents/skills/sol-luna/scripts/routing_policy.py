@@ -146,8 +146,9 @@ def validate_policy_mapping(source: Mapping[str, Any]) -> dict[str, Any]:
     finite_number(policy.get("maximum_duplicate_work_fraction"), "maximum_duplicate_work_fraction", maximum=1.0)
     integer(policy.get("parallel_review_minimum_pairs"), "parallel_review_minimum_pairs", minimum=1)
     budget = require_object(policy.get("rework_budget"), "rework_budget")
-    if integer(budget.get("focused_repairs"), "rework_budget.focused_repairs") != 1:
-        raise PolicyError("the policy permits exactly one focused repair")
+    focused_repairs = integer(budget.get("focused_repairs"), "rework_budget.focused_repairs", minimum=1)
+    if focused_repairs > 3:
+        raise PolicyError("the policy permits at most three focused repairs")
     if integer(budget.get("effort_escalations"), "rework_budget.effort_escalations") != 1:
         raise PolicyError("the policy permits exactly one effort escalation")
     return dict(policy)
@@ -1031,8 +1032,56 @@ def rework_decision(source: Mapping[str, Any], policy: Mapping[str, Any]) -> dic
     new_evidence = bool(source.get("new_evidence", False))
     repairs = integer(source.get("focused_repairs_used", 0), "focused_repairs_used")
     escalations = integer(source.get("effort_escalations_used", 0), "effort_escalations_used")
-    if repairs < int(policy["rework_budget"]["focused_repairs"]) and new_evidence:
-        return {"action": "FOCUSED_REPAIR", "reason": "one evidence-backed repair remains"}
+    strict_closure = any(
+        name in source
+        for name in (
+            "failure_evidence_ref", "target_action_ids", "marginal_net_substitution",
+            "repair_cost_weight", "repair_cost_weight_used", "repair_cost_weight_limit",
+        )
+    )
+    repair_limit = int(policy["rework_budget"]["focused_repairs"]) if strict_closure else 1
+    if strict_closure:
+        evidence_ref = source.get("failure_evidence_ref")
+        if not isinstance(evidence_ref, str) or not evidence_ref.strip():
+            raise PolicyError("failure_evidence_ref must be a non-empty string in strict closure mode")
+        target_action_ids = source.get("target_action_ids")
+        if (
+            not isinstance(target_action_ids, list)
+            or not target_action_ids
+            or any(not isinstance(item, str) or not item.strip() for item in target_action_ids)
+            or len(set(target_action_ids)) != len(target_action_ids)
+        ):
+            raise PolicyError("target_action_ids must be a non-empty unique string array in strict closure mode")
+        marginal = finite_number(source.get("marginal_net_substitution"), "marginal_net_substitution", minimum=-1.0)
+        repair_cost = finite_number(source.get("repair_cost_weight"), "repair_cost_weight")
+        repair_cost_used = finite_number(source.get("repair_cost_weight_used", 0), "repair_cost_weight_used")
+        repair_cost_limit = finite_number(source.get("repair_cost_weight_limit"), "repair_cost_weight_limit")
+        if repair_cost_limit <= 0:
+            raise PolicyError("repair_cost_weight_limit must be positive")
+        if repair_cost <= 0:
+            raise PolicyError("repair_cost_weight must be positive")
+        if not new_evidence:
+            return {"action": "REPAIR_LOCKED", "reason": "strict closure repair requires new failure evidence"}
+        if marginal <= 0:
+            return {"action": "SOL_RECLAIM", "reason": "focused repair has no positive marginal net substitution"}
+        if repair_cost_used + repair_cost > repair_cost_limit:
+            return {"action": "REPAIR_LOCKED", "reason": "frozen repair cost budget is exhausted"}
+    if repairs < repair_limit and new_evidence:
+        result = {
+            "action": "FOCUSED_REPAIR",
+            "reason": "an evidence-backed repair remains within the frozen limit",
+            "remaining_focused_repairs": repair_limit - repairs - 1,
+        }
+        if strict_closure:
+            result.update({
+                "failure_evidence_ref": evidence_ref,
+                "target_action_ids": target_action_ids,
+                "marginal_net_substitution": marginal,
+                "remaining_repair_cost_weight": repair_cost_limit - repair_cost_used - repair_cost,
+            })
+        return result
+    if strict_closure and repairs >= repair_limit:
+        return {"action": "REPAIR_LOCKED", "reason": "focused repair attempt limit is exhausted"}
     if bool(source.get("can_repartition", False)):
         return {"action": "REPARTITION", "reason": "repair budget is exhausted or unsupported; reduce coupling"}
     efforts = list(policy["effort_order"])

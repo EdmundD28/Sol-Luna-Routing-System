@@ -11,7 +11,7 @@ This revision adds executable policy and evidence controls. It is still an exper
 - Predictive routing compares Sol-only delivery with Luna `low`, `medium`, `high`, `xhigh`, and `max` using expected accepted-result credits and time. The user-facing word `light` is accepted as an alias for Codex `low`.
 - A lower-effort failure is not required before direct XHigh or Max selection.
 - Production routing defaults to one active Luna writer, but concurrency is not the objective. Reuse the same Luna while the domain and assumptions remain stable; switch when they change, and add a writer only when policy permits it and marginal net substitution stays positive.
-- A stable-domain delegation envelope lets Luna self-decompose, implement, preflight, and close out inside frozen outer constraints. Schema-2 handoff evidence weights accepted coverage by the estimated Sol baseline and removes a whole claim when Sol replays it; it is structural routing evidence, not a plan-allowance measurement.
+- The legacy schema-2 delegation envelope remains readable and conservative at whole-claim level. The strict closure contract adds fine-grained responsibility units, read-only Sol acceptance, same-Luna repair, and partial reclaim; both are structural routing evidence rather than plan-allowance measurements.
 - Repair authority is frozen by route-independent acceptance claims or baseline weight; splitting work into more packages never creates more repair budget.
 - Risk-proportional review avoids replaying clean low-risk work while requiring deep review for material risk and discrepancies.
 - Runtime receipts compare expected identity and boundary values with host-observed records.
@@ -19,7 +19,7 @@ This revision adds executable policy and evidence controls. It is still an exper
 - Evidence-ledger schema 5 requires retained Sol execution in new matched Sol-Luna records. Older schemas remain readable with their origin preserved but cannot satisfy the current measurement-policy gate. Schema 4 credit trust remains fail-closed: self-declared exact sources cannot pass, and claim-index schema 2 binds each external claim to the complete normalized record and a unique receipt. The ledger does not validate provider signatures or collect Codex desktop billing data.
 - A five-pair matched bounded-function campaign achieved equal independent acceptance and zero final defects, but Sol→Luna regressed to 4.08× the median diagnostic tokens and 5.42× the median elapsed time. It did not capture five-hour or weekly plan-limit readings, so it cannot decide subscription-allowance economics.
 - A later [matched allowance pilot p002](docs/benchmark/matched-allowance-p002-2026-08-28.md) found that two Luna High writers failed equal acceptance, consumed no less displayed five-hour allowance, and were 4.72% slower. The subsequent [p003 campaign](docs/benchmark/matched-allowance-p003-2026-08-28.md) found only a displayed 1.25× five-hour advantage for fixed one-package Sol-Luna, with worse quality and 31.2% longer elapsed time. Policy 1.5.0 therefore keeps one active Luna as the default while removing the artificial requirement that Sol retain an implementation package merely to create overlap.
-- The p004 rolling-context campaign repeated an allowance signal: two Sol-only arms consumed 7 displayed five-hour percentage points versus 2 for Sol-Luna, a 3.5× point estimate. All four arms missed independent acceptance and Sol-Luna was 0.75% slower in aggregate. v0.10 therefore remains `HOLD` and proves no economic advantage, repair expansion, or higher writer cap.
+- The p004 rolling-context campaign repeated an allowance signal: two Sol-only arms consumed 7 displayed five-hour percentage points versus 2 for Sol-Luna, a 3.5× point estimate. All four arms missed independent acceptance and Sol-Luna was 0.75% slower in aggregate. The later [P005 field pilot](docs/benchmark/p005-field-pilot-2026-08-28.md) passed equal hidden acceptance but was 2.17× slower; its displayed allowance readings were contaminated by unequal controller polling, and Sol replay shadowed the only coarse Luna claim. Both remain `HOLD`.
 - Local lifecycle tests validate the state machine. A [native desktop-app smoke](docs/validation/native-app-lifecycle-smoke-2026-08-26.md) exercised real Luna delegation, one repair, stale-evidence rejection, timeout/interruption, same-child continuation, and pre-dispatch ownership conflict rejection. It did not prove that the packaged custom TOML profile was loaded; the automated opt-in runner remains unavailable until Codex exposes a stable non-interactive custom-subagent surface.
 
 See [the p004 rolling-context campaign](docs/benchmark/matched-allowance-p004-2026-08-28.md), [the p003 allowance campaign](docs/benchmark/matched-allowance-p003-2026-08-28.md), [the p002 allowance pilot](docs/benchmark/matched-allowance-p002-2026-08-28.md), [the matched bounded-function campaign](docs/benchmark/matched-bounded-campaign-2026-08-26.md), and the [older preliminary comparison](docs/benchmark/preliminary-comparison.md).
@@ -32,7 +32,7 @@ Invoke explicitly:
 $sol-luna <substantial task>
 ```
 
-Sol estimates each eligible route before dispatch. Policy `1.5.0` requires at least 80% predicted first-pass acceptance, no predicted final-defect regression, at least 50% expected accepted-cost reduction by default, and no expected elapsed regression. It evaluates complete single-owner allocations, measures coordination against the Sol-only baseline so cheaper Luna work is never penalized, permits complementary parallelism, sequential handoff, or an explicitly empty controller queue, and rejects shadow ownership. It selects the lowest expected accepted-delivery cost—not automatically the lowest effort, highest coverage, or fewest workers. It is a route guard; only matched account-meter readings prove subscription-allowance savings.
+Sol estimates each eligible route before dispatch. Policy `1.6.0` requires at least 80% predicted first-pass acceptance, no predicted final-defect regression, at least 50% expected accepted-cost reduction by default, and no expected elapsed regression. It evaluates complete single-owner allocations, measures coordination against the Sol-only baseline so cheaper Luna work is never penalized, permits complementary parallelism, sequential handoff, or an explicitly empty controller queue, and rejects shadow ownership. Evidence-backed repair can continue with the same Luna for at most three attempts only while a frozen cost budget and positive marginal net substitution remain; an arbitrary one-repair cutoff no longer forces early Sol replay. It is a route guard; only matched account-meter readings prove subscription-allowance savings.
 
 ```powershell
 python .agents/skills/sol-luna/scripts/routing_policy.py template
@@ -70,6 +70,7 @@ The Skill uses standard-library Python tools:
 |---|---|
 | `routing_policy.py` | Predict route, effort, concurrency, review depth, and rework action |
 | `net_substitution.py` | Predict structural substitution and expected Sol-labor reduction, using the lower value without enabling automatic execution |
+| `closure_contract.py` | Validate fine-grained same-Luna handoff, evidence-bound repair, read-only Sol acceptance, partial reclaim, and fresh closure |
 | `ownership_guard.py` | Validate frozen schema-2 executor/unit/acceptance partitions and their deterministic digest while preserving schema-1 plan checks |
 | `lifecycle_contract.py` | Replay package transitions, stale evidence, timeout, repair, escalation, continuation, and acceptance |
 | `native_lifecycle_receipt.py` | Fail closed unless a native runner proves profile loading, requested/observed identity and boundaries, timeout, child continuity, stale rejection, repair, and ownership blocking |
@@ -151,6 +152,7 @@ Setup manages only the Sol-Luna Skill and named agent TOMLs. It uses source hash
   scripts/
     routing_policy.py
     net_substitution.py
+    closure_contract.py
     ownership_guard.py
     lifecycle_contract.py
     native_lifecycle_receipt.py
@@ -181,7 +183,7 @@ git diff --check
 
 When a native runner can emit the strict receipt, opt in with `SOL_LUNA_NATIVE_RECEIPT` and run `python -m unittest discover -s tests/live -v`. A missing receipt skips; an incomplete or self-reported receipt fails closed.
 
-CI runs the behavioral suite on Windows and Ubuntu with Python 3.11 and 3.14. Tests cover predictive direct effort selection, hard quality/cost/time gates, writer caps, rework limits, review depth, runtime boundary mismatches, ownership conflicts, frozen handoffs, stale evidence, timeout and continuation states, atomic concurrent appends, phase reconciliation, matched-cohort isolation, and setup lifecycle.
+CI runs the behavioral suite on Windows and Ubuntu with Python 3.11 and 3.14. Tests cover predictive direct effort selection, hard quality/cost/time gates, writer caps, evidence-bound same-Luna closure and partial reclaim, review depth, runtime boundary mismatches, ownership conflicts, frozen handoffs, stale evidence, timeout and continuation states, atomic concurrent appends, phase reconciliation, matched-cohort isolation, and setup lifecycle.
 
 These tests and the native app smoke do not prove routing economics. The completed five-pair campaign supplies diagnostic token and elapsed evidence, but no plan-limit readings; see the [objective completion audit](docs/validation/objective-completion-audit-2026-08-26.md). A subscription benchmark uses matched changes on the same account meters: five-hour percentage points are the higher-resolution primary measure, while weekly percentage points are reported separately as corroboration. Purchased-credit estimates and raw diagnostic tokens remain secondary and cannot be substituted for included allowance.
 

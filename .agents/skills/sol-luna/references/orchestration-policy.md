@@ -55,7 +55,7 @@ Wait only when no ready package, review, integration preparation, or acceptance 
 
 When interfaces, ownership, and acceptance are stable, Sol may freeze one outer envelope instead of pre-scripting every Luna microtask. The envelope fixes writable scope, forbidden actions, acceptance IDs, allocation fingerprint, and final handoff contract. One Luna may then decompose its own internal dependency graph, implement, run deterministic preflight checks, make one bounded evidence-backed correction, and close out within that envelope. Internal units never expand authority or ownership, and the final handoff remains a single frozen candidate.
 
-The schema-2 handoff binds the candidate digest, exact changed-path union, every acceptance result, internal unit graph, replacement actions, baseline Sol cost claims, residual risks, and closeout state. Sol performs one risk-proportional final verification against that exact candidate. If Sol repeats a Luna action, record the action and a bounded reason: discrepancy, safety risk, nondeterminism, or candidate drift. A replay shadows its whole claim and subtracts that claim's baseline cost from accepted coverage; extra Luna calls or internal units do not increase coverage by themselves.
+The schema-2 handoff binds the candidate digest, exact changed-path union, every acceptance result, internal unit graph, replacement actions, baseline Sol cost claims, residual risks, and closeout state. Material envelopes use a small set of acceptance-bound responsibility units so a replay shadows only the affected unit; one unit is valid only when the work is genuinely indivisible. Sol performs one risk-proportional verification against each exact candidate. Its acceptance lane is read-only and path-disjoint from Luna ownership. If Sol repeats a Luna action, record the action and a bounded reason: discrepancy, safety risk, nondeterminism, or candidate drift. Extra Luna calls or internal units do not increase coverage by themselves.
 
 ## Risk-proportional review
 
@@ -71,10 +71,10 @@ Only Sol assigns final `ACCEPTED`. Other dispositions are `HANDOFF_AWAITING_REVI
 
 After a failed review:
 
-1. Freeze one route-independent repair allowance by acceptance claim or baseline weight. Exact new evidence may spend that allowance on a bounded positive-benefit correction, but splitting or renaming packages never increases it.
+1. Freeze one route-independent repair allowance by acceptance claim or baseline weight, plus a hard ceiling of three focused attempts. Exact new evidence may return the targeted unit to the same Luna while both the cost allowance and positive marginal net substitution remain. Splitting or renaming packages never increases the allowance, and repeating an unchanged correction is forbidden.
 2. Otherwise repartition when coupling or ambiguity caused the failure.
 3. Otherwise permit one evidence-backed effort escalation to the next supported tier.
-4. When repair and escalation budgets are exhausted, Sol reclaims the package.
+4. When repair and escalation budgets are exhausted, Sol reclaims only the affected responsibility units and records their baseline weight as shadowed.
 
 Do not restart an unchanged vague package. `BLOCKED` is reserved for missing authority, decisions, inputs, permissions, or external state; implementation and verification failures remain in-scope failures.
 

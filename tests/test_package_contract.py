@@ -30,6 +30,7 @@ class PackageContractTests(unittest.TestCase):
             "scripts/evidence_ledger.py",
             "scripts/phase_tracker.py",
             "scripts/delegation_contract.py",
+            "scripts/closure_contract.py",
             "scripts/net_substitution.py",
         ):
             self.assertTrue((SKILL_ROOT / relative_path).is_file(), relative_path)
@@ -98,12 +99,13 @@ class PackageContractTests(unittest.TestCase):
         self.assertIn("actual_sol_labor_reduction", policy)
         self.assertIn("structural_net_substitution", policy)
         self.assertIn("min(actual_sol_labor_reduction, structural_net_substitution)", policy)
-        self.assertIn("splitting or renaming packages never increases it", policy)
+        self.assertIn("Splitting or renaming packages never increases the allowance", policy)
         self.assertIn("one complete top-level task in one continuous run by a single real Sol controller", policy)
         self.assertIn("must not pre-split, separately dispatch, or artificially serialize Sol packages", policy)
         self.assertIn("v0.10 evidence remains `HOLD`", policy)
         self.assertIn("automatic_execution_allowed: false", policy)
-        self.assertIn("v0.10 therefore remains `HOLD` and proves no economic advantage", readme)
+        self.assertIn("P005 field pilot", readme)
+        self.assertIn("Both remain `HOLD`", readme)
 
     def test_common_referee_is_external_but_luna_specific_sol_labor_is_internal(self) -> None:
         skill = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
@@ -121,9 +123,10 @@ class PackageContractTests(unittest.TestCase):
         skill = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
         policy = (SKILL_ROOT / "references" / "orchestration-policy.md").read_text(encoding="utf-8")
         self.assertIn("Sol does not pre-script Luna's internal units", skill)
-        self.assertIn("subtract the whole affected baseline claim", skill)
+        self.assertIn("Repeated implementation shadows the affected responsibility unit", skill)
         self.assertIn("Stable-domain delegation envelope", policy)
-        self.assertIn("A replay shadows its whole claim", policy)
+        self.assertIn("a replay shadows only the affected unit", policy)
+        self.assertIn("scripts/closure_contract.py", skill)
         self.assertIn("net substitution of expensive Sol work", skill)
         self.assertIn("schema-2 candidate-bound handoff", skill)
 
