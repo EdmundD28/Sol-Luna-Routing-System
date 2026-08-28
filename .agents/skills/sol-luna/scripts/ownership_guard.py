@@ -82,6 +82,32 @@ def require_bool(value: Any, field: str) -> bool:
 def normalize_path(value: Any, field: str) -> str:
     if (
         not isinstance(value, str) or not value or value != value.strip()
+        or "\n" in value or "\r" in value or "\x00" in value or "\\" in value
+    ):
+        raise OwnershipError(f"{field} must be a non-empty single-line path")
+    raw = value
+    if (
+        not raw or raw.startswith("~") or PurePosixPath(raw).is_absolute()
+        or PureWindowsPath(value).is_absolute() or re.match(r"^[A-Za-z]:", raw)
+    ):
+        raise OwnershipError(f"{field} must be repository-relative")
+    # PurePosixPath collapses empty, ``.`` and interior ``..`` segments, so
+    # inspect the lexical form before asking it for normalized parts.
+    lexical_parts = raw.split("/")
+    if any(part in {"", ".", ".."} for part in lexical_parts):
+        raise OwnershipError(f"{field} contains an unsafe path segment")
+    parts = PurePosixPath(raw).parts
+    if any(part in {"", ".", ".."} for part in parts):
+        raise OwnershipError(f"{field} contains an unsafe path segment")
+    if any(part.casefold() in PRIVATE_SEGMENTS for part in parts):
+        raise OwnershipError(f"{field} contains a sensitive private path")
+    return "/".join(parts)
+
+
+def normalize_legacy_path(value: Any, field: str) -> str:
+    """Normalize schema-1 paths using its original compatibility rules."""
+    if (
+        not isinstance(value, str) or not value or value != value.strip()
         or "\n" in value or "\r" in value or "\x00" in value
     ):
         raise OwnershipError(f"{field} must be a non-empty single-line path")
@@ -91,8 +117,8 @@ def normalize_path(value: Any, field: str) -> str:
         or PureWindowsPath(value).is_absolute() or re.match(r"^[A-Za-z]:", raw)
     ):
         raise OwnershipError(f"{field} must be repository-relative")
-    # PurePosixPath collapses a bare ``.`` and interior ``./`` segments,
-    # so inspect the lexical form before asking it for normalized parts.
+    # Preserve schema 1's historical lexical normalization: backslashes and
+    # trailing separators are normalized, while traversal remains rejected.
     lexical_parts = raw.split("/")
     if any(part in {".", ".."} for part in lexical_parts):
         raise OwnershipError(f"{field} contains an unsafe path segment")
@@ -108,11 +134,17 @@ def overlaps(left: str, right: str) -> bool:
     return left == right or left.startswith(right + "/") or right.startswith(left + "/")
 
 
-def path_list(value: Any, field: str, *, allow_empty: bool = False) -> list[str]:
+def path_list(
+    value: Any,
+    field: str,
+    *,
+    allow_empty: bool = False,
+    normalizer=normalize_path,
+) -> list[str]:
     if not isinstance(value, list) or (not value and not allow_empty):
         qualifier = "a JSON array" if allow_empty else "a non-empty JSON array"
         raise OwnershipError(f"{field} must be {qualifier}")
-    result = [normalize_path(item, f"{field}[{index}]") for index, item in enumerate(value)]
+    result = [normalizer(item, f"{field}[{index}]") for index, item in enumerate(value)]
     if len(result) != len(set(result)):
         raise OwnershipError(f"{field} contains duplicate paths")
     for index, left in enumerate(result):
@@ -150,7 +182,11 @@ def _legacy_check_plan(source: Mapping[str, Any]) -> dict[str, Any]:
         seen_ids.add(package_id)
         normalized.append({
             "package_id": package_id,
-            "write_scope": path_list(package.get("write_scope"), f"packages[{index}].write_scope"),
+            "write_scope": path_list(
+                package.get("write_scope"),
+                f"packages[{index}].write_scope",
+                normalizer=normalize_legacy_path,
+            ),
         })
     normalized.sort(key=lambda item: item["package_id"])
     conflicts: list[dict[str, str]] = []
@@ -258,18 +294,41 @@ def _normalize_v2(source: Mapping[str, Any]) -> tuple[dict[str, Any], list[dict[
         acceptances.append(normalized)
 
     owned_objects = [
-        ("work_unit", item["unit_id"], path) for item in units for path in item["paths"]
+        ("work_unit", item["unit_id"], item["executor_id"], item["unit_id"], path)
+        for item in units for path in item["paths"]
     ] + [
-        ("acceptance", item["acceptance_id"], path) for item in acceptances for path in item["paths"]
+        (
+            "acceptance", item["acceptance_id"], item["executor_id"], item["unit_id"], path
+        )
+        for item in acceptances for path in item["paths"]
     ]
     conflicts: list[dict[str, str]] = []
-    for left_index, (left_kind, left_id, left_path) in enumerate(owned_objects):
-        for right_kind, right_id, right_path in owned_objects[left_index + 1 :]:
-            if overlaps(left_path, right_path):
+    for left_index, (
+        left_kind, left_id, left_executor, left_unit_id, left_path
+    ) in enumerate(owned_objects):
+        for (
+            right_kind, right_id, right_executor, right_unit_id, right_path
+        ) in owned_objects[left_index + 1 :]:
+            # Exact path reuse is safe only inside one executor's allocation
+            # and work unit (for example, a work unit and its acceptance can
+            # name the same path). Directory-prefix ownership is never safe:
+            # a broad path such as ``src`` would shadow every descendant path,
+            # even when both entries happen to have the same executor.
+            same_path = left_path == right_path
+            same_package = (
+                left_executor == right_executor
+                and left_unit_id == right_unit_id
+                and {left_kind, right_kind} == {"work_unit", "acceptance"}
+            )
+            if (same_path and not same_package) or (
+                not same_path and overlaps(left_path, right_path)
+            ):
                 conflicts.append({
                     "left_kind": left_kind, "left_id": left_id, "left_path": left_path,
                     "right_kind": right_kind, "right_id": right_id, "right_path": right_path,
                 })
+    if conflicts:
+        raise OwnershipError("schema 2 contains prefix-overlapping or duplicate ownership paths")
 
     raw_partitions = source.get("partitions")
     if not isinstance(raw_partitions, list) or not raw_partitions:
@@ -390,8 +449,15 @@ def check_changes(source: Mapping[str, Any]) -> dict[str, Any]:
     if type(source.get("schema_version")) is not int or source["schema_version"] != LEGACY_SCHEMA_VERSION:
         raise OwnershipError("unsupported changes schema_version")
     package_id = require_identifier(source.get("package_id"), "package_id")
-    owned = path_list(source.get("owned_paths"), "owned_paths")
-    changed = path_list(source.get("changed_paths", []), "changed_paths", allow_empty=True)
+    owned = path_list(
+        source.get("owned_paths"), "owned_paths", normalizer=normalize_legacy_path
+    )
+    changed = path_list(
+        source.get("changed_paths", []),
+        "changed_paths",
+        allow_empty=True,
+        normalizer=normalize_legacy_path,
+    )
     frozen = require_bool(source.get("handoff_frozen", False), "handoff_frozen")
     repair = require_bool(source.get("repair_authorized", False), "repair_authorized")
     violations = [path for path in changed if not contains(owned, path)]

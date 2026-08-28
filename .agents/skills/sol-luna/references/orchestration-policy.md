@@ -47,7 +47,7 @@ Do not infer that the child's default current directory equals the target reposi
 
 Maintain `ready`, `awaiting review`, and `approved repair` queues. Dispatch ready non-conflicting work within the writer cap. While Luna runs, Sol performs only Sol-owned critical-path work: architecture, acceptance design, integration preparation, or review of another frozen candidate. Reuse retained worker context only when it saves more than it biases review.
 
-The normal production shape is one Sol controller plus one active Luna writer. Active concurrency and total Luna participation are separate: the same Luna may pull multiple ready, non-conflicting packages from the rolling queue when each still has positive marginal delivery benefit. Sol concurrently advances only disjoint critical-path units; it never builds a shadow implementation of Luna-owned work. Every unit is costed once, and mixed Sol/Luna dependencies determine predicted overlap and elapsed time. If no legitimate Sol work remains, record `WAIT_ALLOWED` instead of inventing work. Use a second active Luna writer only in a pre-registered benchmark until matched included-allowance and elapsed evidence supports a later policy release.
+The normal production shape is one Sol controller plus one active Luna writer. Active concurrency and accepted Luna coverage are separate: maximize accepted coverage only where Luna replaces real Sol work and each package keeps positive marginal delivery benefit. Prefer the same Luna for adjacent packages with stable interfaces so repository and domain context are amortized; change workers when assumptions, domain, or independence needs change. Sol concurrently advances only disjoint critical-path units; it never builds a shadow implementation of Luna-owned work. Every unit is costed once, and mixed Sol/Luna dependencies determine predicted overlap and elapsed time. If no legitimate Sol work remains, record `WAIT_ALLOWED` instead of inventing work. Use a second active Luna writer only in a pre-registered benchmark until matched included-allowance and elapsed evidence supports a later policy release.
 
 Wait only when no ready package, review, integration preparation, or acceptance work remains. Inspect one compact status snapshot before interrupting a stalled worker; do not turn polling into its own workload.
 
@@ -65,7 +65,7 @@ Only Sol assigns final `ACCEPTED`. Other dispositions are `HANDOFF_AWAITING_REVI
 
 After a failed review:
 
-1. Permit one focused repair only when exact new evidence identifies a bounded correction.
+1. Permit at most one focused repair for that package only when exact new evidence identifies a bounded correction and its expected marginal saving remains positive. A repair used by another package does not consume this package's budget.
 2. Otherwise repartition when coupling or ambiguity caused the failure.
 3. Otherwise permit one evidence-backed effort escalation to the next supported tier.
 4. When repair and escalation budgets are exhausted, Sol reclaims the package.

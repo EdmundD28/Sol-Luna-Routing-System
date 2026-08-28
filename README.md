@@ -11,16 +11,17 @@ This revision adds executable policy and evidence controls. It is still an exper
 - Predictive routing compares Sol-only delivery with Luna `low`, `medium`, `high`, `xhigh`, and `max` using expected accepted-result credits and time. The user-facing word `light` is accepted as an alias for Codex `low`.
 - A lower-effort failure is not required before direct XHigh or Max selection.
 - Production routing defaults to one active Luna writer, but that writer may roll through multiple ready packages from one complete, single-owner allocation. A second active writer remains benchmark-only until matched plan-meter evidence supports an explicit policy release.
-- Rework is limited to one evidence-backed focused repair, then repartition, one effort escalation, or Sol reclaim.
+- Each package may receive one evidence-backed focused repair while its marginal saving remains positive; another package's repair does not consume that budget.
 - Risk-proportional review avoids replaying clean low-risk work while requiring deep review for material risk and discrepancies.
 - Runtime receipts compare expected identity and boundary values with host-observed records.
 - Ownership, frozen handoffs, lifecycle transitions, phase evidence, atomic ledger writes, and matched cohorts have executable validators.
 - Evidence-ledger schema 5 requires retained Sol execution in new matched Sol-Luna records. Older schemas remain readable with their origin preserved but cannot satisfy the current measurement-policy gate. Schema 4 credit trust remains fail-closed: self-declared exact sources cannot pass, and claim-index schema 2 binds each external claim to the complete normalized record and a unique receipt. The ledger does not validate provider signatures or collect Codex desktop billing data.
 - A five-pair matched bounded-function campaign achieved equal independent acceptance and zero final defects, but Sol→Luna regressed to 4.08× the median diagnostic tokens and 5.42× the median elapsed time. It did not capture five-hour or weekly plan-limit readings, so it cannot decide subscription-allowance economics.
 - A later [matched allowance pilot p002](docs/benchmark/matched-allowance-p002-2026-08-28.md) found that two Luna High writers failed equal acceptance, consumed no less displayed five-hour allowance, and were 4.72% slower. The subsequent [p003 campaign](docs/benchmark/matched-allowance-p003-2026-08-28.md) found only a displayed 1.25× five-hour advantage for fixed one-package Sol-Luna, with worse quality and 31.2% longer elapsed time. Policy 1.4.0 therefore keeps one active Luna while allowing higher rolling delegated coverage from a complete allocation; that mechanism still needs a new matched campaign.
+- The p004 rolling-context campaign repeated a strong allowance signal: two Sol-only arms consumed 7 displayed five-hour percentage points versus 2 for Sol-Luna, a 3.5× point estimate. All four arms missed independent acceptance and Sol-Luna was 0.75% slower in aggregate, so the result remains `HOLD`; it supports smarter accepted Luna coverage and per-package repair budgets, not a success claim or higher writer cap.
 - Local lifecycle tests validate the state machine. A [native desktop-app smoke](docs/validation/native-app-lifecycle-smoke-2026-08-26.md) exercised real Luna delegation, one repair, stale-evidence rejection, timeout/interruption, same-child continuation, and pre-dispatch ownership conflict rejection. It did not prove that the packaged custom TOML profile was loaded; the automated opt-in runner remains unavailable until Codex exposes a stable non-interactive custom-subagent surface.
 
-See [the p003 allowance campaign](docs/benchmark/matched-allowance-p003-2026-08-28.md), [the p002 allowance pilot](docs/benchmark/matched-allowance-p002-2026-08-28.md), [the matched bounded-function campaign](docs/benchmark/matched-bounded-campaign-2026-08-26.md), and the [older preliminary comparison](docs/benchmark/preliminary-comparison.md).
+See [the p004 rolling-context campaign](docs/benchmark/matched-allowance-p004-2026-08-28.md), [the p003 allowance campaign](docs/benchmark/matched-allowance-p003-2026-08-28.md), [the p002 allowance pilot](docs/benchmark/matched-allowance-p002-2026-08-28.md), [the matched bounded-function campaign](docs/benchmark/matched-bounded-campaign-2026-08-26.md), and the [older preliminary comparison](docs/benchmark/preliminary-comparison.md).
 
 ## Core workflow
 
@@ -97,8 +98,9 @@ Preview is non-mutating:
 python scripts/setup.py preview
 ```
 
-The default user Skill location is `~/.agents/skills`. If Preview reports a
-legacy user Skill under `~/.codex/skills/sol-luna`,
+The default user Skill location is `<codex-home>/skills`, normally
+`~/.codex/skills`. If the managed state records an older Skill under
+`~/.agents/skills/sol-luna`,
 inspect a state-bound migration plan instead of overwriting or manually
 copying files:
 
@@ -115,7 +117,7 @@ unsafe skills root is rejected rather than deleting a newly written tree.
 When many skills are installed, the initial skill list may omit some entries
 because it is budgeted; restart Codex if a changed skill is not detected. See
 the official [Codex skill discovery documentation](https://learn.chatgpt.com/docs/build-skills#where-codex-loads-local-skills).
-Update any links or scripts that still point at the old `~/.codex/skills`
+Update any links or scripts that still point at the old `~/.agents/skills`
 location; do not create a duplicate skill tree.
 
 After reviewing the plan:

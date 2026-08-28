@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import math
 import subprocess
 import sys
 import tempfile
@@ -152,6 +153,73 @@ class PhaseTrackerTests(unittest.TestCase):
             TRACKER.start(
                 sol_luna, "sol_execution", executor_id="sol-main", at="2026-08-26T00:00:00+00:00"
             )
+
+    def test_non_string_route_identity_and_phase_fail_as_tracker_errors(self) -> None:
+        with self.assertRaises(TRACKER.TrackerError):
+            TRACKER.initialize("private-run", [])
+
+        journal = TRACKER.initialize("private-run", "SOL_ONLY")
+        malformed = dict(journal)
+        malformed["route"] = []
+        with self.assertRaises(TRACKER.TrackerError):
+            TRACKER.validate_journal(malformed)
+        for phase, executor_id, interval_id in (
+            ([], "sol-main", None),
+            ("sol_execution", [], None),
+            ("sol_execution", "sol-main", {}),
+        ):
+            with self.subTest(phase=phase, executor_id=executor_id, interval_id=interval_id):
+                with self.assertRaises(TRACKER.TrackerError):
+                    TRACKER.start(
+                        journal, phase, executor_id=executor_id, interval_id=interval_id,
+                    )
+        with self.assertRaises(TRACKER.TrackerError):
+            TRACKER.stop(journal, [], executor_id="sol-main")
+
+    def test_cli_non_string_route_fails_with_one_tracker_error_line(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "phase.json"
+            path.write_text(json.dumps({"schema_version": 2, "route": []}), encoding="utf-8")
+            completed = self._run_cli("export", "--journal", str(path))
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertNotIn("Traceback", completed.stderr)
+            self.assertEqual(len(completed.stderr.splitlines()), 1)
+
+    def test_export_fails_closed_when_finite_credits_overflow(self) -> None:
+        largest = math.nextafter(float("inf"), 0.0)
+        journal = TRACKER.initialize("private-run", "SOL_ONLY", at="2026-08-26T00:00:00+00:00")
+        for interval_id, start, end in (("first", 0, 1), ("second", 1, 2)):
+            journal = TRACKER.start(
+                journal, "sol_execution", executor_id="sol-main", interval_id=interval_id,
+                at=f"2026-08-26T00:00:0{start}+00:00",
+            )
+            journal = TRACKER.stop(
+                journal, "sol_execution", executor_id="sol-main", interval_id=interval_id,
+                at=f"2026-08-26T00:00:0{end}+00:00", credits=largest,
+            )
+        with self.assertRaisesRegex(TRACKER.TrackerError, "aggregate is not finite"):
+            TRACKER.export(journal)
+
+    def test_cli_export_finite_credit_overflow_has_no_non_finite_output(self) -> None:
+        largest = math.nextafter(float("inf"), 0.0)
+        journal = TRACKER.initialize("private-run", "SOL_ONLY", at="2026-08-26T00:00:00+00:00")
+        for interval_id, start, end in (("first", 0, 1), ("second", 1, 2)):
+            journal = TRACKER.start(
+                journal, "sol_execution", executor_id="sol-main", interval_id=interval_id,
+                at=f"2026-08-26T00:00:0{start}+00:00",
+            )
+            journal = TRACKER.stop(
+                journal, "sol_execution", executor_id="sol-main", interval_id=interval_id,
+                at=f"2026-08-26T00:00:0{end}+00:00", credits=largest,
+            )
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "phase.json"
+            TRACKER.atomic_write(path, journal)
+            completed = self._run_cli("export", "--journal", str(path))
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertNotIn("Infinity", completed.stdout)
+            self.assertNotIn("NaN", completed.stdout)
+            self.assertNotIn("Traceback", completed.stderr)
 
     def test_end_before_own_start_is_rejected_without_global_order_constraint(self) -> None:
         journal = TRACKER.initialize("private-run", "SOL_LUNA", at="2026-08-26T00:00:00+00:00")

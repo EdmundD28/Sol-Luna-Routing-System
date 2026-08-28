@@ -127,10 +127,7 @@ class OwnershipGuardTests(unittest.TestCase):
         self.assertEqual(repaired["status"], "PASS")
 
     def test_absolute_and_traversal_paths_are_rejected(self) -> None:
-        for unsafe in (
-            "C:\\private\\file.py", "/etc/passwd", "src/../secret", ".", "src/./file.py",
-            "src/.ssh/key",
-        ):
+        for unsafe in ("C:\\private\\file.py", "/etc/passwd", "src/../secret", "src/\nfile.py"):
             with self.subTest(unsafe=unsafe), self.assertRaises(GUARD.OwnershipError):
                 GUARD.check_changes(
                     {
@@ -140,6 +137,85 @@ class OwnershipGuardTests(unittest.TestCase):
                         "changed_paths": [],
                     }
                 )
+
+    def test_schema_one_preserves_legacy_path_normalization(self) -> None:
+        result = GUARD.check_changes(
+            {
+                "schema_version": 1,
+                "package_id": "api-work",
+                "owned_paths": ["src\\api/"],
+                "changed_paths": ["src\\api\\handler.py"],
+            }
+        )
+        self.assertEqual(result["status"], "PASS")
+        self.assertEqual(result["changed_paths"], ["src/api/handler.py"])
+        plan = GUARD.check_plan(
+            {
+                "schema_version": 1,
+                "packages": [{"package_id": "api-work", "write_scope": ["src\\api/"]}],
+            }
+        )
+        self.assertEqual(plan["status"], "PASS")
+        self.assertEqual(plan["packages"][0]["write_scope"], ["src/api"])
+
+    def test_schema_two_rejects_cross_executor_duplicate_paths(self) -> None:
+        candidate = self._plan_v2()
+        candidate["work_units"][1]["paths"] = ["src/core.py"]
+        candidate["partitions"][1]["paths"] = ["src/core.py", "tests/test_ui.py"]
+        with self.assertRaisesRegex(GUARD.OwnershipError, "duplicate"):
+            GUARD.check_plan(candidate)
+
+    def test_schema_two_rejects_cross_executor_prefix_overlap(self) -> None:
+        candidate = self._plan_v2()
+        candidate["work_units"][1]["paths"] = ["src"]
+        candidate["partitions"][1]["paths"] = ["src", "tests/test_ui.py"]
+        with self.assertRaisesRegex(GUARD.OwnershipError, "prefix-overlapping"):
+            GUARD.check_plan(candidate)
+
+    def test_schema_two_allows_same_executor_multiple_disjoint_paths(self) -> None:
+        candidate = self._plan_v2()
+        candidate["work_units"][0]["paths"] = ["src/core.py", "src/core_helpers.py"]
+        candidate["partitions"][0]["paths"] = [
+            "src/core.py", "src/core_helpers.py", "tests/test_core.py"
+        ]
+        result = GUARD.check_plan(candidate)
+        self.assertEqual(result["status"], "PASS")
+        self.assertTrue(result["parallel_writes_allowed"])
+
+    def test_schema_two_allows_same_executor_duplicate_across_unit_and_acceptance(self) -> None:
+        candidate = self._plan_v2()
+        candidate["acceptances"][0]["paths"] = ["src/core.py"]
+        candidate["partitions"][0]["paths"] = ["src/core.py"]
+        result = GUARD.check_plan(candidate)
+        self.assertEqual(result["status"], "PASS")
+        self.assertTrue(result["parallel_writes_allowed"])
+
+    def test_schema_two_rejects_duplicate_paths_across_same_executor_work_units(self) -> None:
+        candidate = self._plan_v2()
+        candidate["work_units"][1]["executor_id"] = "sol-main"
+        candidate["work_units"][1]["paths"] = ["src/core.py"]
+        candidate["acceptances"][1]["executor_id"] = "sol-main"
+        candidate["partitions"][1]["executor_id"] = "sol-main"
+        candidate["partitions"][1]["paths"] = ["src/core.py", "tests/test_ui.py"]
+        with self.assertRaisesRegex(GUARD.OwnershipError, "duplicate"):
+            GUARD.check_plan(candidate)
+
+    def test_schema_two_rejects_noncanonical_repository_paths(self) -> None:
+        for unsafe in (
+            "src\\file.py", "src//file.py", "src/", "src/../secret", ".", "src/./file.py",
+            "src/\nfile.py", "/etc/passwd", "C:/private/file.py",
+        ):
+            candidate = self._plan_v2()
+            candidate["work_units"][0]["paths"] = [unsafe]
+            with self.subTest(unsafe=unsafe), self.assertRaises(GUARD.OwnershipError):
+                GUARD.check_plan(candidate)
+
+    def test_schema_two_rejects_trailing_slash_and_backslash_paths(self) -> None:
+        for unsafe in ("src/", "src\\file.py"):
+            candidate = self._plan_v2()
+            candidate["work_units"][0]["paths"] = [unsafe]
+            with self.subTest(unsafe=unsafe), self.assertRaises(GUARD.OwnershipError):
+                GUARD.check_plan(candidate)
 
     def test_schema_two_rejects_wrong_types_and_split_acceptance_partition(self) -> None:
         for field, value in (("frozen", 1), ("executors", {}), ("work_units", "units")):
@@ -189,6 +265,20 @@ class OwnershipGuardTests(unittest.TestCase):
         changed["work_units"][1]["paths"] = ["src/view.py"]
         changed["partitions"][1]["paths"] = ["src/view.py", "tests/test_ui.py"]
         self.assertNotEqual(GUARD.partition_digest(plan), GUARD.partition_digest(changed))
+
+    def test_schema_two_rejects_malformed_declared_partition_digest(self) -> None:
+        for declared in (
+            "sha256:" + "A" * 64,
+            "sha256:" + "0" * 63,
+            "sha256:" + "0" * 65,
+            "sha512:" + "0" * 64,
+        ):
+            candidate = self._plan_v2()
+            candidate["partition_digest"] = declared
+            with self.subTest(declared=declared), self.assertRaisesRegex(
+                GUARD.OwnershipError, "partition_digest"
+            ):
+                GUARD.check_plan(candidate)
 
     def test_schema_two_rejects_incomplete_or_cross_executor_ownership(self) -> None:
         for mutate in ("missing-unit", "wrong-acceptance", "bad-cover"):

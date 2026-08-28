@@ -82,6 +82,16 @@ class PackageContractTests(unittest.TestCase):
         self.assertIn("review never inflates overlap", readme)
         self.assertIn("legacy journals read-only", skill)
 
+    def test_rolling_policy_optimizes_accepted_coverage_without_global_repair_budget(self) -> None:
+        skill = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
+        policy = (SKILL_ROOT / "references" / "orchestration-policy.md").read_text(encoding="utf-8")
+        self.assertIn("accepted Luna coverage", skill)
+        self.assertIn("genuinely replaces", skill)
+        self.assertIn("reusing that worker", skill)
+        self.assertIn("one package's repair does not consume another package's budget", skill)
+        self.assertIn("same Luna for adjacent packages", policy)
+        self.assertIn("A repair used by another package does not consume this package's budget", policy)
+
 
 if __name__ == "__main__":
     unittest.main()

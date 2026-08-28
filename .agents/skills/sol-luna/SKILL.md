@@ -7,7 +7,7 @@ description: "Run an explicit, evidence-driven Sol-Luna delivery workflow that p
 
 Sol is the accountable controller. Luna executes or independently reviews bounded packages. Optimize the **accepted result**, not the first attempt, worker count, or raw token total.
 
-Quality and safety are hard gates. Among routes that satisfy the same independent acceptance contract and do not increase predicted final defects, minimize the user's included plan allowance first and elapsed time second, including Sol planning, Luna work, review, repair, and integration. Purchased-credit estimates may guide planning but cannot replace matched five-hour plan-limit readings in a completed economic claim. Invocation authorizes subagent delegation only for this task; it does not broaden filesystem, network, destructive-action, deployment, or approval authority.
+Quality and safety are hard gates. Among equally accepted routes, minimize included plan allowance first and elapsed time second, counting planning through integration. Purchased-credit estimates cannot replace matched five-hour plan readings. Invocation authorizes delegation only for this task, without broadening other authority.
 
 ## Decide before dispatch
 
@@ -19,7 +19,7 @@ For a material package, read [references/orchestration-policy.md](references/orc
 python .agents/skills/sol-luna/scripts/routing_policy.py evaluate --input ROUTE.json
 ```
 
-The versioned [routing policy](references/routing-policy.v1.json) accounts for a complete single-owner task allocation: Sol-only baseline work, Sol planning and retained critical-path packages, Luna packages, review, integration, expected recovery, final-defect probability, and a default 50% accepted-cost saving floor. Retained Sol work may overlap Luna time but never disappears from cost. The policy never launches work. This prediction is a feasibility guard, not proof about a subscription meter. If inputs cannot be estimated from matched history or concrete task evidence, retain the work in Sol or run a short read-only `luna_scout` feasibility probe.
+The versioned [routing policy](references/routing-policy.v1.json) costs the complete single-owner allocation, retained Sol work, review, integration, recovery, defect risk, and a default 50% saving floor. Overlap saves time, not cost. The policy is a feasibility guard and never launches work or proves subscription economics. Unknown inputs retain work in Sol or justify a bounded read-only `luna_scout` probe.
 
 ## Select Luna effort predictively
 
@@ -33,15 +33,15 @@ Start from the lowest effort that concrete task evidence can support. High or ab
 - `luna_worker_xhigh`: difficult debugging, shared interfaces, ambiguity, or costly failure.
 - `luna_worker_max`: exceptional reasoning-heavy work that decomposition cannot simplify.
 
-Use `luna_reviewer` for independent read-only review and `luna_scout` only for a strictly bounded feasibility probe. Keep this a Sol-Luna system; do not substitute Terra or another model family silently. If an effort-specific custom agent is unavailable, request `gpt-5.6-luna` and that exact reasoning effort explicitly, preserve the same sandbox, and disclose the fallback.
+Use `luna_reviewer` for read-only review and `luna_scout` for bounded feasibility. Do not silently substitute another model family. If a profile is unavailable, request `gpt-5.6-luna` with the exact effort, preserve the sandbox, and disclose the fallback.
 
 ## Bound packages and concurrency
 
-Every package binds a canonical repository root, then states one deliverable, readiness dependencies, repository-root-relative exclusive writable paths, read-only dependencies, shared files reserved to Sol, acceptance checks, forbidden actions, and a compact evidence handoff. Give the worker the root explicitly when the checkout is nested; never assume the child's current directory. Redact private absolute roots from publishable receipts. Two active writers must never have overlapping ownership. Handoff freezes the owned candidate until Sol opens a repair package.
+Every package binds the repository root, deliverable, dependencies, exclusive relative write paths, Sol-reserved files, acceptance, forbidden actions, and compact handoff. State the root explicitly for nested checkouts. Redact private roots from public receipts. Writers never overlap; handoff freezes ownership until repair.
 
 Before dispatch, run `scripts/ownership_guard.py check-plan`; schema 2 binds executors, units, acceptances, partitions, and digest, while schema 1 is compatibility-only. Before acceptance, compare changed paths with `check-changes`. Violations block acceptance. This is not a filesystem security boundary.
 
-Separate coverage from active concurrency. Default to **one active Luna writer**, which may pull multiple ready, non-conflicting, positive-benefit packages. Freeze one complete allocation: each unit has one executor; Sol owns only disjoint critical-path units and never shadow-implements Luna work. A second active writer remains benchmark-only until matched plan-meter evidence proves equal quality, lower allowance and elapsed time, followed by an explicit policy release. Read-only review may overlap safely.
+Separate accepted Luna coverage from active concurrency. Maximize the share of accepted work that Luna genuinely replaces, subject to positive marginal benefit and the same quality gate; more calls without avoided Sol work are not coverage. Default to **one active Luna writer**, which may pull multiple ready, non-conflicting packages. Prefer reusing that worker for adjacent packages in the same stable domain when retained context saves reload cost; switch when the domain or assumptions change. Freeze one complete allocation: each unit has one executor; Sol owns only disjoint critical-path units and never shadow-implements Luna work. A second active writer remains benchmark-only until matched plan-meter evidence proves equal quality, lower allowance and elapsed time, followed by an explicit policy release. Read-only review may overlap safely.
 
 Give Luna only the context required for its objective, contracts, evidence, and constraints. Luna must not spawn agents. Shared entry points, lockfiles, status files, and common generated outputs stay with Sol or one named integrator.
 
@@ -53,9 +53,9 @@ Luna's handoff is a claim. Sol assigns risk-proportional review before acceptanc
 python .agents/skills/sol-luna/scripts/routing_policy.py review --input REVIEW.json
 ```
 
-Use targeted review for clean low-risk work, standard review for ordinary packages, and deep review for shared interfaces, security/safety impact, scope discrepancies, failed checks, nondeterministic acceptance, high risk, or repaired work. Sol independently runs the smallest authoritative checks appropriate to that depth; it does not blindly repeat a clean investigation.
+Use targeted review for clean low-risk work, standard review for ordinary packages, and deep review for shared interfaces, safety impact, discrepancies, failures, nondeterminism, or repair. Run the smallest authoritative checks; do not replay a clean investigation.
 
-The rework budget is one focused evidence-backed repair, then repartition, one effort escalation, or Sol reclaim:
+Each package gets at most one focused evidence-backed repair while its expected marginal saving remains positive; one package's repair does not consume another package's budget. Then repartition, make one effort escalation, or let Sol reclaim that package:
 
 ```text
 python .agents/skills/sol-luna/scripts/routing_policy.py rework --input REWORK.json
@@ -63,7 +63,7 @@ python .agents/skills/sol-luna/scripts/routing_policy.py rework --input REWORK.j
 
 Never repeat the same correction without new evidence. Stop for user direction when the next action requires new authority, a product or architecture decision, destructive action, or expanded scope. Use `FAILED` for in-scope delivery failure and `BLOCKED` only for a missing external decision, input, permission, authority, or state change.
 
-Before completion, Sol verifies the final candidate, host-observed identities, fresh acceptance, ownership, integration, and dispositions. Profile labels are not runtime proof. Report route and effort, policy and allocation fingerprints, accepted Luna coverage, structural duplicate-work status, retained Sol execution and overlap, concurrency, repairs, review depth, acceptance, elapsed time, plan-meter readings, other diagnostics with source and uncertainty, and unverified boundaries.
+Before completion, Sol verifies the candidate, host-observed identities, fresh acceptance, ownership, integration, and dispositions. Report route, effort, fingerprints, accepted Luna coverage, duplicate work, overlap, concurrency, repairs, review, acceptance, elapsed time, plan readings, uncertainty, and unverified boundaries.
 
 ## Conditional tools
 

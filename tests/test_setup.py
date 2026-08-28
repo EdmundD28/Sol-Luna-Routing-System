@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import importlib.util
+import io
 import json
+import sys
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
 from unittest import mock
 
@@ -18,8 +21,122 @@ SPEC.loader.exec_module(SETUP)
 
 class SetupTests(unittest.TestCase):
     def roots(self, root: Path) -> tuple[Path, Path]:
-        return root / "codex-home", root / "skills-home"
+        return root / ".codex", root / ".agents" / "skills"
 
+    def test_default_skills_root_follows_codex_home(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            codex = Path(temp) / "custom-codex"
+            output = io.StringIO()
+            with mock.patch.object(sys, "argv", ["setup.py", "--codex-home", str(codex), "preview"]):
+                with redirect_stdout(output):
+                    self.assertEqual(SETUP.main(), 0)
+            plan = json.loads(output.getvalue())
+            skill_targets = [item["target"] for item in plan["operations"] if item["kind"] == "skill"]
+            self.assertTrue(skill_targets)
+            self.assertTrue(all(str(codex / "skills") in target for target in skill_targets))
+
+    def test_install_doctor_update_and_rollback(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            codex = Path(temp) / "codex"
+            skills = Path(temp) / "skills"
+            self.assertEqual(SETUP.apply(codex, skills)["doctor"]["status"], "healthy")
+            self.assertEqual(SETUP.apply(codex, skills, update=True)["doctor"]["status"], "healthy")
+            self.assertEqual(SETUP.rollback(codex, skills)["status"], "rolled-back")
+            self.assertFalse((skills / "sol-luna").exists())
+
+    def test_migration_preview_migrate_doctor_update_and_rollback(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            codex, old_skills = self.roots(root)
+            new_skills = codex / "skills"
+            SETUP.apply(codex, old_skills)
+            plan = SETUP.migration_plan(codex, new_skills)
+            self.assertTrue(plan["safe_to_apply"])
+            self.assertTrue(plan["writes_performed"] is False)
+            SETUP.migrate(codex, new_skills, plan["plan_fingerprint"])
+            self.assertEqual(SETUP.doctor(codex)["status"], "healthy")
+            self.assertFalse((old_skills / "sol-luna").exists())
+            self.assertTrue((new_skills / "sol-luna").exists())
+            self.assertEqual(SETUP.apply(codex, new_skills, update=True)["doctor"]["status"], "healthy")
+            SETUP.rollback(codex, new_skills)
+            self.assertTrue((old_skills / "sol-luna").exists())
+            self.assertFalse((new_skills / "sol-luna").exists())
+            self.assertEqual(json.loads(SETUP.state_path(codex).read_text())["skills_home"], str(old_skills.resolve()))
+            self.assertEqual(SETUP.doctor(codex)["status"], "healthy")
+
+    def test_legacy_user_file_rejects_migration_without_deleting_it(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            codex, old_skills = self.roots(root)
+            new_skills = codex / "skills"
+            SETUP.apply(codex, old_skills)
+            user_file = old_skills / "sol-luna" / "user-owned.txt"
+            user_file.write_text("keep", encoding="utf-8")
+            plan = SETUP.migration_plan(codex, new_skills)
+            self.assertFalse(plan["safe_to_apply"])
+            with self.assertRaises(SETUP.SetupError):
+                SETUP.migrate(codex, new_skills, plan["plan_fingerprint"])
+            self.assertTrue(user_file.exists())
+            self.assertFalse((new_skills / "sol-luna").exists())
+
+    def test_drift_target_conflict_and_stale_plan_are_zero_write(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            codex, old_skills = self.roots(root)
+            new_skills = codex / "skills"
+            SETUP.apply(codex, old_skills)
+            old_file = old_skills / "sol-luna" / "SKILL.md"
+            old_file.write_text("drift", encoding="utf-8")
+            with self.assertRaises(SETUP.SetupError):
+                SETUP.migration_plan(codex, new_skills)
+            old_file.write_bytes((SETUP.SKILL_SOURCE / "SKILL.md").read_bytes())
+            plan = SETUP.migration_plan(codex, new_skills)
+            target = new_skills / "sol-luna" / "SKILL.md"
+            target.parent.mkdir(parents=True)
+            target.write_text("collision", encoding="utf-8")
+            conflicted = SETUP.migration_plan(codex, new_skills)
+            self.assertFalse(conflicted["safe_to_apply"])
+            with self.assertRaises(SETUP.SetupError):
+                SETUP.migrate(codex, new_skills, conflicted["plan_fingerprint"])
+            self.assertEqual(target.read_text(encoding="utf-8"), "collision")
+            target.unlink()
+            old_file.write_text("changed after preview", encoding="utf-8")
+            with self.assertRaises(SETUP.SetupError):
+                SETUP.migrate(codex, new_skills, plan["plan_fingerprint"])
+            self.assertFalse((new_skills / "sol-luna" / "orchestration-policy.md").exists())
+
+    def test_untrusted_legacy_without_state_is_explicit_conflict(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            codex = root / ".codex"
+            old = root / ".agents" / "skills" / "sol-luna"
+            old.mkdir(parents=True)
+            (old / "user.txt").write_text("do not guess", encoding="utf-8")
+            plan = SETUP.migration_plan(codex, codex / "skills")
+            self.assertFalse(plan["safe_to_apply"])
+            self.assertTrue(any("untrusted-legacy-source" in item for item in plan["conflicts"]))
+            self.assertTrue((old / "user.txt").exists())
+
+    def test_failed_migration_restores_old_tree_agent_and_state(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            codex, old_skills = self.roots(root)
+            new_skills = codex / "skills"
+            SETUP.apply(codex, old_skills)
+            before_state = SETUP.state_path(codex).read_bytes()
+            old_file = old_skills / "sol-luna" / "SKILL.md"
+            old_bytes = old_file.read_bytes()
+            plan = SETUP.migration_plan(codex, new_skills)
+            with mock.patch.object(SETUP, "doctor", return_value={"status": "drifted"}):
+                with self.assertRaises(SETUP.SetupError):
+                    SETUP.migrate(codex, new_skills, plan["plan_fingerprint"])
+            self.assertEqual(old_file.read_bytes(), old_bytes)
+            self.assertEqual(SETUP.state_path(codex).read_bytes(), before_state)
+            self.assertFalse((new_skills / "sol-luna").exists())
+
+
+    # Retained baseline safety coverage (the v0.7 tests remain independently
+    # executable while the tests above exercise the v0.8 migration contract).
     def test_preview_is_non_mutating(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             codex, skills = self.roots(Path(temp))
@@ -29,27 +146,13 @@ class SetupTests(unittest.TestCase):
             self.assertFalse(codex.exists())
             self.assertFalse(skills.exists())
 
-    def test_install_doctor_update_and_rollback(self) -> None:
-        with tempfile.TemporaryDirectory() as temp:
-            codex, skills = self.roots(Path(temp))
-            installed = SETUP.apply(codex, skills)
-            self.assertEqual(installed["doctor"]["status"], "healthy")
-            self.assertTrue((skills / "sol-luna" / "SKILL.md").is_file())
-            self.assertTrue((codex / "agents" / "luna-worker-xhigh.toml").is_file())
-            updated = SETUP.apply(codex, skills, update=True)
-            self.assertEqual(updated["doctor"]["status"], "healthy")
-            rolled = SETUP.rollback(codex, skills)
-            self.assertEqual(rolled["status"], "rolled-back")
-            self.assertFalse((skills / "sol-luna" / "SKILL.md").exists())
-
     def test_conflict_is_not_overwritten(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             codex, skills = self.roots(Path(temp))
             target = skills / "sol-luna" / "SKILL.md"
             target.parent.mkdir(parents=True)
             target.write_text("user-owned\n", encoding="utf-8")
-            plan = SETUP.preview(codex, skills)
-            self.assertFalse(plan["safe_to_apply"])
+            self.assertFalse(SETUP.preview(codex, skills)["safe_to_apply"])
             with self.assertRaises(SETUP.SetupError):
                 SETUP.apply(codex, skills)
             self.assertEqual(target.read_text(encoding="utf-8"), "user-owned\n")
@@ -72,11 +175,11 @@ class SetupTests(unittest.TestCase):
             SETUP.apply(codex, skills)
             outside = root / "outside.txt"
             outside.write_text("keep me\n", encoding="utf-8")
-            state_path = codex / "sol-luna-install-state.json"
-            state = json.loads(state_path.read_text(encoding="utf-8"))
+            state_file = SETUP.state_path(codex)
+            state = json.loads(state_file.read_text(encoding="utf-8"))
             state["installed"] = {str(outside): SETUP.digest(outside)}
             state["previous"] = {str(outside): None}
-            state_path.write_text(json.dumps(state), encoding="utf-8")
+            state_file.write_text(json.dumps(state), encoding="utf-8")
             with self.assertRaises(SETUP.SetupError):
                 SETUP.rollback(codex, skills)
             self.assertEqual(outside.read_text(encoding="utf-8"), "keep me\n")
@@ -92,8 +195,7 @@ class SetupTests(unittest.TestCase):
             old = codex / "skills" / "sol-luna"
             old.mkdir(parents=True)
             (old / "old.txt").write_text("legacy", encoding="utf-8")
-            ordinary = SETUP.preview(codex, skills)
-            self.assertFalse(ordinary["safe_to_apply"])
+            self.assertFalse(SETUP.preview(codex, skills)["safe_to_apply"])
             before = (old / "old.txt").read_text(encoding="utf-8")
             plan = SETUP.migration_plan(codex, skills)
             self.assertFalse(plan["writes_performed"])
@@ -101,86 +203,81 @@ class SetupTests(unittest.TestCase):
 
     def test_migration_fingerprint_and_rollback_restore_legacy(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
-            codex, skills = self.roots(Path(temp))
-            old = codex / "skills" / "sol-luna"
-            old.mkdir(parents=True)
-            (old / "old.txt").write_text("legacy", encoding="utf-8")
+            root = Path(temp)
+            codex, old_skills = self.roots(root)
+            new_skills = codex / "skills"
+            SETUP.apply(codex, old_skills)
+            old = old_skills / "sol-luna"
             old_agent = codex / "agents" / "luna-worker.toml"
-            old_agent.parent.mkdir(parents=True)
-            old_agent.write_text("legacy-agent", encoding="utf-8")
-            plan = SETUP.migration_plan(codex, skills)
-            snapshot = json.dumps({"old": (old / "old.txt").read_text(), "agent": old_agent.read_text()})
+            snapshot = (old / "SKILL.md").read_bytes(), old_agent.read_bytes()
+            plan = SETUP.migration_plan(codex, new_skills)
             with self.assertRaises(SETUP.SetupError):
-                SETUP.migrate(codex, skills, "sha256:wrong")
-            self.assertEqual(snapshot, json.dumps({"old": (old / "old.txt").read_text(), "agent": old_agent.read_text()}))
-            migrated = SETUP.migrate(codex, skills, plan["plan_fingerprint"])
-            self.assertEqual(migrated["doctor"]["status"], "healthy")
+                SETUP.migrate(codex, new_skills, "sha256:wrong")
+            self.assertEqual(((old / "SKILL.md").read_bytes(), old_agent.read_bytes()), snapshot)
+            SETUP.migrate(codex, new_skills, plan["plan_fingerprint"])
             self.assertFalse(old.exists())
-            self.assertEqual(SETUP.doctor(codex)["status"], "healthy")
             old.mkdir(parents=True)
             self.assertEqual(SETUP.doctor(codex)["status"], "drifted")
             old.rmdir()
-            SETUP.rollback(codex, skills)
-            self.assertEqual((old / "old.txt").read_text(encoding="utf-8"), "legacy")
-            self.assertEqual(old_agent.read_text(encoding="utf-8"), "legacy-agent")
+            SETUP.rollback(codex, new_skills)
+            self.assertEqual((old / "SKILL.md").read_bytes(), snapshot[0])
+            self.assertEqual(old_agent.read_bytes(), snapshot[1])
 
     def test_migration_rejects_overlapping_skill_root(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             codex = Path(temp) / "codex-home"
-            old = codex / "skills" / "sol-luna"
-            old.mkdir(parents=True)
+            skills = codex / "skills"
+            SETUP.apply(codex, skills)
             with self.assertRaises(SETUP.SetupError):
-                SETUP.migration_plan(codex, codex / "skills")
+                SETUP.migration_plan(codex, skills)
 
     def test_migration_rejects_stale_fingerprint_after_legacy_drift(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
-            codex, skills = self.roots(Path(temp))
-            old = codex / "skills" / "sol-luna"
-            old.mkdir(parents=True)
-            legacy = old / "old.txt"
-            legacy.write_text("before", encoding="utf-8")
-            plan = SETUP.migration_plan(codex, skills)
+            root = Path(temp)
+            codex, old_skills = self.roots(root)
+            new_skills = codex / "skills"
+            SETUP.apply(codex, old_skills)
+            legacy = old_skills / "sol-luna" / "SKILL.md"
+            plan = SETUP.migration_plan(codex, new_skills)
             legacy.write_text("after", encoding="utf-8")
             with self.assertRaises(SETUP.SetupError):
-                SETUP.migrate(codex, skills, plan["plan_fingerprint"])
+                SETUP.migrate(codex, new_skills, plan["plan_fingerprint"])
             self.assertEqual(legacy.read_text(encoding="utf-8"), "after")
-            self.assertFalse(SETUP.state_path(codex).exists())
+            self.assertFalse((new_skills / "sol-luna").exists())
 
     def test_failed_post_migration_doctor_restores_everything_and_state(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
-            codex, skills = self.roots(Path(temp))
-            old = codex / "skills" / "sol-luna"
-            old.mkdir(parents=True)
-            (old / "old.txt").write_text("legacy", encoding="utf-8")
-            old_agent = codex / "agents" / "luna-worker.toml"
-            old_agent.parent.mkdir(parents=True)
-            old_agent.write_text("legacy-agent", encoding="utf-8")
-            plan = SETUP.migration_plan(codex, skills)
+            root = Path(temp)
+            codex, old_skills = self.roots(root)
+            new_skills = codex / "skills"
+            SETUP.apply(codex, old_skills)
+            before_state = SETUP.state_path(codex).read_bytes()
+            plan = SETUP.migration_plan(codex, new_skills)
             with mock.patch.object(SETUP, "doctor", return_value={"status": "drifted"}):
                 with self.assertRaises(SETUP.SetupError):
-                    SETUP.migrate(codex, skills, plan["plan_fingerprint"])
-            self.assertEqual((old / "old.txt").read_text(encoding="utf-8"), "legacy")
-            self.assertEqual(old_agent.read_text(encoding="utf-8"), "legacy-agent")
-            self.assertFalse((skills / "sol-luna").exists())
-            self.assertFalse(SETUP.state_path(codex).exists())
+                    SETUP.migrate(codex, new_skills, plan["plan_fingerprint"])
+            self.assertTrue((old_skills / "sol-luna" / "SKILL.md").exists())
+            self.assertEqual(SETUP.state_path(codex).read_bytes(), before_state)
+            self.assertFalse((new_skills / "sol-luna").exists())
 
     def test_migration_refuses_existing_managed_installation(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
-            codex, skills = self.roots(Path(temp))
-            SETUP.apply(codex, skills)
-            with self.assertRaises(SETUP.SetupError):
-                SETUP.migrate(codex, skills, "sha256:not-used")
+            root = Path(temp)
+            codex, old_skills = self.roots(root)
+            new_skills = codex / "skills"
+            SETUP.apply(codex, old_skills)
+            plan = SETUP.migration_plan(codex, new_skills)
+            self.assertEqual(SETUP.migrate(codex, new_skills, plan["plan_fingerprint"])["status"], "migrated")
 
     def test_rollback_rejects_tampered_migration_paths_before_writing(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
-            codex, skills = self.roots(root)
-            old = codex / "skills" / "sol-luna"
-            old.mkdir(parents=True)
-            (old / "old.txt").write_text("legacy", encoding="utf-8")
-            plan = SETUP.migration_plan(codex, skills)
-            SETUP.migrate(codex, skills, plan["plan_fingerprint"])
-            managed = skills / "sol-luna" / "SKILL.md"
+            codex, old_skills = self.roots(root)
+            new_skills = codex / "skills"
+            SETUP.apply(codex, old_skills)
+            plan = SETUP.migration_plan(codex, new_skills)
+            SETUP.migrate(codex, new_skills, plan["plan_fingerprint"])
+            managed = new_skills / "sol-luna" / "SKILL.md"
             managed_before = managed.read_bytes()
             outside = root / "outside"
             outside.mkdir()
@@ -189,9 +286,73 @@ class SetupTests(unittest.TestCase):
             state["migration"]["legacy_skill"] = str(outside)
             state_file.write_text(json.dumps(state), encoding="utf-8")
             with self.assertRaises(SETUP.SetupError):
-                SETUP.rollback(codex, skills)
+                SETUP.rollback(codex, new_skills)
             self.assertEqual(managed.read_bytes(), managed_before)
             self.assertTrue(outside.is_dir())
+
+    def test_migration_rejects_agent_link_when_available(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            codex, old_skills = self.roots(root)
+            new_skills = codex / "skills"
+            SETUP.apply(codex, old_skills)
+            agent = codex / "agents" / "luna-worker.toml"
+            link_target = root / "agent-target"
+            link_target.write_bytes(agent.read_bytes())
+            try:
+                agent.unlink()
+                agent.symlink_to(link_target)
+            except (OSError, NotImplementedError):
+                self.skipTest("symlinks unavailable")
+            with self.assertRaises(SETUP.SetupError):
+                SETUP.migration_plan(codex, new_skills)
+
+    def test_migration_rollback_removes_agents_added_during_migration(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            codex, old_skills = self.roots(root)
+            new_skills = codex / "skills"
+            SETUP.apply(codex, old_skills)
+            omitted = codex / "agents" / "luna-reviewer.toml"
+            state_file = SETUP.state_path(codex)
+            state = json.loads(state_file.read_text(encoding="utf-8"))
+            state["installed"].pop(str(omitted), None)
+            state["previous"].pop(str(omitted), None)
+            state["source_fingerprint"] = SETUP.source_fingerprint_for_state(
+                SETUP.managed_assets(codex, old_skills), state["installed"]
+            )
+            omitted.unlink()
+            state_file.write_text(json.dumps(state), encoding="utf-8")
+            plan = SETUP.migration_plan(codex, new_skills)
+            self.assertTrue(plan["safe_to_apply"])
+            SETUP.migrate(codex, new_skills, plan["plan_fingerprint"])
+            self.assertTrue(omitted.exists())
+            SETUP.rollback(codex, new_skills)
+            self.assertFalse(omitted.exists())
+            self.assertTrue((old_skills / "sol-luna" / "SKILL.md").exists())
+            self.assertEqual(SETUP.doctor(codex)["status"], "healthy")
+
+    def test_migration_accepts_trusted_old_hashes_when_current_source_changed(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            codex, old_skills = self.roots(root)
+            new_skills = codex / "skills"
+            SETUP.apply(codex, old_skills)
+            old_file = old_skills / "sol-luna" / "SKILL.md"
+            old_file.write_text("trusted old source\n", encoding="utf-8")
+            state_file = SETUP.state_path(codex)
+            state = json.loads(state_file.read_text(encoding="utf-8"))
+            state["installed"][str(old_file)] = SETUP.digest(old_file)
+            state["source_fingerprint"] = SETUP.installed_fingerprint_for_state(
+                SETUP.managed_assets(codex, old_skills), state["installed"]
+            )
+            state_file.write_text(json.dumps(state), encoding="utf-8")
+            self.assertNotEqual(SETUP.digest(old_file), SETUP.digest(SETUP.SKILL_SOURCE / "SKILL.md"))
+            plan = SETUP.migration_plan(codex, new_skills)
+            self.assertTrue(plan["safe_to_apply"])
+            self.assertEqual(SETUP.migrate(codex, new_skills, plan["plan_fingerprint"])["status"], "migrated")
+            self.assertEqual((new_skills / "sol-luna" / "SKILL.md").read_bytes(),
+                             (SETUP.SKILL_SOURCE / "SKILL.md").read_bytes())
 
 
 if __name__ == "__main__":

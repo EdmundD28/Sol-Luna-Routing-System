@@ -101,6 +101,24 @@ def finite(value: Any, field: str) -> float:
     return converted
 
 
+def finite_sum(left: float, right: float, field: str) -> float:
+    """Add finite values without allowing IEEE-754 overflow to escape."""
+    try:
+        total = left + right
+    except (OverflowError, ValueError) as exc:
+        raise TrackerError(f"{field} aggregate is not finite") from exc
+    if not math.isfinite(total):
+        raise TrackerError(f"{field} aggregate is not finite")
+    return total
+
+
+def finite_mapping_sum(values: Mapping[str, Any], field: str) -> float:
+    total = 0.0
+    for key, value in values.items():
+        total = finite_sum(total, finite(value, f"{field}[{key}]"), field)
+    return total
+
+
 def non_negative_integer(value: Any, field: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value < 0:
         raise TrackerError(f"{field} must be a non-negative integer")
@@ -163,6 +181,10 @@ def initialize(run_ref: str, route: str, *, at: str | None = None) -> dict[str, 
 
 
 def _validate_route_phase(route: str, phase: str) -> None:
+    if not isinstance(route, str) or route not in evidence_ledger.ROUTES:
+        raise TrackerError("route must be one of the supported routes")
+    if not isinstance(phase, str):
+        raise TrackerError("phase must be a string")
     if phase not in PHASES:
         raise TrackerError(f"unsupported phase: {phase}")
     if route == "SOL_ONLY" and phase in {"luna_execution", "sol_retained_execution"}:
@@ -208,7 +230,7 @@ def _normalize_interval(
     required_actor = _required_actor(route, phase)
     executor_id = identifier(raw.get("executor_id"), f"{field}.executor_id")
     actor = raw.get("actor")
-    if actor not in {"SOL", "LUNA"}:
+    if not isinstance(actor, str) or actor not in {"SOL", "LUNA"}:
         raise TrackerError(f"{field}.actor must be SOL or LUNA")
     if required_actor is not None and actor != required_actor:
         raise TrackerError(f"{phase} must be recorded by a {required_actor} executor")
@@ -274,7 +296,7 @@ def _validate_legacy(source: Mapping[str, Any]) -> dict[str, Any]:
     if missing:
         raise TrackerError(f"legacy phase journal is missing fields: {sorted(missing)}")
     journal = deepcopy(dict(source))
-    if journal.get("route") not in evidence_ledger.ROUTES:
+    if not isinstance(journal.get("route"), str) or journal["route"] not in evidence_ledger.ROUTES:
         raise TrackerError("invalid journal route")
     if not isinstance(journal.get("run_ref"), str) or not journal["run_ref"].startswith("redacted:run:"):
         raise TrackerError("journal run_ref must be redacted")
@@ -417,6 +439,8 @@ def start(
     at: str | None = None,
 ) -> dict[str, Any]:
     result = _production(journal)
+    if not isinstance(phase, str):
+        raise TrackerError("phase must be a string")
     if executor_id is None:
         raise TrackerError("executor_id is required for schema 2 events")
     executor_id = identifier(executor_id, "executor_id")
@@ -429,7 +453,7 @@ def start(
     required_actor = _required_actor(result["route"], phase)
     known_actor = _known_actors(result).get(executor_id)
     hinted_actor = _actor_hint(executor_id)
-    if actor is not None and actor not in {"SOL", "LUNA"}:
+    if actor is not None and (not isinstance(actor, str) or actor not in {"SOL", "LUNA"}):
         raise TrackerError("actor must be SOL or LUNA")
     if actor is not None and known_actor is not None and actor != known_actor:
         raise TrackerError(f"executor_id {executor_id} is registered as {known_actor}, not {actor}")
@@ -475,6 +499,8 @@ def stop(
     command_launch_error: str | None = None,
 ) -> dict[str, Any]:
     result = _production(journal)
+    if not isinstance(phase, str):
+        raise TrackerError("phase must be a string")
     if executor_id is None:
         raise TrackerError("executor_id is required for schema 2 events")
     executor_id = identifier(executor_id, "executor_id")
@@ -537,7 +563,10 @@ def _merged(intervals: list[tuple[datetime, datetime]]) -> list[tuple[datetime, 
 
 
 def _seconds(intervals: list[tuple[datetime, datetime]]) -> float:
-    return round(sum((ended - started).total_seconds() for started, ended in _merged(intervals)), 6)
+    total = 0.0
+    for started, ended in _merged(intervals):
+        total = finite_sum(total, (ended - started).total_seconds(), "duration")
+    return round(total, 6)
 
 
 def _overlap_seconds(
@@ -551,7 +580,7 @@ def _overlap_seconds(
         right_start, right_end = right_merged[right_index]
         overlap_start, overlap_end = max(left_start, right_start), min(left_end, right_end)
         if overlap_end > overlap_start:
-            total += (overlap_end - overlap_start).total_seconds()
+            total = finite_sum(total, (overlap_end - overlap_start).total_seconds(), "overlap")
         if left_end <= right_end:
             left_index += 1
         else:
@@ -569,8 +598,9 @@ def _export_legacy(result: Mapping[str, Any]) -> dict[str, Any]:
         "route": result["route"],
         "elapsed_seconds": round(elapsed, 6),
         "total_tokens": sum(result["phase_tokens"].values()) if result["phase_tokens"] else None,
-        "credit_value": round(sum(float(value) for value in result["phase_credits"].values()), 6)
-        if result["phase_credits"] else None,
+        "credit_value": round(
+            finite_mapping_sum(result["phase_credits"], "phase_credits"), 6
+        ) if result["phase_credits"] else None,
         "phase_elapsed_seconds": result["phase_elapsed_seconds"],
         "phase_tokens": result["phase_tokens"],
         "phase_credits": result["phase_credits"],
@@ -597,11 +627,23 @@ def export(journal: Mapping[str, Any]) -> dict[str, Any]:
     for item in result["phase_intervals"]:
         phase = item["phase"]
         phase_counts[phase] = phase_counts.get(phase, 0) + 1
-        phase_elapsed[phase] = round(phase_elapsed.get(phase, 0.0) + item["duration_seconds"], 6)
+        phase_elapsed[phase] = round(
+            finite_sum(
+                phase_elapsed.get(phase, 0.0), item["duration_seconds"],
+                f"phase_elapsed_seconds[{phase}]",
+            ),
+            6,
+        )
         if item["tokens"] is not None:
             phase_tokens[phase] = phase_tokens.get(phase, 0) + item["tokens"]
         if item["credits"] is not None:
-            phase_credits[phase] = round(phase_credits.get(phase, 0.0) + item["credits"], 6)
+            phase_credits[phase] = round(
+                finite_sum(
+                    phase_credits.get(phase, 0.0), item["credits"],
+                    f"phase_credits[{phase}]",
+                ),
+                6,
+            )
         if phase in EXECUTION_PHASES:
             pair = (timestamp(item["started_at"]), timestamp(item["ended_at"]))
             execution_by_executor.setdefault(item["executor_id"], []).append(pair)
@@ -619,7 +661,9 @@ def export(journal: Mapping[str, Any]) -> dict[str, Any]:
         "phase_tokens": dict(sorted(phase_tokens.items())),
         "phase_credits": dict(sorted(phase_credits.items())),
         "total_tokens": sum(phase_tokens.values()) if any_tokens else None,
-        "credit_value": round(sum(phase_credits.values()), 6) if any_credits else None,
+        "credit_value": round(
+            finite_mapping_sum(phase_credits, "phase_credits"), 6
+        ) if any_credits else None,
         "executor_execution_union_seconds": {
             executor_id: _seconds(intervals)
             for executor_id, intervals in sorted(execution_by_executor.items())
