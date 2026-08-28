@@ -7,6 +7,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -27,240 +28,303 @@ class PhaseTrackerTests(unittest.TestCase):
             text=True,
         )
 
+    def _legacy(self) -> dict:
+        return {
+            "schema_version": 1,
+            "run_ref": "redacted:run:0123456789abcdef",
+            "route": "SOL_ONLY",
+            "created_at": "2026-08-26T00:00:00+00:00",
+            "last_event_at": "2026-08-26T00:00:05+00:00",
+            "open_phases": {},
+            "phase_elapsed_seconds": {"sol_execution": 5},
+            "phase_tokens": {"sol_execution": 10},
+            "phase_credits": {},
+            "events": 2,
+        }
+
     def test_phase_duration_and_source_readings_are_accumulated(self) -> None:
         journal = TRACKER.initialize("private-run", "SOL_LUNA", at="2026-08-26T00:00:00+00:00")
-        journal = TRACKER.start(journal, "sol_planning", at="2026-08-26T00:00:00+00:00")
-        journal = TRACKER.stop(
-            journal,
-            "sol_planning",
-            at="2026-08-26T00:01:00+00:00",
-            tokens=100,
-            credits=2.5,
+        journal = TRACKER.start(
+            journal, "sol_planning", executor_id="sol-main", at="2026-08-26T00:00:00+00:00"
         )
-        journal = TRACKER.start(journal, "luna_execution", at="2026-08-26T00:01:00+00:00")
         journal = TRACKER.stop(
-            journal,
-            "luna_execution",
-            at="2026-08-26T00:06:00+00:00",
-            tokens=500,
-            credits=5,
+            journal, "sol_planning", executor_id="sol-main", at="2026-08-26T00:01:00+00:00",
+            tokens=100, credits=2.5,
+        )
+        journal = TRACKER.start(
+            journal, "luna_execution", executor_id="luna-one", at="2026-08-26T00:01:00+00:00"
+        )
+        journal = TRACKER.stop(
+            journal, "luna_execution", executor_id="luna-one", at="2026-08-26T00:06:00+00:00",
+            tokens=500, credits=5,
         )
         result = TRACKER.export(journal)
         self.assertEqual(result["elapsed_seconds"], 360)
         self.assertEqual(result["total_tokens"], 600)
         self.assertEqual(result["credit_value"], 7.5)
+        self.assertEqual(result["phase_interval_counts"], {"luna_execution": 1, "sol_planning": 1})
         self.assertTrue(result["run_ref"].startswith("redacted:run:"))
 
-    def test_repair_phase_can_accumulate_multiple_intervals(self) -> None:
+    def test_interleaved_execution_overlap_and_review_exclusion(self) -> None:
         journal = TRACKER.initialize("private-run", "SOL_LUNA", at="2026-08-26T00:00:00+00:00")
-        for start, end in (("00:00:00", "00:01:00"), ("00:02:00", "00:03:30")):
-            journal = TRACKER.start(journal, "repair", at=f"2026-08-26T{start}+00:00")
-            journal = TRACKER.stop(journal, "repair", at=f"2026-08-26T{end}+00:00")
-        self.assertEqual(TRACKER.export(journal)["phase_elapsed_seconds"]["repair"], 150)
-
-    def test_overlapping_phase_durations_do_not_inflate_wall_clock(self) -> None:
-        journal = TRACKER.initialize("private-run", "SOL_LUNA", at="2026-08-26T00:00:00+00:00")
-        journal = TRACKER.start(journal, "sol_planning", at="2026-08-26T00:00:00+00:00")
-        journal = TRACKER.start(journal, "luna_execution", at="2026-08-26T00:00:10+00:00")
-        journal = TRACKER.stop(journal, "sol_planning", at="2026-08-26T00:01:00+00:00")
-        journal = TRACKER.stop(journal, "luna_execution", at="2026-08-26T00:01:10+00:00")
+        journal = TRACKER.start(
+            journal, "sol_retained_execution", executor_id="sol-main", interval_id="sol-work",
+            at="2026-08-26T00:00:00+00:00",
+        )
+        journal = TRACKER.start(
+            journal, "luna_execution", executor_id="luna-one", interval_id="luna-work",
+            at="2026-08-26T00:00:05+00:00",
+        )
+        journal = TRACKER.start(
+            journal, "sol_review", executor_id="sol-main", interval_id="sol-review",
+            at="2026-08-26T00:00:06+00:00",
+        )
+        journal = TRACKER.stop(
+            journal, "sol_retained_execution", executor_id="sol-main", interval_id="sol-work",
+            at="2026-08-26T00:00:10+00:00",
+        )
+        journal = TRACKER.stop(
+            journal, "sol_review", executor_id="sol-main", interval_id="sol-review",
+            at="2026-08-26T00:00:12+00:00",
+        )
+        journal = TRACKER.stop(
+            journal, "luna_execution", executor_id="luna-one", interval_id="luna-work",
+            at="2026-08-26T00:00:15+00:00",
+        )
         result = TRACKER.export(journal)
-        self.assertEqual(result["elapsed_seconds"], 70)
-        self.assertEqual(sum(result["phase_elapsed_seconds"].values()), 120)
+        self.assertEqual(result["execution_overlap_seconds"], 5)
+        self.assertEqual(result["execution_union_seconds"], 15)
+        self.assertEqual(result["executor_execution_union_seconds"], {"luna-one": 10, "sol-main": 10})
 
-    def test_run_wrapper_records_elapsed_and_exit_even_on_failure(self) -> None:
+    def test_same_executor_overlapping_and_adjacent_execution_is_counted_once(self) -> None:
+        journal = TRACKER.initialize("private-run", "SOL_ONLY", at="2026-08-26T00:00:00+00:00")
+        for interval_id, start, end in (
+            ("first", 0, 10), ("second", 5, 15), ("third", 15, 20)
+        ):
+            journal = TRACKER.start(
+                journal, "sol_execution", executor_id="sol-main", interval_id=interval_id,
+                at=f"2026-08-26T00:00:{start:02d}+00:00",
+            )
+            journal = TRACKER.stop(
+                journal, "sol_execution", executor_id="sol-main", interval_id=interval_id,
+                at=f"2026-08-26T00:00:{end:02d}+00:00",
+            )
+        result = TRACKER.export(journal)
+        self.assertEqual(result["executor_execution_union_seconds"]["sol-main"], 20)
+        self.assertEqual(result["execution_union_seconds"], 20)
+        self.assertEqual(result["phase_elapsed_seconds"]["sol_execution"], 25)
+
+    def test_multiple_open_intervals_require_precise_close(self) -> None:
+        journal = TRACKER.initialize("private-run", "SOL_LUNA", at="2026-08-26T00:00:00+00:00")
+        for interval_id in ("repair-one", "repair-two"):
+            journal = TRACKER.start(
+                journal, "repair", executor_id="luna-one", interval_id=interval_id,
+                at="2026-08-26T00:00:00+00:00",
+            )
+        with self.assertRaisesRegex(TRACKER.TrackerError, "multiple matching"):
+            TRACKER.stop(
+                journal, "repair", executor_id="luna-one", at="2026-08-26T00:00:01+00:00"
+            )
+        journal = TRACKER.stop(
+            journal, "repair", executor_id="luna-one", interval_id="repair-one",
+            at="2026-08-26T00:00:01+00:00",
+        )
+        self.assertEqual([item["interval_id"] for item in journal["open_intervals"]], ["repair-two"])
+
+        neutral = TRACKER.initialize("private-run", "SOL_LUNA", at="2026-08-26T00:00:00+00:00")
+        neutral = TRACKER.start(
+            neutral, "repair", executor_id="worker-one", actor="SOL",
+            interval_id="neutral-repair", at="2026-08-26T00:00:00+00:00",
+        )
+        self.assertEqual(neutral["open_intervals"][0]["actor"], "SOL")
+
+    def test_route_phase_and_actor_constraints_fail_closed(self) -> None:
+        sol_only = TRACKER.initialize("private-run", "SOL_ONLY", at="2026-08-26T00:00:00+00:00")
+        for phase, executor_id in (
+            ("luna_execution", "luna-one"),
+            ("sol_retained_execution", "sol-main"),
+            ("sol_planning", "luna-one"),
+        ):
+            with self.subTest(phase=phase), self.assertRaises(TRACKER.TrackerError):
+                TRACKER.start(sol_only, phase, executor_id=executor_id, at="2026-08-26T00:00:00+00:00")
+        sol_luna = TRACKER.initialize("private-run", "SOL_LUNA", at="2026-08-26T00:00:00+00:00")
+        with self.assertRaisesRegex(TRACKER.TrackerError, "sol_execution"):
+            TRACKER.start(
+                sol_luna, "sol_execution", executor_id="sol-main", at="2026-08-26T00:00:00+00:00"
+            )
+
+    def test_end_before_own_start_is_rejected_without_global_order_constraint(self) -> None:
+        journal = TRACKER.initialize("private-run", "SOL_LUNA", at="2026-08-26T00:00:00+00:00")
+        journal = TRACKER.start(
+            journal, "sol_review", executor_id="sol-main", interval_id="review",
+            at="2026-08-26T00:00:10+00:00",
+        )
+        journal = TRACKER.start(
+            journal, "luna_execution", executor_id="luna-one", interval_id="work",
+            at="2026-08-26T00:00:05+00:00",
+        )
+        journal = TRACKER.stop(
+            journal, "luna_execution", executor_id="luna-one", interval_id="work",
+            at="2026-08-26T00:00:08+00:00",
+        )
+        with self.assertRaisesRegex(TRACKER.TrackerError, "precedes"):
+            TRACKER.stop(
+                journal, "sol_review", executor_id="sol-main", interval_id="review",
+                at="2026-08-26T00:00:09+00:00",
+            )
+
+    def test_run_wrapper_closes_interval_on_nonzero_and_launch_failure(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             journal_path = Path(temp) / "phase.json"
             TRACKER.atomic_write(journal_path, TRACKER.initialize("private-run", "SOL_LUNA"))
             exit_code, output = TRACKER.run_command(
-                journal_path,
-                "luna_execution",
-                [sys.executable, "-c", "raise SystemExit(7)"],
-                tokens=12,
-                credits=3,
+                journal_path, "luna_execution", [sys.executable, "-c", "raise SystemExit(7)"],
+                executor_id="luna-one", interval_id="failed-command", tokens=12, credits=3,
             )
             self.assertEqual(exit_code, 7)
             self.assertEqual(output["command_exit_code"], 7)
-            self.assertEqual(output["total_tokens"], 12)
-            self.assertEqual(output["credit_value"], 3)
-            self.assertGreaterEqual(output["phase_elapsed_seconds"]["luna_execution"], 0)
-            self.assertEqual(TRACKER.load(journal_path)["open_phases"], {})
+            self.assertEqual(TRACKER.load(journal_path)["open_intervals"], [])
+            exit_code, output = TRACKER.run_command(
+                journal_path, "luna_execution", [str(Path(temp) / "missing-program")],
+                executor_id="luna-one", interval_id="launch-error",
+            )
+            self.assertEqual(exit_code, 127)
+            self.assertIsNotNone(output["command_launch_error"])
+            stored = TRACKER.load(journal_path)
+            self.assertEqual(stored["open_intervals"], [])
+            self.assertIsNotNone(stored["phase_intervals"][-1]["command_launch_error"])
 
-    def test_open_phase_blocks_export(self) -> None:
-        journal = TRACKER.start(TRACKER.initialize("private-run", "SOL_ONLY"), "sol_planning")
-        with self.assertRaisesRegex(TRACKER.TrackerError, "open phases"):
-            TRACKER.export(journal)
+    def test_legacy_schema_is_readable_and_exportable_but_not_writable(self) -> None:
+        legacy = self._legacy()
+        self.assertEqual(TRACKER.export(legacy)["source_schema_version"], 1)
+        with self.assertRaisesRegex(TRACKER.TrackerError, "read-only"):
+            TRACKER.start(legacy, "sol_execution", executor_id="sol-main")
+        with self.assertRaisesRegex(TRACKER.TrackerError, "read-only"):
+            TRACKER.stop(legacy, "sol_execution", executor_id="sol-main")
 
-    def test_sol_only_execution_has_a_distinct_phase(self) -> None:
-        journal = TRACKER.initialize("private-run", "SOL_ONLY", at="2026-08-26T00:00:00+00:00")
-        journal = TRACKER.start(journal, "sol_execution", at="2026-08-26T00:00:00+00:00")
-        journal = TRACKER.stop(
-            journal,
-            "sol_execution",
-            at="2026-08-26T00:00:05+00:00",
-            tokens=25,
-        )
-        result = TRACKER.export(journal)
-        self.assertEqual(result["phase_elapsed_seconds"]["sol_execution"], 5)
-        self.assertEqual(result["phase_tokens"]["sol_execution"], 25)
-
-    def test_end_before_start_is_rejected(self) -> None:
-        journal = TRACKER.initialize("private-run", "SOL_ONLY", at="2026-08-26T00:00:00+00:00")
-        journal = TRACKER.start(journal, "sol_planning", at="2026-08-26T00:01:00+00:00")
-        with self.assertRaisesRegex(TRACKER.TrackerError, "precedes"):
-            TRACKER.stop(journal, "sol_planning", at="2026-08-26T00:00:00+00:00")
-
-    def test_cli_lifecycle_and_run_preserve_subprocess_exit_code(self) -> None:
+    def test_atomic_replace_failure_preserves_bytes_and_cleans_temporary(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
-            journal_path = Path(temp) / "phase.json"
+            path = Path(temp) / "phase.json"
+            original = b"original bytes\n"
+            path.write_bytes(original)
+            with mock.patch.object(TRACKER.os, "replace", side_effect=OSError("replace failed")):
+                with self.assertRaises(OSError):
+                    TRACKER.atomic_write(path, TRACKER.initialize("private-run", "SOL_ONLY"))
+            self.assertEqual(path.read_bytes(), original)
+            self.assertEqual(list(path.parent.glob(f".{path.name}.*.tmp")), [])
+
+    def test_cli_refuses_overwrite_and_rejects_bad_json_without_traceback(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "phase.json"
+            original = b"do not overwrite\n"
+            path.write_bytes(original)
+            completed = self._run_cli(
+                "init", "--journal", str(path), "--run-ref", "cli", "--route", "SOL_ONLY"
+            )
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertEqual(path.read_bytes(), original)
+
+            for payload in ('{"schema_version":2,"schema_version":2}', '{"schema_version":NaN}'):
+                path.write_text(payload, encoding="utf-8")
+                completed = self._run_cli("export", "--journal", str(path))
+                self.assertNotEqual(completed.returncode, 0)
+                self.assertNotIn("Traceback", completed.stderr)
+            path.write_bytes(b"\xff\xfe")
+            completed = self._run_cli("export", "--journal", str(path))
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertNotIn("Traceback", completed.stderr)
+
+    def test_cli_lifecycle_records_executor_interval_and_exit_code(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "phase.json"
             init = self._run_cli(
-                "init",
-                "--journal",
-                str(journal_path),
-                "--run-ref",
-                "cli-smoke",
-                "--route",
-                "SOL_LUNA",
-                "--at",
-                "2026-08-26T00:00:00+00:00",
+                "init", "--journal", str(path), "--run-ref", "cli-smoke", "--route", "SOL_LUNA",
+                "--at", "2026-08-26T00:00:00+00:00",
             )
             self.assertEqual(init.returncode, 0, init.stderr)
-            self.assertEqual(json.loads(init.stdout)["events"], 0)
-
             start = self._run_cli(
-                "start",
-                "--journal",
-                str(journal_path),
-                "--phase",
-                "sol_planning",
-                "--at",
-                "2026-08-26T00:00:01+00:00",
+                "start", "--journal", str(path), "--phase", "sol_planning",
+                "--executor-id", "sol-main", "--interval-id", "planning",
+                "--at", "2026-08-26T00:00:01+00:00",
             )
             self.assertEqual(start.returncode, 0, start.stderr)
             stop = self._run_cli(
-                "stop",
-                "--journal",
-                str(journal_path),
-                "--phase",
-                "sol_planning",
-                "--at",
-                "2026-08-26T00:00:02+00:00",
-                "--tokens",
-                "3",
-                "--credits",
-                "1.5",
+                "stop", "--journal", str(path), "--phase", "sol_planning",
+                "--executor-id", "sol-main", "--interval-id", "planning",
+                "--at", "2026-08-26T00:00:02+00:00", "--tokens", "3", "--credits", "1.5",
             )
             self.assertEqual(stop.returncode, 0, stop.stderr)
-            exported = self._run_cli("export", "--journal", str(journal_path))
-            self.assertEqual(exported.returncode, 0, exported.stderr)
-            self.assertEqual(json.loads(exported.stdout)["total_tokens"], 3)
-
             run = self._run_cli(
-                "run",
-                "--journal",
-                str(journal_path),
-                "--phase",
-                "luna_execution",
-                "--tokens",
-                "4",
-                "--credits",
-                "2",
-                "--",
-                sys.executable,
-                "-c",
-                "raise SystemExit(7)",
+                "run", "--journal", str(path), "--phase", "luna_execution",
+                "--executor-id", "luna-one", "--interval-id", "command", "--tokens", "4",
+                "--", sys.executable, "-c", "raise SystemExit(7)",
             )
             self.assertEqual(run.returncode, 7, run.stderr)
-            result = json.loads(run.stdout)
-            self.assertEqual(result["command_exit_code"], 7)
-            self.assertEqual(result["total_tokens"], 7)
-            self.assertEqual(result["credit_value"], 3.5)
-            self.assertEqual(TRACKER.load(journal_path)["open_phases"], {})
+            output = json.loads(run.stdout)
+            self.assertEqual(output["command_exit_code"], 7)
+            self.assertEqual(output["total_tokens"], 7)
+            self.assertEqual(TRACKER.load(path)["open_intervals"], [])
 
-    def test_validate_journal_rejects_invalid_metrics_times_and_route_phases(self) -> None:
-        base = TRACKER.initialize("private-run", "SOL_LUNA", at="2026-08-26T00:00:00+00:00")
-        invalid_cases = (
-            ("phase_elapsed_seconds", {"sol_planning": -1}),
-            ("phase_elapsed_seconds", {"sol_planning": float("inf")}),
-            ("phase_tokens", {"sol_planning": True}),
-            ("phase_tokens", {"sol_planning": 1.5}),
-            ("phase_tokens", {"sol_planning": -1}),
-            ("phase_credits", {"sol_planning": True}),
-            ("phase_credits", {"sol_planning": -1}),
-            ("phase_credits", {"sol_planning": float("nan")}),
-        )
-        for field, value in invalid_cases:
-            with self.subTest(field=field, value=value):
-                candidate = dict(base)
-                candidate[field] = value
-                with self.assertRaises(TRACKER.TrackerError):
-                    TRACKER.validate_journal(candidate)
-
-        for field, value in (
-            ("events", True),
-            ("events", -1),
-            ("events", 1.5),
-            ("open_phases", {"luna_execution": "not-a-time"}),
-            ("open_phases", {"luna_execution": "2026-08-26T00:00:01"}),
-        ):
-            with self.subTest(field=field, value=value):
-                candidate = dict(base)
-                candidate[field] = value
-                with self.assertRaises(TRACKER.TrackerError):
-                    TRACKER.validate_journal(candidate)
-
-        candidate = dict(base)
-        candidate["phase_elapsed_seconds"] = {"sol_execution": 0}
-        with self.assertRaisesRegex(TRACKER.TrackerError, "sol_execution"):
-            TRACKER.validate_journal(candidate)
-
-        candidate = dict(base)
-        candidate["phase_tokens"] = {"sol_planning": 1}
-        with self.assertRaisesRegex(TRACKER.TrackerError, "no elapsed"):
-            TRACKER.validate_journal(candidate)
-
-        candidate = dict(base)
-        candidate["route"] = "SOL_ONLY"
-        candidate["open_phases"] = {"luna_execution": base["created_at"]}
-        with self.assertRaisesRegex(TRACKER.TrackerError, "luna_execution"):
-            TRACKER.validate_journal(candidate)
-
-        sol_only = TRACKER.initialize("private-run", "SOL_ONLY", at="2026-08-26T00:00:00+00:00")
-        with self.assertRaisesRegex(TRACKER.TrackerError, "luna_execution"):
-            TRACKER.start(sol_only, "luna_execution", at="2026-08-26T00:00:00+00:00")
-
-        luna = TRACKER.initialize("private-run", "SOL_LUNA", at="2026-08-26T00:00:00+00:00")
-        with self.assertRaisesRegex(TRACKER.TrackerError, "sol_execution"):
-            TRACKER.start(luna, "sol_execution", at="2026-08-26T00:00:00+00:00")
-
-        with self.assertRaisesRegex(TRACKER.TrackerError, "sol_retained_execution"):
-            TRACKER.start(sol_only, "sol_retained_execution", at="2026-08-26T00:00:00+00:00")
-
-        retained = TRACKER.start(
-            luna,
-            "sol_retained_execution",
-            at="2026-08-26T00:00:00+00:00",
-        )
-        retained = TRACKER.stop(
-            retained,
-            "sol_retained_execution",
-            at="2026-08-26T00:00:05+00:00",
-            tokens=10,
-            credits=1,
-        )
-        self.assertEqual(
-            TRACKER.export(retained)["phase_elapsed_seconds"]["sol_retained_execution"],
-            5,
-        )
-
-    def test_validate_journal_rejects_unknown_top_level_fields(self) -> None:
+    def test_invalid_metrics_unknown_fields_and_open_export_are_rejected(self) -> None:
         journal = TRACKER.initialize("private-run", "SOL_ONLY", at="2026-08-26T00:00:00+00:00")
-        for field in ("raw_prompt", "extra"):
-            with self.subTest(field=field):
-                candidate = dict(journal)
-                candidate[field] = "must not be stored"
-                with self.assertRaisesRegex(TRACKER.TrackerError, "unsupported fields"):
-                    TRACKER.validate_journal(candidate)
+        journal = TRACKER.start(
+            journal, "sol_execution", executor_id="sol-main", at="2026-08-26T00:00:00+00:00"
+        )
+        with self.assertRaisesRegex(TRACKER.TrackerError, "open intervals"):
+            TRACKER.export(journal)
+        for tokens, credits in ((True, None), (1.5, None), (None, float("nan")), (None, -1)):
+            with self.subTest(tokens=tokens, credits=credits), self.assertRaises(TRACKER.TrackerError):
+                TRACKER.stop(
+                    journal, "sol_execution", executor_id="sol-main",
+                    at="2026-08-26T00:00:01+00:00", tokens=tokens, credits=credits,
+                )
+        candidate = TRACKER.initialize("private-run", "SOL_ONLY")
+        candidate["extra"] = True
+        with self.assertRaisesRegex(TRACKER.TrackerError, "unsupported fields"):
+            TRACKER.validate_journal(candidate)
+
+    def test_run_invalid_metrics_preserve_journal_and_large_numbers_fail_cleanly(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "phase.json"
+            TRACKER.atomic_write(path, TRACKER.initialize("private-run", "SOL_ONLY"))
+            original = path.read_bytes()
+            for tokens, credits in ((True, None), (None, float("nan")), (None, 10**10000)):
+                with self.subTest(tokens=tokens, credits=credits), self.assertRaises(TRACKER.TrackerError):
+                    TRACKER.run_command(
+                        path, "sol_execution", [sys.executable, "-c", "raise SystemExit(3)"],
+                        executor_id="sol-main", tokens=tokens, credits=credits,
+                    )
+                self.assertEqual(path.read_bytes(), original)
+                self.assertEqual(TRACKER.load(path)["open_intervals"], [])
+
+    def test_run_value_error_from_subprocess_is_a_closed_launch_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "phase.json"
+            TRACKER.atomic_write(path, TRACKER.initialize("private-run", "SOL_ONLY"))
+            with mock.patch.object(TRACKER.subprocess, "run", side_effect=ValueError("embedded null")):
+                exit_code, output = TRACKER.run_command(
+                    path, "sol_execution", ["not-a-real-command"], executor_id="sol-main",
+                )
+            self.assertEqual(exit_code, 127)
+            self.assertIn("embedded null", output["command_launch_error"])
+            self.assertEqual(TRACKER.load(path)["open_intervals"], [])
+
+    def test_cli_run_non_finite_credit_does_not_modify_journal(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "phase.json"
+            TRACKER.atomic_write(path, TRACKER.initialize("private-run", "SOL_ONLY"))
+            original = path.read_bytes()
+            for credit in ("NaN", "Infinity", "-Infinity"):
+                with self.subTest(credit=credit):
+                    completed = self._run_cli(
+                        "run", "--journal", str(path), "--phase", "sol_execution",
+                        "--executor-id", "sol-main", "--credits", credit,
+                        "--", "missing-command",
+                    )
+                    self.assertNotEqual(completed.returncode, 0)
+                    self.assertNotIn("Traceback", completed.stderr)
+                    self.assertEqual(path.read_bytes(), original)
+                    self.assertEqual(TRACKER.load(path)["open_intervals"], [])
 
 
 if __name__ == "__main__":

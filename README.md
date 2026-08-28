@@ -66,11 +66,11 @@ The Skill uses standard-library Python tools:
 | Tool | Purpose |
 |---|---|
 | `routing_policy.py` | Predict route, effort, concurrency, review depth, and rework action |
-| `ownership_guard.py` | Reject overlapping write plans, observed scope violations, and unauthorized frozen-candidate changes |
+| `ownership_guard.py` | Validate frozen schema-2 executor/unit/acceptance partitions and their deterministic digest while preserving schema-1 plan checks |
 | `lifecycle_contract.py` | Replay package transitions, stale evidence, timeout, repair, escalation, continuation, and acceptance |
 | `native_lifecycle_receipt.py` | Fail closed unless a native runner proves profile loading, requested/observed identity and boundaries, timeout, child continuity, stale rejection, repair, and ownership blocking |
 | `runtime_receipt.py` | Compare expected identity and boundaries with one explicit host session record |
-| `phase_tracker.py` | Accumulate explicit phase durations and optional source token/credit readings, including retained Sol execution during Sol-Luna work |
+| `phase_tracker.py` | Record schema-2 executor-owned intervals and export execution unions and cross-actor overlap without double-counting |
 | `evidence_ledger.py` | Validate schema-5 phase evidence, preserve legacy readability without inventing retained Sol cost, require record-bound external claims for credible credits, and emit fail-closed task-family feedback |
 | `matched_eval.py` | Freeze paired arms and reject mismatched starts, task specs, suites, policies, and metric cohorts |
 | `allowance_meter.py` | Quantify conservative Sol-only versus Sol-Luna advantage from matched five-hour and weekly plan-limit percentage readings |
@@ -78,6 +78,14 @@ The Skill uses standard-library Python tools:
 | `benchmark_identity.py` | Bind host-observed Sol/Luna models, effort, and an explicitly declared one- or two-writer benchmark shape while rejecting logical receipt reuse |
 | `benchmark_attestation.py` | Deterministically bind a completed allowance campaign, verified identity index, and frozen benchmark contract into one redacted attestation |
 | `credit_model.py` | Estimate purchased credits from classified phase usage and a fingerprinted rate card; never convert included plan percentages |
+
+### Production ownership and phase schemas
+
+Ownership plan schema 2 is the production format: a frozen route registers each executor and its fixed actor, assigns every work unit and acceptance explicitly, and places each exactly once in an executor-consistent partition whose paths are the exact normalized union of its contents. `partition_digest(plan)` hashes the canonical, order-independent plan. Ownership schema 1 remains readable under its original package-overlap rules, but it is not silently upgraded into a complete production partition.
+
+Phase journal schema 2 is the production write format. Every production interval carries an explicit executor and unique interval ID; open intervals and closed intervals remain separately replayable, including concurrent intervals. Legacy journals may be loaded, validated, and exported read-only, but production `start`, `stop`, and `run` writes reject them.
+
+Execution metrics use half-open intervals `[start, end)`: `executor_execution_union_seconds` merges overlapping or adjacent execution for each executor, `execution_union_seconds` merges all execution, and `execution_overlap_seconds` measures only cross-actor execution overlap. Planning, review, repair, and integration are not execution; in particular, review never inflates overlap. These unions are auditable execution measures, not a claim about end-to-end wall-clock duration.
 
 The matched harness binds each pair to the same starting candidate, task digest, independent acceptance-suite digest, policy fingerprint, and observed runtime identity. It does not launch paid model work. See [runtime and evidence details](.agents/skills/sol-luna/references/evidence-and-runtime.md) and [the orchestration policy](.agents/skills/sol-luna/references/orchestration-policy.md).
 

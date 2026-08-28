@@ -25,6 +25,8 @@ Task size and reasoning difficulty are separate. Large repetitive work can suit 
 
 Freeze the complete task allocation before dispatch. Every work unit has exactly one executor (`SOL` or `LUNA`), baseline Sol cost, dependency set, critical-path flag, writable scope, and acceptance IDs. The baseline totals reconcile to the Sol-only estimate, and candidate allocations use the same canonical baseline map. Delegated coverage is the Luna-owned share of baseline Sol credits; it is an explanatory mechanism, not a target to inflate by splitting units. Unique acceptance assignment proves structural non-duplication, not semantic equivalence between differently named work; Sol must still reject shadow investigations during review.
 
+The executable production ownership plan is schema 2 and is frozen before dispatch. Executors have stable IDs and fixed actors; work units and acceptances name their executor directly; every unit and acceptance appears in exactly one executor-consistent partition; and each partition path set is the exact normalized union of its contents. The canonical partition digest is independent of input array order but changes with ownership, executor, or path changes. Schema 1 is compatibility-only and must never be inferred to provide these production guarantees.
+
 Every dispatch contains:
 
 - the canonical repository root observed by Sol at dispatch, with all package paths resolved relative to that root;
@@ -73,6 +75,8 @@ Do not restart an unchanged vague package. `BLOCKED` is reserved for missing aut
 ## Evidence and success gate
 
 Record `sol_planning`, `sol_retained_execution`, `luna_execution`, `sol_review`, `repair`, and `integration` separately. A matched Sol-Luna record must include the retained phase even when its measured value is zero. Track source-aware credits or tokens, elapsed seconds, first-pass acceptance, repair rounds, independent defects, final candidate, policy and allocation fingerprints, task digest, acceptance-suite digest, accepted delegated coverage, duplicate work, Sol/Luna overlap, effort, active writer count, and review depth. Acceptance requires complete baseline reconciliation, exactly one executor per unit, non-overlapping write scopes, zero shadow implementation, all package dispositions closed, and the same independent acceptance suite.
+
+Production phase journals use schema 2 with an explicit route, executor-owned unique intervals, replayable open and closed interval collections, and route/phase actor validation. Legacy journals remain available for load, validation, and read-only export only. Execution accounting uses half-open intervals: merge overlapping or adjacent intervals per executor and across all execution, then measure cross-actor execution overlap. Review and the other auxiliary phases are not execution, so phase totals, execution unions, overlap, and end-to-end wall-clock duration are deliberately different measures.
 
 A task-family policy change requires matched, independently assessed evidence. Five complete pairs permit human review; stronger claims should use a larger sample. Failed arms remain in the denominator. Improvement requires equal-or-better independent acceptance, no defect regression, at least the configured median credit reduction, no elapsed regression unless another explicit objective justifies it, and Sol planning plus review remaining a minority of total measured cost.
 

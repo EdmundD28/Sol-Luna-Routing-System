@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: 2026 Edmund Dai
 # SPDX-License-Identifier: Apache-2.0
-"""Collect phase elapsed time and optional source readings for one explicit run."""
+"""Record replayable Sol-Luna phase intervals and execution overlap metrics."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ import argparse
 import json
 import math
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -19,33 +20,57 @@ from typing import Any, Mapping
 
 import evidence_ledger
 
-
-SCHEMA_VERSION = 1
+LEGACY_SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 PHASES = evidence_ledger.PHASES
-JOURNAL_FIELDS = frozenset(
-    {
-        "schema_version",
-        "run_ref",
-        "route",
-        "created_at",
-        "last_event_at",
-        "open_phases",
-        "phase_elapsed_seconds",
-        "phase_tokens",
-        "phase_credits",
-        "events",
-    }
-)
+EXECUTION_PHASES = {"sol_execution", "sol_retained_execution", "luna_execution"}
+SOL_PHASES = {"sol_planning", "sol_execution", "sol_retained_execution", "sol_review", "integration"}
+IDENTIFIER = re.compile(r"[a-z0-9][a-z0-9-]{0,63}\Z")
+JOURNAL_V2_FIELDS = frozenset({
+    "schema_version", "run_ref", "route", "created_at", "last_event_at",
+    "open_intervals", "phase_intervals", "events",
+})
+LEGACY_FIELDS = frozenset({
+    "schema_version", "run_ref", "route", "created_at", "last_event_at",
+    "open_phases", "phase_elapsed_seconds", "phase_tokens", "phase_credits", "events",
+})
+OPEN_INTERVAL_FIELDS = frozenset({
+    "interval_id", "phase", "executor_id", "actor", "started_at",
+})
+CLOSED_INTERVAL_FIELDS = frozenset({
+    *OPEN_INTERVAL_FIELDS, "ended_at", "duration_seconds", "tokens", "credits",
+    "command_exit_code", "command_launch_error",
+})
 
 
 class TrackerError(ValueError):
     """A phase journal event is invalid or inconsistent."""
 
 
+def _reject_constant(value: str) -> None:
+    raise TrackerError(f"non-finite JSON constant is not allowed: {value}")
+
+
+def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise TrackerError(f"duplicate JSON key: {key}")
+        result[key] = value
+    return result
+
+
+def strict_json_loads(text: str) -> Any:
+    try:
+        return json.loads(text, object_pairs_hook=_unique_object, parse_constant=_reject_constant)
+    except json.JSONDecodeError as exc:
+        raise TrackerError(f"invalid JSON: {exc}") from exc
+
+
 def timestamp(value: str | None = None) -> datetime:
     if value is None:
         return datetime.now(timezone.utc)
-    if not isinstance(value, str) or not value.strip():
+    if not isinstance(value, str) or not value or value != value.strip():
         raise TrackerError("timestamp must be ISO-8601")
     try:
         result = datetime.fromisoformat(value.replace("Z", "+00:00"))
@@ -53,69 +78,201 @@ def timestamp(value: str | None = None) -> datetime:
         raise TrackerError("timestamp must be ISO-8601") from exc
     if result.tzinfo is None:
         raise TrackerError("timestamp must include a timezone")
+    try:
+        result.utcoffset()
+    except (OverflowError, ValueError) as exc:
+        raise TrackerError("timestamp is out of range") from exc
     return result
 
 
+def timestamp_text(value: str | None = None) -> str:
+    return timestamp(value).astimezone(timezone.utc).isoformat()
+
+
 def finite(value: Any, field: str) -> float:
-    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(float(value)) or value < 0:
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
         raise TrackerError(f"{field} must be a finite non-negative number")
-    return float(value)
+    try:
+        converted = float(value)
+    except (OverflowError, ValueError) as exc:
+        raise TrackerError(f"{field} must be a finite non-negative number") from exc
+    if not math.isfinite(converted):
+        raise TrackerError(f"{field} must be a finite non-negative number")
+    return converted
+
+
+def non_negative_integer(value: Any, field: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise TrackerError(f"{field} must be a non-negative integer")
+    return value
+
+
+def identifier(value: Any, field: str) -> str:
+    if not isinstance(value, str) or not IDENTIFIER.fullmatch(value):
+        raise TrackerError(f"{field} must be a compact hyphen-case identifier")
+    return value
+
+
+def _exact_fields(value: Mapping[str, Any], fields: frozenset[str], field: str) -> None:
+    unknown = set(value) - fields
+    missing = set(fields) - set(value)
+    if unknown:
+        raise TrackerError(f"{field} contains unsupported fields: {sorted(unknown)}")
+    if missing:
+        raise TrackerError(f"{field} is missing required fields: {sorted(missing)}")
 
 
 def atomic_write(path: Path, document: Mapping[str, Any]) -> None:
+    """Flush strict JSON to a same-directory temporary and atomically replace target."""
+
     path.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=path.parent, delete=False, newline="\n") as handle:
-        temporary = Path(handle.name)
-        json.dump(document, handle, ensure_ascii=False, indent=2, sort_keys=True)
-        handle.write("\n")
-        handle.flush()
-        os.fsync(handle.fileno())
+    temporary: Path | None = None
     try:
+        with tempfile.NamedTemporaryFile(
+            "w", encoding="utf-8", dir=path.parent, delete=False, newline="\n",
+            prefix=f".{path.name}.", suffix=".tmp",
+        ) as handle:
+            temporary = Path(handle.name)
+            json.dump(document, handle, ensure_ascii=False, indent=2, sort_keys=True, allow_nan=False)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
         os.replace(temporary, path)
+        temporary = None
     finally:
-        if temporary.exists():
+        if temporary is not None and temporary.exists():
             temporary.unlink()
 
 
 def initialize(run_ref: str, route: str, *, at: str | None = None) -> dict[str, Any]:
-    if route not in evidence_ledger.ROUTES:
+    if not isinstance(route, str) or route not in evidence_ledger.ROUTES:
         raise TrackerError(f"route must be one of {sorted(evidence_ledger.ROUTES)}")
-    if not isinstance(run_ref, str) or not run_ref.strip():
-        raise TrackerError("run_ref is required")
-    created = timestamp(at)
+    if not isinstance(run_ref, str) or not run_ref.strip() or "\n" in run_ref or "\r" in run_ref:
+        raise TrackerError("run_ref is required and must be single-line")
+    created = timestamp_text(at)
     return {
         "schema_version": SCHEMA_VERSION,
         "run_ref": evidence_ledger.redacted_ref(run_ref.strip()),
         "route": route,
-        "created_at": created.astimezone(timezone.utc).isoformat(),
-        "last_event_at": created.astimezone(timezone.utc).isoformat(),
-        "open_phases": {},
-        "phase_elapsed_seconds": {},
-        "phase_tokens": {},
-        "phase_credits": {},
+        "created_at": created,
+        "last_event_at": created,
+        "open_intervals": [],
+        "phase_intervals": [],
         "events": 0,
     }
 
 
-def _validate_route_phases(route: str, field: str, phases: Mapping[str, Any]) -> None:
-    forbidden = (
-        {"luna_execution", "sol_retained_execution"}
-        if route == "SOL_ONLY"
-        else {"sol_execution"}
-    )
-    present = forbidden.intersection(phases)
-    if present:
-        raise TrackerError(f"{route} journal cannot contain {sorted(present)[0]} in {field}")
+def _validate_route_phase(route: str, phase: str) -> None:
+    if phase not in PHASES:
+        raise TrackerError(f"unsupported phase: {phase}")
+    if route == "SOL_ONLY" and phase in {"luna_execution", "sol_retained_execution"}:
+        raise TrackerError(f"SOL_ONLY journal cannot contain {phase}")
+    if route == "SOL_LUNA" and phase == "sol_execution":
+        raise TrackerError("SOL_LUNA journal cannot contain sol_execution")
 
 
-def validate_journal(source: Mapping[str, Any]) -> dict[str, Any]:
-    if not isinstance(source, Mapping):
-        raise TrackerError("phase journal must be a JSON object")
-    unknown = set(source) - JOURNAL_FIELDS
+def _required_actor(route: str, phase: str) -> str | None:
+    _validate_route_phase(route, phase)
+    if phase in SOL_PHASES:
+        return "SOL"
+    if phase == "luna_execution":
+        return "LUNA"
+    return None
+
+
+def _actor_hint(executor_id: str) -> str | None:
+    if executor_id == "sol" or executor_id.startswith("sol-"):
+        return "SOL"
+    if executor_id == "luna" or executor_id.startswith("luna-"):
+        return "LUNA"
+    return None
+
+
+def _normalize_interval(
+    raw: Any,
+    *,
+    closed: bool,
+    route: str,
+    created: datetime,
+    actors_by_executor: dict[str, str],
+    field: str,
+) -> dict[str, Any]:
+    if not isinstance(raw, Mapping):
+        raise TrackerError(f"{field} must be a JSON object")
+    fields = CLOSED_INTERVAL_FIELDS if closed else OPEN_INTERVAL_FIELDS
+    _exact_fields(raw, fields, field)
+    interval_id = identifier(raw.get("interval_id"), f"{field}.interval_id")
+    phase = raw.get("phase")
+    if not isinstance(phase, str):
+        raise TrackerError(f"{field}.phase must be a string")
+    required_actor = _required_actor(route, phase)
+    executor_id = identifier(raw.get("executor_id"), f"{field}.executor_id")
+    actor = raw.get("actor")
+    if actor not in {"SOL", "LUNA"}:
+        raise TrackerError(f"{field}.actor must be SOL or LUNA")
+    if required_actor is not None and actor != required_actor:
+        raise TrackerError(f"{phase} must be recorded by a {required_actor} executor")
+    hint = _actor_hint(executor_id)
+    if hint is not None and hint != actor:
+        raise TrackerError(f"executor_id {executor_id} conflicts with actor {actor}")
+    previous_actor = actors_by_executor.get(executor_id)
+    if previous_actor is not None and previous_actor != actor:
+        raise TrackerError(f"executor_id {executor_id} cannot change actor")
+    actors_by_executor[executor_id] = actor
+    started = timestamp(raw.get("started_at"))
+    if started < created:
+        raise TrackerError(f"{field}.started_at precedes journal creation")
+    normalized: dict[str, Any] = {
+        "interval_id": interval_id,
+        "phase": phase,
+        "executor_id": executor_id,
+        "actor": actor,
+        "started_at": started.astimezone(timezone.utc).isoformat(),
+    }
+    if not closed:
+        return normalized
+    ended = timestamp(raw.get("ended_at"))
+    if ended < started:
+        raise TrackerError(f"{field}.ended_at precedes its start")
+    duration = finite(raw.get("duration_seconds"), f"{field}.duration_seconds")
+    expected_duration = round((ended - started).total_seconds(), 6)
+    if abs(duration - expected_duration) > 1e-6:
+        raise TrackerError(f"{field}.duration_seconds does not match its timestamps")
+    tokens = raw.get("tokens")
+    if tokens is not None:
+        tokens = non_negative_integer(tokens, f"{field}.tokens")
+    credits = raw.get("credits")
+    if credits is not None:
+        credits = finite(credits, f"{field}.credits")
+    command_exit_code = raw.get("command_exit_code")
+    if command_exit_code is not None and (
+        isinstance(command_exit_code, bool) or not isinstance(command_exit_code, int)
+    ):
+        raise TrackerError(f"{field}.command_exit_code must be an integer or null")
+    command_launch_error = raw.get("command_launch_error")
+    if command_launch_error is not None and (
+        not isinstance(command_launch_error, str) or "\n" in command_launch_error
+        or "\r" in command_launch_error or len(command_launch_error) > 500
+    ):
+        raise TrackerError(f"{field}.command_launch_error must be a short single-line string or null")
+    normalized.update({
+        "ended_at": ended.astimezone(timezone.utc).isoformat(),
+        "duration_seconds": expected_duration,
+        "tokens": tokens,
+        "credits": credits,
+        "command_exit_code": command_exit_code,
+        "command_launch_error": command_launch_error,
+    })
+    return normalized
+
+
+def _validate_legacy(source: Mapping[str, Any]) -> dict[str, Any]:
+    unknown = set(source) - LEGACY_FIELDS
+    missing = set(LEGACY_FIELDS) - set(source)
     if unknown:
         raise TrackerError(f"phase journal contains unsupported fields: {sorted(unknown)}")
-    if not isinstance(source, Mapping) or source.get("schema_version") != SCHEMA_VERSION:
-        raise TrackerError("unsupported phase journal schema")
+    if missing:
+        raise TrackerError(f"legacy phase journal is missing fields: {sorted(missing)}")
     journal = deepcopy(dict(source))
     if journal.get("route") not in evidence_ledger.ROUTES:
         raise TrackerError("invalid journal route")
@@ -125,118 +282,353 @@ def validate_journal(source: Mapping[str, Any]) -> dict[str, Any]:
     last_event = timestamp(journal.get("last_event_at"))
     if last_event < created:
         raise TrackerError("last event precedes journal creation")
-    elapsed_seconds = (last_event - created).total_seconds()
     for field in ("open_phases", "phase_elapsed_seconds", "phase_tokens", "phase_credits"):
         if not isinstance(journal.get(field), dict):
             raise TrackerError(f"{field} must be a JSON object")
         if set(journal[field]) - PHASES:
             raise TrackerError(f"{field} contains an unsupported phase")
-        _validate_route_phases(journal["route"], field, journal[field])
-
-    events = journal.get("events")
-    if isinstance(events, bool) or not isinstance(events, int) or events < 0:
-        raise TrackerError("events must be a non-negative integer")
-
+        for phase in journal[field]:
+            _validate_route_phase(journal["route"], phase)
     for phase, value in journal["open_phases"].items():
         started = timestamp(value)
-        if started < created:
-            raise TrackerError(f"open phase start precedes journal creation: {phase}")
-        if started > last_event:
-            raise TrackerError(f"open phase start follows the latest journal event: {phase}")
-
+        if started < created or started > last_event:
+            raise TrackerError(f"invalid open phase start: {phase}")
+    elapsed = (last_event - created).total_seconds()
     for phase, value in journal["phase_elapsed_seconds"].items():
-        duration = finite(value, f"phase_elapsed_seconds[{phase}]")
-        if duration > elapsed_seconds + 1e-6:
+        if finite(value, f"phase_elapsed_seconds[{phase}]") > elapsed + 1e-6:
             raise TrackerError(f"phase_elapsed_seconds[{phase}] exceeds journal elapsed time")
-
     for phase, value in journal["phase_tokens"].items():
-        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
-            raise TrackerError(f"phase_tokens[{phase}] must be a non-negative integer")
-
+        non_negative_integer(value, f"phase_tokens[{phase}]")
     for phase, value in journal["phase_credits"].items():
         finite(value, f"phase_credits[{phase}]")
-
-    elapsed_phases = set(journal["phase_elapsed_seconds"])
     for field in ("phase_tokens", "phase_credits"):
-        orphaned = set(journal[field]) - elapsed_phases
+        orphaned = set(journal[field]) - set(journal["phase_elapsed_seconds"])
         if orphaned:
             raise TrackerError(f"{field} has no elapsed phase: {sorted(orphaned)}")
+    non_negative_integer(journal.get("events"), "events")
     return journal
+
+
+def validate_journal(source: Mapping[str, Any]) -> dict[str, Any]:
+    if not isinstance(source, Mapping):
+        raise TrackerError("phase journal must be a JSON object")
+    version = source.get("schema_version")
+    if type(version) is not int:
+        raise TrackerError("schema_version must be an integer")
+    if version == LEGACY_SCHEMA_VERSION:
+        return _validate_legacy(source)
+    if version != SCHEMA_VERSION:
+        raise TrackerError("unsupported phase journal schema")
+    unknown = set(source) - JOURNAL_V2_FIELDS
+    missing = set(JOURNAL_V2_FIELDS) - set(source)
+    if unknown:
+        raise TrackerError(f"phase journal contains unsupported fields: {sorted(unknown)}")
+    if missing:
+        raise TrackerError(f"phase journal is missing required fields: {sorted(missing)}")
+    route = source.get("route")
+    if not isinstance(route, str) or route not in evidence_ledger.ROUTES:
+        raise TrackerError("invalid journal route")
+    run_ref = source.get("run_ref")
+    if not isinstance(run_ref, str) or not re.fullmatch(r"redacted:run:[0-9a-f]{16}", run_ref):
+        raise TrackerError("journal run_ref must be redacted")
+    created = timestamp(source.get("created_at"))
+    supplied_last = timestamp(source.get("last_event_at"))
+    if supplied_last < created:
+        raise TrackerError("last event precedes journal creation")
+    if not isinstance(source.get("open_intervals"), list):
+        raise TrackerError("open_intervals must be a JSON array")
+    if not isinstance(source.get("phase_intervals"), list):
+        raise TrackerError("phase_intervals must be a JSON array")
+    actors_by_executor: dict[str, str] = {}
+    closed = [
+        _normalize_interval(item, closed=True, route=route, created=created,
+                            actors_by_executor=actors_by_executor, field=f"phase_intervals[{index}]")
+        for index, item in enumerate(source["phase_intervals"])
+    ]
+    opened = [
+        _normalize_interval(item, closed=False, route=route, created=created,
+                            actors_by_executor=actors_by_executor, field=f"open_intervals[{index}]")
+        for index, item in enumerate(source["open_intervals"])
+    ]
+    interval_ids = [item["interval_id"] for item in closed + opened]
+    if len(interval_ids) != len(set(interval_ids)):
+        raise TrackerError("interval_id values must be unique across the journal")
+    latest = max(
+        [created]
+        + [timestamp(item["ended_at"]) for item in closed]
+        + [timestamp(item["started_at"]) for item in opened]
+    )
+    if supplied_last != latest:
+        raise TrackerError("last_event_at must equal the latest recorded interval event")
+    events = non_negative_integer(source.get("events"), "events")
+    if events != len(opened) + 2 * len(closed):
+        raise TrackerError("events does not match the recorded interval events")
+    closed.sort(key=lambda item: (item["started_at"], item["ended_at"], item["interval_id"]))
+    opened.sort(key=lambda item: (item["started_at"], item["interval_id"]))
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "run_ref": run_ref,
+        "route": route,
+        "created_at": created.astimezone(timezone.utc).isoformat(),
+        "last_event_at": latest.astimezone(timezone.utc).isoformat(),
+        "open_intervals": opened,
+        "phase_intervals": closed,
+        "events": events,
+    }
 
 
 def load(path: Path) -> dict[str, Any]:
     try:
-        return validate_journal(json.loads(path.read_text(encoding="utf-8")))
-    except (OSError, json.JSONDecodeError) as exc:
+        source = strict_json_loads(path.read_text(encoding="utf-8"))
+        return validate_journal(source)
+    except (OSError, UnicodeError) as exc:
         raise TrackerError(f"cannot read phase journal: {exc}") from exc
 
 
-def start(journal: Mapping[str, Any], phase: str, *, at: str | None = None) -> dict[str, Any]:
+def _production(journal: Mapping[str, Any]) -> dict[str, Any]:
     result = validate_journal(journal)
-    if phase not in PHASES:
-        raise TrackerError(f"unsupported phase: {phase}")
-    _validate_route_phases(result["route"], "phase", {phase: None})
-    if phase in result["open_phases"]:
-        raise TrackerError(f"phase is already open: {phase}")
-    started = timestamp(at)
-    if started < timestamp(result["last_event_at"]):
-        raise TrackerError("phase start precedes the latest journal event")
-    result["open_phases"][phase] = started.astimezone(timezone.utc).isoformat()
-    result["last_event_at"] = started.astimezone(timezone.utc).isoformat()
-    result["events"] = int(result.get("events", 0)) + 1
+    if result.get("schema_version") != SCHEMA_VERSION:
+        raise TrackerError("legacy schema 1 journals are read-only; initialize a schema 2 journal")
     return result
+
+
+def _next_interval_id(journal: Mapping[str, Any]) -> str:
+    used = {item["interval_id"] for item in journal["open_intervals"] + journal["phase_intervals"]}
+    sequence = int(journal["events"]) + 1
+    while f"interval-{sequence:06d}" in used:
+        sequence += 1
+    return f"interval-{sequence:06d}"
+
+
+def _known_actors(journal: Mapping[str, Any]) -> dict[str, str]:
+    return {
+        item["executor_id"]: item["actor"]
+        for item in journal["phase_intervals"] + journal["open_intervals"]
+    }
+
+
+def start(
+    journal: Mapping[str, Any],
+    phase: str,
+    executor_id: str | None = None,
+    *,
+    actor: str | None = None,
+    interval_id: str | None = None,
+    at: str | None = None,
+) -> dict[str, Any]:
+    result = _production(journal)
+    if executor_id is None:
+        raise TrackerError("executor_id is required for schema 2 events")
+    executor_id = identifier(executor_id, "executor_id")
+    interval_id = identifier(interval_id, "interval_id") if interval_id is not None else _next_interval_id(result)
+    if any(
+        item["interval_id"] == interval_id
+        for item in result["open_intervals"] + result["phase_intervals"]
+    ):
+        raise TrackerError(f"interval_id already exists: {interval_id}")
+    required_actor = _required_actor(result["route"], phase)
+    known_actor = _known_actors(result).get(executor_id)
+    hinted_actor = _actor_hint(executor_id)
+    if actor is not None and actor not in {"SOL", "LUNA"}:
+        raise TrackerError("actor must be SOL or LUNA")
+    if actor is not None and known_actor is not None and actor != known_actor:
+        raise TrackerError(f"executor_id {executor_id} is registered as {known_actor}, not {actor}")
+    if actor is not None and hinted_actor is not None and actor != hinted_actor:
+        raise TrackerError(f"executor_id {executor_id} conflicts with actor {actor}")
+    if required_actor is None:
+        actor = known_actor or actor or hinted_actor
+        if actor is None:
+            raise TrackerError("repair executor actor is unknown; pass actor or use a registered executor_id")
+    else:
+        if actor is not None and actor != required_actor:
+            raise TrackerError(f"{phase} must be recorded by a {required_actor} executor")
+        actor = required_actor
+        if known_actor is not None and known_actor != actor:
+            raise TrackerError(f"executor_id {executor_id} is registered as {known_actor}, not {actor}")
+        if hinted_actor is not None and hinted_actor != actor:
+            raise TrackerError(f"executor_id {executor_id} conflicts with {phase}")
+    started = timestamp(at)
+    if started < timestamp(result["created_at"]):
+        raise TrackerError("phase start precedes journal creation")
+    result["open_intervals"].append({
+        "interval_id": interval_id,
+        "phase": phase,
+        "executor_id": executor_id,
+        "actor": actor,
+        "started_at": started.astimezone(timezone.utc).isoformat(),
+    })
+    result["events"] += 1
+    result["last_event_at"] = max(timestamp(result["last_event_at"]), started).astimezone(timezone.utc).isoformat()
+    return validate_journal(result)
 
 
 def stop(
     journal: Mapping[str, Any],
     phase: str,
+    executor_id: str | None = None,
     *,
+    interval_id: str | None = None,
     at: str | None = None,
     tokens: int | None = None,
     credits: float | None = None,
+    command_exit_code: int | None = None,
+    command_launch_error: str | None = None,
 ) -> dict[str, Any]:
-    result = validate_journal(journal)
-    if phase not in result["open_phases"]:
-        raise TrackerError(f"phase is not open: {phase}")
-    started = timestamp(str(result["open_phases"].pop(phase)))
+    result = _production(journal)
+    if executor_id is None:
+        raise TrackerError("executor_id is required for schema 2 events")
+    executor_id = identifier(executor_id, "executor_id")
+    if interval_id is not None:
+        interval_id = identifier(interval_id, "interval_id")
+    matches = [
+        item for item in result["open_intervals"]
+        if item["phase"] == phase and item["executor_id"] == executor_id
+        and (interval_id is None or item["interval_id"] == interval_id)
+    ]
+    if not matches:
+        raise TrackerError(f"matching phase interval is not open: {phase}/{executor_id}")
+    if len(matches) > 1:
+        raise TrackerError("multiple matching intervals are open; interval_id is required")
+    opened = matches[0]
     ended = timestamp(at)
-    seconds = (ended - started).total_seconds()
-    if seconds < 0:
+    started = timestamp(opened["started_at"])
+    if ended < started:
         raise TrackerError("phase end precedes phase start")
-    if ended < timestamp(result["last_event_at"]):
-        raise TrackerError("phase end precedes the latest journal event")
-    result["last_event_at"] = ended.astimezone(timezone.utc).isoformat()
-    result["phase_elapsed_seconds"][phase] = round(
-        float(result["phase_elapsed_seconds"].get(phase, 0)) + seconds, 6
-    )
     if tokens is not None:
-        if isinstance(tokens, bool) or not isinstance(tokens, int) or tokens < 0:
-            raise TrackerError("tokens must be a non-negative integer")
-        result["phase_tokens"][phase] = int(result["phase_tokens"].get(phase, 0)) + tokens
+        tokens = non_negative_integer(tokens, "tokens")
     if credits is not None:
-        amount = finite(credits, "credits")
-        result["phase_credits"][phase] = round(float(result["phase_credits"].get(phase, 0)) + amount, 6)
-    result["events"] = int(result.get("events", 0)) + 1
+        credits = finite(credits, "credits")
+    if command_exit_code is not None and (
+        isinstance(command_exit_code, bool) or not isinstance(command_exit_code, int)
+    ):
+        raise TrackerError("command_exit_code must be an integer or null")
+    if command_launch_error is not None:
+        command_launch_error = str(command_launch_error).replace("\r", " ").replace("\n", " ")[:500]
+    result["open_intervals"] = [
+        item for item in result["open_intervals"] if item["interval_id"] != opened["interval_id"]
+    ]
+    closed = dict(opened)
+    closed.update({
+        "ended_at": ended.astimezone(timezone.utc).isoformat(),
+        "duration_seconds": round((ended - started).total_seconds(), 6),
+        "tokens": tokens,
+        "credits": credits,
+        "command_exit_code": command_exit_code,
+        "command_launch_error": command_launch_error,
+    })
+    result["phase_intervals"].append(closed)
+    result["events"] += 1
+    result["last_event_at"] = max(timestamp(result["last_event_at"]), ended).astimezone(timezone.utc).isoformat()
+    return validate_journal(result)
+
+
+def _merged(intervals: list[tuple[datetime, datetime]]) -> list[tuple[datetime, datetime]]:
+    if not intervals:
+        return []
+    ordered = sorted(intervals)
+    result = [ordered[0]]
+    for start_at, end_at in ordered[1:]:
+        previous_start, previous_end = result[-1]
+        if start_at <= previous_end:
+            result[-1] = (previous_start, max(previous_end, end_at))
+        else:
+            result.append((start_at, end_at))
     return result
 
 
-def export(journal: Mapping[str, Any]) -> dict[str, Any]:
-    result = validate_journal(journal)
+def _seconds(intervals: list[tuple[datetime, datetime]]) -> float:
+    return round(sum((ended - started).total_seconds() for started, ended in _merged(intervals)), 6)
+
+
+def _overlap_seconds(
+    left: list[tuple[datetime, datetime]], right: list[tuple[datetime, datetime]]
+) -> float:
+    left_merged, right_merged = _merged(left), _merged(right)
+    left_index = right_index = 0
+    total = 0.0
+    while left_index < len(left_merged) and right_index < len(right_merged):
+        left_start, left_end = left_merged[left_index]
+        right_start, right_end = right_merged[right_index]
+        overlap_start, overlap_end = max(left_start, right_start), min(left_end, right_end)
+        if overlap_end > overlap_start:
+            total += (overlap_end - overlap_start).total_seconds()
+        if left_end <= right_end:
+            left_index += 1
+        else:
+            right_index += 1
+    return round(total, 6)
+
+
+def _export_legacy(result: Mapping[str, Any]) -> dict[str, Any]:
     if result["open_phases"]:
         raise TrackerError(f"cannot export with open phases: {sorted(result['open_phases'])}")
     elapsed = (timestamp(result["last_event_at"]) - timestamp(result["created_at"])).total_seconds()
     return {
+        "source_schema_version": LEGACY_SCHEMA_VERSION,
         "run_ref": result["run_ref"],
         "route": result["route"],
         "elapsed_seconds": round(elapsed, 6),
-        "total_tokens": sum(int(value) for value in result["phase_tokens"].values()) if result["phase_tokens"] else None,
+        "total_tokens": sum(result["phase_tokens"].values()) if result["phase_tokens"] else None,
         "credit_value": round(sum(float(value) for value in result["phase_credits"].values()), 6)
-        if result["phase_credits"]
-        else None,
+        if result["phase_credits"] else None,
         "phase_elapsed_seconds": result["phase_elapsed_seconds"],
         "phase_tokens": result["phase_tokens"],
         "phase_credits": result["phase_credits"],
-        "elapsed_semantics": "wall-clock from journal creation to latest event; phase active durations may overlap",
+        "elapsed_semantics": "legacy schema 1 wall-clock; no executor overlap metrics",
+    }
+
+
+def export(journal: Mapping[str, Any]) -> dict[str, Any]:
+    result = validate_journal(journal)
+    if result.get("schema_version") == LEGACY_SCHEMA_VERSION:
+        return _export_legacy(result)
+    if result["open_intervals"]:
+        ids = [item["interval_id"] for item in result["open_intervals"]]
+        raise TrackerError(f"cannot export with open intervals: {ids}")
+    phase_elapsed: dict[str, float] = {}
+    phase_counts: dict[str, int] = {}
+    phase_tokens: dict[str, int] = {}
+    phase_credits: dict[str, float] = {}
+    execution_by_executor: dict[str, list[tuple[datetime, datetime]]] = {}
+    execution_by_actor: dict[str, list[tuple[datetime, datetime]]] = {"SOL": [], "LUNA": []}
+    all_execution: list[tuple[datetime, datetime]] = []
+    any_tokens = any(item["tokens"] is not None for item in result["phase_intervals"])
+    any_credits = any(item["credits"] is not None for item in result["phase_intervals"])
+    for item in result["phase_intervals"]:
+        phase = item["phase"]
+        phase_counts[phase] = phase_counts.get(phase, 0) + 1
+        phase_elapsed[phase] = round(phase_elapsed.get(phase, 0.0) + item["duration_seconds"], 6)
+        if item["tokens"] is not None:
+            phase_tokens[phase] = phase_tokens.get(phase, 0) + item["tokens"]
+        if item["credits"] is not None:
+            phase_credits[phase] = round(phase_credits.get(phase, 0.0) + item["credits"], 6)
+        if phase in EXECUTION_PHASES:
+            pair = (timestamp(item["started_at"]), timestamp(item["ended_at"]))
+            execution_by_executor.setdefault(item["executor_id"], []).append(pair)
+            execution_by_actor[item["actor"]].append(pair)
+            all_execution.append(pair)
+    elapsed = (timestamp(result["last_event_at"]) - timestamp(result["created_at"])).total_seconds()
+    return {
+        "source_schema_version": SCHEMA_VERSION,
+        "run_ref": result["run_ref"],
+        "route": result["route"],
+        "elapsed_seconds": round(elapsed, 6),
+        "phase_intervals": result["phase_intervals"],
+        "phase_interval_counts": dict(sorted(phase_counts.items())),
+        "phase_elapsed_seconds": dict(sorted(phase_elapsed.items())),
+        "phase_tokens": dict(sorted(phase_tokens.items())),
+        "phase_credits": dict(sorted(phase_credits.items())),
+        "total_tokens": sum(phase_tokens.values()) if any_tokens else None,
+        "credit_value": round(sum(phase_credits.values()), 6) if any_credits else None,
+        "executor_execution_union_seconds": {
+            executor_id: _seconds(intervals)
+            for executor_id, intervals in sorted(execution_by_executor.items())
+        },
+        "execution_overlap_seconds": _overlap_seconds(
+            execution_by_actor["SOL"], execution_by_actor["LUNA"]
+        ),
+        "execution_union_seconds": _seconds(all_execution),
+        "elapsed_semantics": "wall-clock from creation to latest event; execution unions use half-open intervals",
     }
 
 
@@ -245,24 +637,44 @@ def run_command(
     phase: str,
     command: list[str],
     *,
+    executor_id: str | None = None,
+    actor: str | None = None,
+    interval_id: str | None = None,
     tokens: int | None = None,
     credits: float | None = None,
 ) -> tuple[int, dict[str, Any]]:
     if not command:
         raise TrackerError("run requires a command after --")
+    if executor_id is None:
+        raise TrackerError("executor_id is required for run")
+    # Validate all caller-supplied metrics before opening or persisting an
+    # interval.  Otherwise a bad value would leave the journal open when the
+    # final stop validation fails.
+    if tokens is not None:
+        non_negative_integer(tokens, "tokens")
+    if credits is not None:
+        finite(credits, "credits")
     with evidence_ledger.ledger_lock(journal_path):
-        journal = start(load(journal_path), phase)
+        journal = _production(load(journal_path))
+        chosen_interval = identifier(interval_id, "interval_id") if interval_id is not None else _next_interval_id(journal)
+        journal = start(
+            journal, phase, executor_id=executor_id, actor=actor, interval_id=chosen_interval
+        )
         atomic_write(journal_path, journal)
     exit_code = 127
     launch_error: str | None = None
     try:
         completed = subprocess.run(command, check=False)
         exit_code = int(completed.returncode)
-    except OSError as exc:
-        launch_error = str(exc)
+    except (OSError, ValueError) as exc:
+        launch_error = str(exc).replace("\r", " ").replace("\n", " ")[:500]
     finally:
         with evidence_ledger.ledger_lock(journal_path):
-            journal = stop(load(journal_path), phase, tokens=tokens, credits=credits)
+            journal = stop(
+                load(journal_path), phase, executor_id=executor_id,
+                interval_id=chosen_interval, tokens=tokens, credits=credits,
+                command_exit_code=exit_code, command_launch_error=launch_error,
+            )
             atomic_write(journal_path, journal)
     output = export(journal)
     output["command_exit_code"] = exit_code
@@ -271,7 +683,7 @@ def run_command(
 
 
 def parser() -> argparse.ArgumentParser:
-    result = argparse.ArgumentParser(description="Track explicit Sol-Luna delivery phases.")
+    result = argparse.ArgumentParser(description="Track explicit Sol-Luna delivery intervals.")
     sub = result.add_subparsers(dest="subcommand", required=True)
     init = sub.add_parser("init")
     init.add_argument("--journal", required=True, type=Path)
@@ -282,6 +694,10 @@ def parser() -> argparse.ArgumentParser:
         command = sub.add_parser(name)
         command.add_argument("--journal", required=True, type=Path)
         command.add_argument("--phase", required=True)
+        command.add_argument("--executor-id", required=True)
+        if name == "start":
+            command.add_argument("--actor", choices=("SOL", "LUNA"))
+        command.add_argument("--interval-id")
         command.add_argument("--at")
         if name == "stop":
             command.add_argument("--tokens", type=int)
@@ -291,6 +707,9 @@ def parser() -> argparse.ArgumentParser:
     run = sub.add_parser("run")
     run.add_argument("--journal", required=True, type=Path)
     run.add_argument("--phase", required=True)
+    run.add_argument("--executor-id", required=True)
+    run.add_argument("--actor", choices=("SOL", "LUNA"))
+    run.add_argument("--interval-id")
     run.add_argument("--tokens", type=int)
     run.add_argument("--credits", type=float)
     run.add_argument("run_argv", nargs=argparse.REMAINDER)
@@ -299,6 +718,7 @@ def parser() -> argparse.ArgumentParser:
 
 def main() -> int:
     args = parser().parse_args()
+    exit_code = 0
     try:
         if args.subcommand == "init":
             with evidence_ledger.ledger_lock(args.journal):
@@ -314,32 +734,31 @@ def main() -> int:
             if command and command[0] == "--":
                 command = command[1:]
             exit_code, output = run_command(
-                args.journal,
-                args.phase,
-                command,
-                tokens=args.tokens,
-                credits=args.credits,
+                args.journal, args.phase, command, executor_id=args.executor_id,
+                actor=args.actor, interval_id=args.interval_id,
+                tokens=args.tokens, credits=args.credits,
             )
         else:
             with evidence_ledger.ledger_lock(args.journal):
                 journal = load(args.journal)
                 if args.subcommand == "start":
-                    journal = start(journal, args.phase, at=args.at)
+                    journal = start(
+                        journal, args.phase, executor_id=args.executor_id,
+                        actor=args.actor, interval_id=args.interval_id, at=args.at,
+                    )
                 else:
                     journal = stop(
-                        journal,
-                        args.phase,
-                        at=args.at,
-                        tokens=args.tokens,
-                        credits=args.credits,
+                        journal, args.phase, executor_id=args.executor_id,
+                        interval_id=args.interval_id, at=args.at,
+                        tokens=args.tokens, credits=args.credits,
                     )
                 atomic_write(args.journal, journal)
             output = journal
     except (OSError, TrackerError, evidence_ledger.LedgerError) as exc:
         print(f"phase tracker error: {exc}", file=sys.stderr)
         return 2
-    print(json.dumps(output, ensure_ascii=False, indent=2, sort_keys=True))
-    return exit_code if args.subcommand == "run" else 0
+    print(json.dumps(output, ensure_ascii=False, indent=2, sort_keys=True, allow_nan=False))
+    return exit_code
 
 
 if __name__ == "__main__":

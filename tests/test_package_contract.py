@@ -69,6 +69,19 @@ class PackageContractTests(unittest.TestCase):
         self.assertIn("validate a provider signature", reference)
         self.assertIn("does not establish a Codex desktop task-level authenticated credit receipt", readme)
 
+    def test_production_ownership_and_phase_schema_boundaries_are_documented(self) -> None:
+        skill = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
+        policy = (SKILL_ROOT / "references" / "orchestration-policy.md").read_text(encoding="utf-8")
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        for document in (skill, policy, readme):
+            self.assertIn("schema 2", document.lower())
+            self.assertIn("schema 1", document.lower())
+        self.assertIn("partition_digest(plan)", readme)
+        self.assertIn("executor_execution_union_seconds", readme)
+        self.assertIn("execution_overlap_seconds", readme)
+        self.assertIn("review never inflates overlap", readme)
+        self.assertIn("legacy journals read-only", skill)
+
 
 if __name__ == "__main__":
     unittest.main()
