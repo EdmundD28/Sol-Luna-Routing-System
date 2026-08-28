@@ -118,6 +118,20 @@ The builder requires verified, fully readable explicit-session receipts with hos
 
 The output allowlist contains only the campaign and pair identifiers, declared Luna effort and writer count, route, redacted controller/writer identity values, receipt SHA-256 values, verification status, schema version, and a SHA-256 over the canonical index without that digest field. Each `receipt_sha256` is computed over the parsed receipt's sorted-key, compact canonical JSON, so it is stable across equivalent serializations. The index never copies receipt paths, source/thread references, working directories, or agent paths. Output uses a same-directory flushed and `fsync`-ed temporary file followed by `os.replace`.
 
+## Build the structural attestation
+
+After every registered arm is complete, bind the campaign ledger and identity index to the frozen benchmark contract:
+
+```powershell
+python .agents/skills/sol-luna/scripts/benchmark_attestation.py build `
+  --campaign-ledger C:\benchmark\campaign.jsonl `
+  --identity-index C:\benchmark\identity-index.json `
+  --contract C:\benchmark\contract.json `
+  --output C:\benchmark\attestation.json
+```
+
+The contract is a strict schema-1 JSON object declaring the campaign ID, route revision, expected pair and batch counts, Luna effort and writer count, and the benchmark-contract, task-spec, acceptance-suite, and policy SHA-256 values. The builder replays the authoritative campaign ledger, requires a complete zero-defect accepted campaign with unchanged meter windows, verifies the identity-index digest and exact pair/route membership, and checks host-observed OpenAI `gpt-5.6-sol/high` controllers plus the declared OpenAI `gpt-5.6-luna` writers. Inputs must be regular non-symlink files. The output parent must already be a directory, the output must not exist or alias an input, and the builder writes atomically without including paths, timestamps, session references, prompts, or notes. Its attestation proves structural coherence only; use `allowance_meter.py` to decide the economic threshold.
+
 ## Accept or hold
 
 Call the campaign a pass only when independent acceptance is equal, defects do not increase, total Sol-Luna elapsed time is strictly lower, the five-hour conservative aggregate advantage reaches the declared threshold, weekly evidence does not contradict the direction, and the arm order is counterbalanced. Report the displayed ratio and uncertainty interval, both meters separately, all failures and repairs, and any contamination boundary.

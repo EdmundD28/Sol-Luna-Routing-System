@@ -76,6 +76,7 @@ The Skill uses standard-library Python tools:
 | `allowance_meter.py` | Quantify conservative Sol-only versus Sol-Luna advantage from matched five-hour and weekly plan-limit percentage readings |
 | `allowance_campaign.py` | Pre-register route order, atomically record route-only meter intervals, recover active arms, report excluded referee gaps, and assess completed pairs |
 | `benchmark_identity.py` | Bind host-observed Sol/Luna models, effort, and an explicitly declared one- or two-writer benchmark shape while rejecting logical receipt reuse |
+| `benchmark_attestation.py` | Deterministically bind a completed allowance campaign, verified identity index, and frozen benchmark contract into one redacted attestation |
 | `credit_model.py` | Estimate purchased credits from classified phase usage and a fingerprinted rate card; never convert included plan percentages |
 
 The matched harness binds each pair to the same starting candidate, task digest, independent acceptance-suite digest, policy fingerprint, and observed runtime identity. It does not launch paid model work. See [runtime and evidence details](.agents/skills/sol-luna/references/evidence-and-runtime.md) and [the orchestration policy](.agents/skills/sol-luna/references/orchestration-policy.md).
