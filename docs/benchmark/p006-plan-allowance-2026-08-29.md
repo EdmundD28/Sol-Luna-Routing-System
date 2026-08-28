@@ -15,11 +15,16 @@ displayed allowance and more wall time.
 - Preregistered referee:
   `sha256:ecf0be37dc1da7e63ed86b74f87221ee26bceaea4281e46cbd517c217a7fc9d3`
 - Order: `SOL_LUNA`, then `SOL_ONLY`
-- Both controllers: host-selected `gpt-5.6-sol/high`
-- Sol-Luna writer: one retained `gpt-5.6-luna/high`; one initial handoff and
+- Both controllers: host-observed OpenAI `gpt-5.6-sol/high`
+- Sol-Luna writer: one retained host-observed OpenAI `gpt-5.6-luna/high`; one initial handoff and
   one focused repair; Sol reported no Luna-scope edit or reclaim
 - Sol-only: one continuous controller and no subagents
 - Meter resolution: one displayed percentage point
+
+Strict receipts built from the three explicit host session records verified
+the requested and observed model, effort, and role with no mismatch or unknown
+identity field. All three sessions reported the managed permission profile and
+`workspace-write` sandbox. Worker prose was not used as identity proof.
 
 The route boundaries exclude commits, referee execution, branch preparation,
 and experiment-controller work. No meter movement occurred in the excluded gap
