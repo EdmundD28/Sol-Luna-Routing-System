@@ -94,7 +94,7 @@ class ClosureContractTests(unittest.TestCase):
         c["envelope"]["repair_budget"]["max_attempts"] = 1
         c["events"] = c["events"][:2] + [
             {"sequence": 3, "event": "SOL_ACCEPTANCE_FAIL", "actor_id": "sol-controller", "candidate_digest": self.digest(1), "acceptance_ids": ["accept-core"], "changed_paths": [], "workspace_before_digest": self.digest(4), "workspace_after_digest": self.digest(4), "failure_evidence_digest": self.digest(5)},
-            {"sequence": 4, "event": "OPEN_LUNA_REPAIR", "actor_id": "sol-controller", "candidate_digest": self.digest(5), "failure_evidence_digest": self.digest(5), "target_unit_ids": ["core-unit"], "repair_cost_weight": 0.5, "marginal_net_substitution": 1.0},
+            {"sequence": 4, "event": "OPEN_LUNA_REPAIR", "actor_id": "sol-controller", "candidate_digest": self.digest(1), "failure_evidence_digest": self.digest(5), "target_unit_ids": ["core-unit"], "repair_cost_weight": 0.5, "marginal_net_substitution": 1.0},
             {"sequence": 5, "event": "LUNA_REPAIR_HANDOFF", "actor_id": "luna-executor", "candidate_digest": self.digest(7), "target_unit_ids": ["core-unit"], "changed_paths": ["src/fix.py"]},
             {"sequence": 6, "event": "SOL_ACCEPTANCE_FAIL", "actor_id": "sol-controller", "candidate_digest": self.digest(7), "acceptance_ids": ["accept-core"], "changed_paths": [], "workspace_before_digest": self.digest(8), "workspace_after_digest": self.digest(8), "failure_evidence_digest": self.digest(9)},
             {"sequence": 7, "event": "OPEN_LUNA_REPAIR", "actor_id": "sol-controller", "candidate_digest": self.digest(7), "failure_evidence_digest": self.digest(9), "target_unit_ids": ["core-unit"], "repair_cost_weight": 0.5, "marginal_net_substitution": 1.0},

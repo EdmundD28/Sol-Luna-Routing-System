@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: 2026 Edmund Dai
 # SPDX-License-Identifier: Apache-2.0
-"""Validate and assess the v0.12 continuous Luna repair closure contract.
+"""Validate, assess, and project the continuous Luna repair closure contract.
 
 The format is intentionally small and replay-only.  It records authority and
 ownership; it never executes a worker, a test, or a Sol action.
@@ -286,7 +286,7 @@ def _envelope(raw: Any) -> dict[str, Any]:
     return result
 
 
-def validate(source: Mapping[str, Any]) -> dict[str, Any]:
+def _normalize(source: Mapping[str, Any]) -> dict[str, Any]:
     document = _object(source, "contract")
     allowed = {"schema_version", "envelope", "events", "contract_fingerprint"}
     _fields(document, allowed, {"schema_version", "envelope", "events"}, "contract")
@@ -300,7 +300,10 @@ def validate(source: Mapping[str, Any]) -> dict[str, Any]:
     normalized = {"schema_version": SCHEMA_VERSION, "envelope": envelope, "events": events}
     if "contract_fingerprint" in document:
         normalized["contract_fingerprint"] = _digest(document["contract_fingerprint"], "contract_fingerprint")
-    _replay(normalized)
+    return normalized
+
+
+def _attach_fingerprint(normalized: dict[str, Any]) -> dict[str, Any]:
     fingerprint = contract_fingerprint(normalized)
     if "contract_fingerprint" in normalized and normalized["contract_fingerprint"] != fingerprint:
         raise ContractError("contract_fingerprint does not match canonical contract")
@@ -308,7 +311,13 @@ def validate(source: Mapping[str, Any]) -> dict[str, Any]:
     return normalized
 
 
-def _replay(document: Mapping[str, Any]) -> dict[str, Any]:
+def validate(source: Mapping[str, Any]) -> dict[str, Any]:
+    normalized = _normalize(source)
+    _replay(normalized)
+    return _attach_fingerprint(normalized)
+
+
+def _replay(document: Mapping[str, Any], *, require_closed: bool = True) -> dict[str, Any]:
     env = document["envelope"]
     luna = {u["unit_id"]: u for u in env["luna_units"]}
     sol = {u["unit_id"]: u for u in env["sol_lane_units"]}
@@ -337,8 +346,8 @@ def _replay(document: Mapping[str, Any]) -> dict[str, Any]:
                 raise ContractError("DISPATCH must start the contract by the controller")
             state = "DISPATCHED"
         elif kind == "SOL_PARALLEL_PROGRESS":
-            if state in {"START", "CLOSED"} or actor != env["controller_id"] or candidate != current:
-                raise ContractError("SOL_PARALLEL_PROGRESS requires the controller and current candidate")
+            if state not in {"DISPATCHED", "AWAITING_ACCEPTANCE"} or actor != env["controller_id"] or candidate != current:
+                raise ContractError("SOL_PARALLEL_PROGRESS requires the controller and current candidate while work awaits handoff or acceptance")
             if any(not _contains([p for u in sol.values() for p in u["path_scopes"]], p) for p in event["changed_paths"]):
                 raise ContractError("Sol parallel progress exceeds sol_lane scopes")
             if event["workspace_before_digest"] == event["workspace_after_digest"]:
@@ -383,8 +392,8 @@ def _replay(document: Mapping[str, Any]) -> dict[str, Any]:
                 last_failure_evidence = evidence
                 last_failed_acceptance_ids = set(event["acceptance_ids"])
         elif kind == "OPEN_LUNA_REPAIR":
-            if state != "FAILED" or actor != env["controller_id"]:
-                raise ContractError("OPEN_LUNA_REPAIR requires a Sol acceptance failure")
+            if state != "FAILED" or actor != env["controller_id"] or candidate != current:
+                raise ContractError("OPEN_LUNA_REPAIR requires the controller and current failed candidate")
             targets = event["target_unit_ids"]
             if any(t not in luna for t in targets) or any(t in reclaimed for t in targets):
                 raise ContractError("repair targets must be unreclaimed Luna units")
@@ -459,9 +468,90 @@ def _replay(document: Mapping[str, Any]) -> dict[str, Any]:
             state = "CLOSED"
         else:  # pragma: no cover - event parser prevents this
             raise ContractError("unsupported event")
-    if state != "CLOSED":
+    if require_closed and state != "CLOSED":
         raise ContractError("contract is not closed")
-    return {"current": current, "reclaimed": reclaimed, "accepted": accepted, "attempts": attempts, "cost": cost, "parallel": parallel}
+    return {
+        "current": current,
+        "state": state,
+        "open_target": open_target,
+        "last_failure_evidence": last_failure_evidence,
+        "last_failed_acceptance_ids": last_failed_acceptance_ids,
+        "reclaimed": reclaimed,
+        "accepted": accepted,
+        "attempts": attempts,
+        "cost": cost,
+        "parallel": parallel,
+    }
+
+
+def _remaining_repair_cost(maximum: float, used: float) -> float:
+    if math.isclose(used, maximum, rel_tol=1e-12, abs_tol=1e-12):
+        return 0.0
+    return max(0.0, maximum - used)
+
+
+def project(source: Mapping[str, Any]) -> dict[str, Any]:
+    """Replay a valid schema-1 event prefix and expose its next legal step."""
+
+    document = _normalize(source)
+    replay = _replay(document, require_closed=False)
+    document = _attach_fingerprint(document)
+    env = document["envelope"]
+    luna = {unit["unit_id"]: unit for unit in env["luna_units"]}
+    state = replay["state"]
+    remaining_attempts = env["repair_budget"]["max_attempts"] - replay["attempts"]
+    remaining_cost = _remaining_repair_cost(env["repair_budget"]["max_cost_weight"], replay["cost"])
+    failed_unit_ids = sorted(
+        unit_id for unit_id, unit in luna.items()
+        if set(unit["acceptance_ids"]) & replay["last_failed_acceptance_ids"]
+    )
+    available_failed_unit_ids = [unit_id for unit_id in failed_unit_ids if unit_id not in replay["reclaimed"]]
+
+    next_events: list[str] = []
+    if state == "DISPATCHED":
+        next_events.append("LUNA_HANDOFF")
+        if env["sol_lane_units"]:
+            next_events.append("SOL_PARALLEL_PROGRESS")
+    elif state == "AWAITING_ACCEPTANCE":
+        next_events.extend(("SOL_ACCEPTANCE_FAIL", "SOL_ACCEPTANCE_PASS"))
+        if env["sol_lane_units"]:
+            next_events.append("SOL_PARALLEL_PROGRESS")
+    elif state == "FAILED":
+        if available_failed_unit_ids:
+            next_events.append("SOL_RECLAIM")
+            if remaining_attempts > 0 and remaining_cost > 0.0:
+                next_events.append("OPEN_LUNA_REPAIR")
+    elif state == "REPAIR_OPEN":
+        next_events.append("LUNA_REPAIR_HANDOFF")
+    elif state == "RECLAIMED":
+        next_events.extend(("SOL_ACCEPTANCE_FAIL", "SOL_ACCEPTANCE_PASS"))
+    elif state == "ACCEPTED_CANDIDATE":
+        next_events.append("CLOSE")
+
+    accepted_unit_ids = sorted(
+        unit_id for unit_id, unit in luna.items()
+        if unit_id not in replay["reclaimed"]
+        and all(acceptance_id in replay["accepted"] for acceptance_id in unit["acceptance_ids"])
+    )
+    result: dict[str, Any] = {
+        "status": "CLOSED" if state == "CLOSED" else "IN_PROGRESS",
+        "schema_version": SCHEMA_VERSION,
+        "contract_fingerprint": document["contract_fingerprint"],
+        "state": state,
+        "current_candidate_digest": replay["current"],
+        "next_events": sorted(next_events),
+        "remaining_repair_attempts": remaining_attempts,
+        "remaining_repair_cost_weight": remaining_cost,
+        "accepted_luna_unit_ids": accepted_unit_ids,
+        "reclaimed_luna_unit_ids": sorted(replay["reclaimed"]),
+        "automatic_execution_allowed": False,
+    }
+    if state == "FAILED":
+        result["failure_evidence_digest"] = replay["last_failure_evidence"]
+        result["affected_luna_unit_ids"] = failed_unit_ids
+    if state == "REPAIR_OPEN":
+        result["open_repair_target_unit_ids"] = sorted(replay["open_target"] or [])
+    return result
 
 
 def assess(source: Mapping[str, Any]) -> dict[str, Any]:
@@ -529,12 +619,16 @@ def main(argv: list[str] | None = None) -> int:
     parser = _ArgumentParser(description="Validate the Sol-Luna closure contract.")
     sub = parser.add_subparsers(dest="command", required=True, parser_class=_ArgumentParser)
     sub.add_parser("template")
-    for command in ("validate", "assess"):
+    for command in ("validate", "assess", "project"):
         p = sub.add_parser(command)
         p.add_argument("--input", required=True)
     try:
         args = parser.parse_args(argv)
-        output = template() if args.command == "template" else (validate(_load(args.input)) if args.command == "validate" else assess(_load(args.input)))
+        if args.command == "template":
+            output = template()
+        else:
+            source = _load(args.input)
+            output = validate(source) if args.command == "validate" else (assess(source) if args.command == "assess" else project(source))
     except (ContractError, OSError, TypeError, ValueError) as exc:
         print(f"closure contract error: {exc}", file=sys.stderr)
         return 2
