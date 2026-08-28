@@ -30,6 +30,7 @@ class PackageContractTests(unittest.TestCase):
             "scripts/evidence_ledger.py",
             "scripts/phase_tracker.py",
             "scripts/delegation_contract.py",
+            "scripts/net_substitution.py",
         ):
             self.assertTrue((SKILL_ROOT / relative_path).is_file(), relative_path)
             self.assertIn(relative_path, skill)
@@ -83,15 +84,38 @@ class PackageContractTests(unittest.TestCase):
         self.assertIn("review never inflates overlap", readme)
         self.assertIn("legacy journals read-only", skill)
 
-    def test_rolling_policy_optimizes_accepted_coverage_without_global_repair_budget(self) -> None:
+    def test_rolling_policy_optimizes_net_substitution_without_package_inflation(self) -> None:
         skill = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
         policy = (SKILL_ROOT / "references" / "orchestration-policy.md").read_text(encoding="utf-8")
-        self.assertIn("accepted Luna coverage", skill)
-        self.assertIn("genuinely replaces", skill)
-        self.assertIn("reusing that worker", skill)
-        self.assertIn("one package's repair does not consume another package's budget", skill)
-        self.assertIn("same Luna for adjacent packages", policy)
-        self.assertIn("A repair used by another package does not consume this package's budget", policy)
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        self.assertIn("net substitution of expensive Sol work", skill)
+        self.assertIn("Calls, packages, actions, and writer count never enter the benefit numerator", skill)
+        self.assertIn("marginal net substitution is positive", skill)
+        self.assertIn("domain, assumptions, or independence need changes", skill)
+        self.assertIn("route-independent repair cap by acceptance claim or baseline weight", skill)
+        self.assertNotIn("one package's repair does not consume another package's budget", skill)
+        self.assertIn("sol_baseline - luna_execution", policy)
+        self.assertIn("actual_sol_labor_reduction", policy)
+        self.assertIn("structural_net_substitution", policy)
+        self.assertIn("min(actual_sol_labor_reduction, structural_net_substitution)", policy)
+        self.assertIn("splitting or renaming packages never increases it", policy)
+        self.assertIn("one complete top-level task in one continuous run by a single real Sol controller", policy)
+        self.assertIn("must not pre-split, separately dispatch, or artificially serialize Sol packages", policy)
+        self.assertIn("v0.10 evidence remains `HOLD`", policy)
+        self.assertIn("automatic_execution_allowed: false", policy)
+        self.assertIn("v0.10 therefore remains `HOLD` and proves no economic advantage", readme)
+
+    def test_common_referee_is_external_but_luna_specific_sol_labor_is_internal(self) -> None:
+        skill = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
+        policy = (SKILL_ROOT / "references" / "orchestration-policy.md").read_text(encoding="utf-8")
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        for document in (skill, policy, readme):
+            self.assertIn("common independent referee", document)
+            self.assertIn("outside both route intervals", document)
+        self.assertIn("Luna-specific review, integration, replay, and rework remain inside", skill)
+        self.assertIn("required specifically because Luna participated stays inside", policy)
+        self.assertIn("Luna-specific planning, review, integration, replay, and rework remain inside", readme)
+        self.assertIn("one continuous run by a single real Sol controller", readme)
 
     def test_delegation_envelope_subtracts_sol_shadow_work(self) -> None:
         skill = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
@@ -100,7 +124,7 @@ class PackageContractTests(unittest.TestCase):
         self.assertIn("subtract the whole affected baseline claim", skill)
         self.assertIn("Stable-domain delegation envelope", policy)
         self.assertIn("A replay shadows its whole claim", policy)
-        self.assertIn("baseline-cost-weighted", skill)
+        self.assertIn("net substitution of expensive Sol work", skill)
         self.assertIn("schema-2 candidate-bound handoff", skill)
 
 
