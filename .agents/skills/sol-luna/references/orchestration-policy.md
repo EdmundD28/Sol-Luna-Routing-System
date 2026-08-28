@@ -51,6 +51,12 @@ The normal production shape is one Sol controller plus one active Luna writer. A
 
 Wait only when no ready package, review, integration preparation, or acceptance work remains. Inspect one compact status snapshot before interrupting a stalled worker; do not turn polling into its own workload.
 
+### Stable-domain delegation envelope
+
+When interfaces, ownership, and acceptance are stable, Sol may freeze one outer envelope instead of pre-scripting every Luna microtask. The envelope fixes writable scope, forbidden actions, acceptance IDs, allocation fingerprint, and final handoff contract. One Luna may then decompose its own internal dependency graph, implement, run deterministic preflight checks, make one bounded evidence-backed correction, and close out within that envelope. Internal units never expand authority or ownership, and the final handoff remains a single frozen candidate.
+
+The handoff binds the candidate digest, exact changed-path union, every acceptance result, internal unit graph, replacement actions, residual risks, and closeout state. Sol performs one risk-proportional final verification against that exact candidate. If Sol repeats a Luna action, record the action and a bounded reason: discrepancy, safety risk, nondeterminism, or candidate drift. Replayed actions are shadow work and are subtracted from effective substitution; extra Luna calls or internal units do not increase coverage by themselves.
+
 ## Risk-proportional review
 
 - `TARGETED`: clean low-risk package, authoritative checks passed, no repair or shared interface. Inspect changed paths and compact diff; verify the authoritative targeted checks.
@@ -74,7 +80,7 @@ Do not restart an unchanged vague package. `BLOCKED` is reserved for missing aut
 
 ## Evidence and success gate
 
-Record `sol_planning`, `sol_retained_execution`, `luna_execution`, `sol_review`, `repair`, and `integration` separately. A matched Sol-Luna record must include the retained phase even when its measured value is zero. Track source-aware credits or tokens, elapsed seconds, first-pass acceptance, repair rounds, independent defects, final candidate, policy and allocation fingerprints, task digest, acceptance-suite digest, accepted delegated coverage, duplicate work, Sol/Luna overlap, effort, active writer count, and review depth. Acceptance requires complete baseline reconciliation, exactly one executor per unit, non-overlapping write scopes, zero shadow implementation, all package dispositions closed, and the same independent acceptance suite.
+Record `sol_planning`, `sol_retained_execution`, `luna_execution`, `sol_review`, `repair`, and `integration` separately. A matched Sol-Luna record must include the retained phase even when its measured value is zero. Track source-aware credits or tokens, elapsed seconds, first-pass acceptance, repair rounds, independent defects, final candidate, policy and allocation fingerprints, task digest, acceptance-suite digest, accepted delegated coverage, duplicate work, Sol/Luna overlap, effort, active writer count, and review depth. For an envelope also track replacement actions, Sol replay actions, substitution fraction, verification reuse, context reloads, and handoff count. Acceptance requires complete baseline reconciliation, exactly one executor per unit, non-overlapping write scopes, candidate-bound fresh evidence, all package dispositions closed, and the same independent acceptance suite.
 
 Production phase journals use schema 2 with an explicit route, executor-owned unique intervals, replayable open and closed interval collections, and route/phase actor validation. Legacy journals remain available for load, validation, and read-only export only. Execution accounting uses half-open intervals: merge overlapping or adjacent intervals per executor and across all execution, then measure cross-actor execution overlap. Review and the other auxiliary phases are not execution, so phase totals, execution unions, overlap, and end-to-end wall-clock duration are deliberately different measures.
 

@@ -354,6 +354,100 @@ class SetupTests(unittest.TestCase):
             self.assertEqual((new_skills / "sol-luna" / "SKILL.md").read_bytes(),
                              (SETUP.SKILL_SOURCE / "SKILL.md").read_bytes())
 
+    def test_update_accepts_new_managed_asset_and_rollback_removes_it(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            codex, skills = self.roots(root)
+            full_assets = SETUP.managed_assets(codex, skills)
+            added = next(item for item in full_assets if item["relative"] == "scripts/delegation_contract.py")
+            subset = [item for item in full_assets if item is not added]
+            with mock.patch.object(SETUP, "managed_assets", return_value=subset):
+                SETUP.apply(codex, skills)
+            self.assertFalse(added["target"].exists())
+            plan = SETUP.preview(codex, skills, require_installed=True)
+            operation = next(item for item in plan["operations"] if item["target"] == str(added["target"]))
+            self.assertEqual(operation["action"], "create")
+            self.assertTrue(plan["safe_to_apply"])
+            updated = SETUP.apply(codex, skills, update=True)
+            self.assertEqual(updated["doctor"]["status"], "healthy")
+            self.assertTrue(added["target"].exists())
+            self.assertEqual(SETUP.rollback(codex, skills)["status"], "rolled-back")
+            self.assertFalse(added["target"].exists())
+
+    def test_migrated_install_can_add_asset_then_rollback_to_legacy(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            codex, old_skills = self.roots(root)
+            new_skills = codex / "skills"
+            managed_assets = SETUP.managed_assets
+
+            def without_new_asset(codex_home: Path, skills_home: Path) -> list[dict]:
+                return [
+                    item
+                    for item in managed_assets(codex_home, skills_home)
+                    if item["relative"] != "scripts/delegation_contract.py"
+                ]
+
+            with mock.patch.object(SETUP, "managed_assets", side_effect=without_new_asset):
+                SETUP.apply(codex, old_skills)
+                plan = SETUP.migration_plan(codex, new_skills)
+                SETUP.migrate(codex, new_skills, plan["plan_fingerprint"])
+
+            added_new = next(
+                item
+                for item in SETUP.managed_assets(codex, new_skills)
+                if item["relative"] == "scripts/delegation_contract.py"
+            )
+            self.assertFalse(added_new["target"].exists())
+            self.assertEqual(SETUP.apply(codex, new_skills, update=True)["doctor"]["status"], "healthy")
+            self.assertTrue(added_new["target"].exists())
+
+            self.assertEqual(SETUP.rollback(codex, new_skills)["status"], "rolled-back")
+            self.assertFalse((new_skills / "sol-luna").exists())
+            self.assertTrue((old_skills / "sol-luna" / "SKILL.md").exists())
+            self.assertFalse(old_skills.joinpath("sol-luna", "scripts", "delegation_contract.py").exists())
+            restored_state = json.loads(SETUP.state_path(codex).read_text(encoding="utf-8"))
+            self.assertEqual(restored_state["skills_home"], str(old_skills.resolve()))
+            self.assertEqual(SETUP.doctor(codex)["status"], "healthy")
+
+    def test_update_rejects_source_removal_without_writing(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            codex, skills = self.roots(root)
+            SETUP.apply(codex, skills)
+            full_assets = SETUP.managed_assets(codex, skills)
+            removed = next(item for item in full_assets if item["relative"] == "scripts/delegation_contract.py")
+            state_file = SETUP.state_path(codex)
+            before_state = state_file.read_bytes()
+            before_file = removed["target"].read_bytes()
+            subset = [item for item in full_assets if item is not removed]
+            with mock.patch.object(SETUP, "managed_assets", return_value=subset):
+                with self.assertRaises(SETUP.SetupError):
+                    SETUP.preview(codex, skills, require_installed=True)
+                with self.assertRaises(SETUP.SetupError):
+                    SETUP.apply(codex, skills, update=True)
+            self.assertEqual(state_file.read_bytes(), before_state)
+            self.assertEqual(removed["target"].read_bytes(), before_file)
+
+    def test_update_rejects_user_conflict_at_new_managed_target(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            codex, skills = self.roots(root)
+            full_assets = SETUP.managed_assets(codex, skills)
+            added = next(item for item in full_assets if item["relative"] == "scripts/delegation_contract.py")
+            subset = [item for item in full_assets if item is not added]
+            with mock.patch.object(SETUP, "managed_assets", return_value=subset):
+                SETUP.apply(codex, skills)
+            added["target"].parent.mkdir(parents=True, exist_ok=True)
+            added["target"].write_text("user-owned", encoding="utf-8")
+            before_state = SETUP.state_path(codex).read_bytes()
+            plan = SETUP.preview(codex, skills, require_installed=True)
+            self.assertFalse(plan["safe_to_apply"])
+            with self.assertRaises(SETUP.SetupError):
+                SETUP.apply(codex, skills, update=True)
+            self.assertEqual(added["target"].read_text(encoding="utf-8"), "user-owned")
+            self.assertEqual(SETUP.state_path(codex).read_bytes(), before_state)
+
 
 if __name__ == "__main__":
     unittest.main()

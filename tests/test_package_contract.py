@@ -29,6 +29,7 @@ class PackageContractTests(unittest.TestCase):
             "scripts/runtime_receipt.py",
             "scripts/evidence_ledger.py",
             "scripts/phase_tracker.py",
+            "scripts/delegation_contract.py",
         ):
             self.assertTrue((SKILL_ROOT / relative_path).is_file(), relative_path)
             self.assertIn(relative_path, skill)
@@ -91,6 +92,14 @@ class PackageContractTests(unittest.TestCase):
         self.assertIn("one package's repair does not consume another package's budget", skill)
         self.assertIn("same Luna for adjacent packages", policy)
         self.assertIn("A repair used by another package does not consume this package's budget", policy)
+
+    def test_delegation_envelope_subtracts_sol_shadow_work(self) -> None:
+        skill = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
+        policy = (SKILL_ROOT / "references" / "orchestration-policy.md").read_text(encoding="utf-8")
+        self.assertIn("Sol does not pre-script Luna's internal units", skill)
+        self.assertIn("subtract it from effective Luna substitution", skill)
+        self.assertIn("Stable-domain delegation envelope", policy)
+        self.assertIn("Replayed actions are shadow work", policy)
 
 
 if __name__ == "__main__":

@@ -11,6 +11,7 @@ This revision adds executable policy and evidence controls. It is still an exper
 - Predictive routing compares Sol-only delivery with Luna `low`, `medium`, `high`, `xhigh`, and `max` using expected accepted-result credits and time. The user-facing word `light` is accepted as an alias for Codex `low`.
 - A lower-effort failure is not required before direct XHigh or Max selection.
 - Production routing defaults to one active Luna writer, but that writer may roll through multiple ready packages from one complete, single-owner allocation. A second active writer remains benchmark-only until matched plan-meter evidence supports an explicit policy release.
+- A stable-domain delegation envelope lets one Luna self-decompose, implement, preflight, and close out inside frozen outer constraints. Candidate-bound handoff evidence counts only the Luna actions that Sol did not replay.
 - Each package may receive one evidence-backed focused repair while its marginal saving remains positive; another package's repair does not consume that budget.
 - Risk-proportional review avoids replaying clean low-risk work while requiring deep review for material risk and discrepancies.
 - Runtime receipts compare expected identity and boundary values with host-observed records.

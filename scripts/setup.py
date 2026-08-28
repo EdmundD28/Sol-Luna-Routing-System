@@ -299,7 +299,10 @@ def preview(codex_home: Path, skills_home: Path, *, require_installed: bool = Fa
     if require_installed and (not state or state.get("status") != "installed"):
         raise SetupError("update requires a valid installed state")
     if require_installed and state:
-        validate_state_for_write(codex, skills, state)
+        # A newer source tree may add managed assets.  Existing state must be
+        # a subset of the current allowlist; the reverse direction remains a
+        # hard failure in validate_state_for_write to prevent source deletion.
+        validate_state_for_write(codex, skills, state, allow_subset=True)
     tracked = state.get("installed", {}) if state and state.get("status") == "installed" else {}
     assets = managed_assets(codex, skills)
     operations: list[dict[str, Any]] = []
