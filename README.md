@@ -10,17 +10,17 @@ This revision adds executable policy and evidence controls. It is still an exper
 
 - Predictive routing compares Sol-only delivery with Luna `low`, `medium`, `high`, `xhigh`, and `max` using expected accepted-result credits and time. The user-facing word `light` is accepted as an alias for Codex `low`.
 - A lower-effort failure is not required before direct XHigh or Max selection.
-- Production routing defaults to one Luna writer. A second writer remains benchmark-only until matched plan-meter evidence supports an explicit policy release.
+- Production routing defaults to one active Luna writer, but that writer may roll through multiple ready packages from one complete, single-owner allocation. A second active writer remains benchmark-only until matched plan-meter evidence supports an explicit policy release.
 - Rework is limited to one evidence-backed focused repair, then repartition, one effort escalation, or Sol reclaim.
 - Risk-proportional review avoids replaying clean low-risk work while requiring deep review for material risk and discrepancies.
 - Runtime receipts compare expected identity and boundary values with host-observed records.
 - Ownership, frozen handoffs, lifecycle transitions, phase evidence, atomic ledger writes, and matched cohorts have executable validators.
 - Evidence-ledger schema 5 requires retained Sol execution in new matched Sol-Luna records. Older schemas remain readable with their origin preserved but cannot satisfy the current measurement-policy gate. Schema 4 credit trust remains fail-closed: self-declared exact sources cannot pass, and claim-index schema 2 binds each external claim to the complete normalized record and a unique receipt. The ledger does not validate provider signatures or collect Codex desktop billing data.
 - A five-pair matched bounded-function campaign achieved equal independent acceptance and zero final defects, but Sol→Luna regressed to 4.08× the median diagnostic tokens and 5.42× the median elapsed time. It did not capture five-hour or weekly plan-limit readings, so it cannot decide subscription-allowance economics.
-- A later [matched allowance pilot p002](docs/benchmark/matched-allowance-p002-2026-08-28.md) found that two Luna High writers failed equal acceptance, consumed no less displayed five-hour allowance, and were 4.72% slower. Policy 1.3.0 therefore defaults to one Luna and a 50% predictive accepted-cost saving floor; that correction still needs a new matched meter campaign.
+- A later [matched allowance pilot p002](docs/benchmark/matched-allowance-p002-2026-08-28.md) found that two Luna High writers failed equal acceptance, consumed no less displayed five-hour allowance, and were 4.72% slower. The subsequent [p003 campaign](docs/benchmark/matched-allowance-p003-2026-08-28.md) found only a displayed 1.25× five-hour advantage for fixed one-package Sol-Luna, with worse quality and 31.2% longer elapsed time. Policy 1.4.0 therefore keeps one active Luna while allowing higher rolling delegated coverage from a complete allocation; that mechanism still needs a new matched campaign.
 - Local lifecycle tests validate the state machine. A [native desktop-app smoke](docs/validation/native-app-lifecycle-smoke-2026-08-26.md) exercised real Luna delegation, one repair, stale-evidence rejection, timeout/interruption, same-child continuation, and pre-dispatch ownership conflict rejection. It did not prove that the packaged custom TOML profile was loaded; the automated opt-in runner remains unavailable until Codex exposes a stable non-interactive custom-subagent surface.
 
-See [the matched allowance pilot p002](docs/benchmark/matched-allowance-p002-2026-08-28.md), [the matched bounded-function campaign](docs/benchmark/matched-bounded-campaign-2026-08-26.md), and the [older preliminary comparison](docs/benchmark/preliminary-comparison.md).
+See [the p003 allowance campaign](docs/benchmark/matched-allowance-p003-2026-08-28.md), [the p002 allowance pilot](docs/benchmark/matched-allowance-p002-2026-08-28.md), [the matched bounded-function campaign](docs/benchmark/matched-bounded-campaign-2026-08-26.md), and the [older preliminary comparison](docs/benchmark/preliminary-comparison.md).
 
 ## Core workflow
 
@@ -30,7 +30,7 @@ Invoke explicitly:
 $sol-luna <substantial task>
 ```
 
-Sol estimates each eligible route before dispatch. Policy `1.3.0` requires at least 80% predicted first-pass acceptance, no predicted final-defect regression, at least 50% expected accepted-cost reduction by default, and no expected elapsed regression. It starts from one Luna at the lowest task-supported effort and selects the lowest expected accepted-delivery cost—not automatically the lowest reasoning effort. The estimate includes retained Sol execution cost and overlaps its time with Luna execution. It is a route guard; only matched account-meter readings prove subscription-allowance savings.
+Sol estimates each eligible route before dispatch. Policy `1.4.0` requires at least 80% predicted first-pass acceptance, no predicted final-defect regression, at least 50% expected accepted-cost reduction by default, and no expected elapsed regression. It starts from one active Luna at the lowest task-supported effort, evaluates complete Sol/Luna allocations with structurally unique acceptance ownership, and may increase Luna's rolling package coverage without increasing active concurrency. It selects the lowest expected accepted-delivery cost—not automatically the lowest effort or highest coverage. It is a route guard; only matched account-meter readings prove subscription-allowance savings.
 
 ```powershell
 python .agents/skills/sol-luna/scripts/routing_policy.py template

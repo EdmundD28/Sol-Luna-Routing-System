@@ -162,7 +162,125 @@ def multiwriter_request() -> dict:
     return source
 
 
+def v5_package(package_id: str, executor: str, seconds: float, baseline_seconds: float, *, credits: float = 1, critical_path: bool = False, depends_on: list[str] | None = None) -> dict:
+    item = package(package_id, seconds, credits=credits, depends_on=depends_on)
+    item.update({"executor": executor, "critical_path": critical_path, "acceptance_ids": [f"accept-{package_id}"], "baseline_sol_credits": baseline_seconds / 10, "baseline_sol_seconds": baseline_seconds})
+    return item
+
+
+def v5_request() -> dict:
+    source = request()
+    source["schema_version"] = 5
+    source["requested_writers"] = 1
+    source["acceptance_contract_ids"] = ["accept-sol-core", "accept-luna-tests"]
+    source["coordination"].pop("sol_retained_execution")
+    source["coordination"].update({"queue": {"credits": 1, "seconds": 1}, "merge_contention": {"credits": 1, "seconds": 1}})
+    source["luna_candidates"] = [{"effort": "medium", "allocation_id": "allocation-a", "failure_impact": "low", "packages": [
+        v5_package("sol-core", "SOL", 500, 500, credits=20, critical_path=True),
+        v5_package("luna-tests", "LUNA", 300, 500, credits=10),
+    ]}]
+    # The baseline map is the complete Sol-only execution, not actual route cost.
+    source["sol_only"]["execution_credits"] = 100
+    source["sol_only"]["execution_seconds"] = 1000
+    source["luna_candidates"][0]["packages"][0]["baseline_sol_credits"] = 50
+    source["luna_candidates"][0]["packages"][1]["baseline_sol_credits"] = 50
+    return source
+
+
 class RoutingPolicyTests(unittest.TestCase):
+    def test_direct_policy_mapping_is_strictly_validated_without_mutation(self) -> None:
+        for field, value in (("maximum_active_luna_writers", None), ("maximum_duplicate_work_fraction", True), ("require_sol_critical_path_overlap", 1)):
+            malformed = dict(POLICY)
+            malformed.pop(field, None)
+            if value is not None:
+                malformed[field] = value
+            with self.assertRaises(ROUTING.PolicyError):
+                ROUTING.evaluate_route(v5_request(), malformed)
+        unchanged = dict(POLICY)
+        ROUTING.evaluate_route(v5_request(), unchanged)
+        self.assertEqual(unchanged, POLICY)
+
+    def test_template_is_evaluable_v5_complete_allocation(self) -> None:
+        source = ROUTING.template()
+        self.assertEqual(source["schema_version"], 5)
+        self.assertNotIn("sol_retained_execution", source["coordination"])
+        candidate = source["luna_candidates"][0]
+        self.assertEqual(candidate["allocation_id"], "allocation-default")
+        self.assertEqual({item["executor"] for item in candidate["packages"]}, {"SOL", "LUNA"})
+        self.assertTrue(any(item["executor"] == "SOL" and item["critical_path"] for item in candidate["packages"]))
+        result = ROUTING.evaluate_route(source, POLICY)
+        self.assertEqual(result["route"], "SOL_LUNA")
+        selected = result["selected_metrics"]
+        self.assertEqual(selected["allocation_id"], "allocation-default")
+        self.assertEqual(selected["delegated_package_count"], 2)
+        self.assertEqual(selected["sol_retained_package_count"], 1)
+        self.assertGreater(selected["sol_luna_overlap_seconds"], 0)
+        self.assertEqual(selected["duplicate_work_fraction"], 0.0)
+
+    def test_v5_one_active_luna_writer_rolls_multiple_packages(self) -> None:
+        source = v5_request()
+        source["luna_candidates"][0]["packages"].append(v5_package("luna-docs", "LUNA", 100, 0, credits=1, depends_on=["luna-tests"]))
+        source["acceptance_contract_ids"].append("accept-luna-docs")
+        result = ROUTING.evaluate_route(source, POLICY)
+        self.assertEqual(result["candidates"][0]["delegated_package_count"], 2)
+        self.assertEqual(result["candidates"][0]["effective_writers"], 1)
+
+    def test_v5_active_cap_is_independent_of_delegated_coverage(self) -> None:
+        source = v5_request()
+        source["requested_writers"] = 1
+        source["luna_candidates"][0]["packages"].append(v5_package("luna-docs", "LUNA", 100, 0, depends_on=["luna-tests"]))
+        source["acceptance_contract_ids"].append("accept-luna-docs")
+        result = ROUTING.evaluate_route(source, POLICY)
+        self.assertEqual(result["candidates"][0]["delegated_package_count"], 2)
+
+    def test_v5_baseline_mismatch_and_candidate_drift_are_rejected(self) -> None:
+        source = v5_request()
+        source["luna_candidates"][0]["packages"][0]["baseline_sol_seconds"] = 501
+        with self.assertRaises(ROUTING.PolicyError): ROUTING.evaluate_route(source, POLICY)
+        source = v5_request()
+        source["luna_candidates"].append(dict(source["luna_candidates"][0], allocation_id="allocation-b", packages=list(source["luna_candidates"][0]["packages"])))
+        source["luna_candidates"][1]["packages"][1] = dict(source["luna_candidates"][1]["packages"][1], baseline_sol_seconds=401)
+        with self.assertRaises(ROUTING.PolicyError): ROUTING.evaluate_route(source, POLICY)
+
+    def test_v5_rejects_double_owner_and_missing_sol_critical_path(self) -> None:
+        source = v5_request()
+        source["luna_candidates"][0]["packages"][1]["writable_paths"] = source["luna_candidates"][0]["packages"][0]["writable_paths"]
+        with self.assertRaises(ROUTING.PolicyError): ROUTING.evaluate_route(source, POLICY)
+        source = v5_request()
+        source["luna_candidates"][0]["packages"][0]["critical_path"] = False
+        with self.assertRaises(ROUTING.PolicyError): ROUTING.evaluate_route(source, POLICY)
+
+    def test_v5_rejects_no_overlap_and_coordination_retained_field(self) -> None:
+        source = v5_request()
+        source["coordination"]["sol_retained_execution"] = {"credits": 0, "seconds": 0}
+        with self.assertRaises(ROUTING.PolicyError): ROUTING.evaluate_route(source, POLICY)
+        source = v5_request()
+        source["luna_candidates"][0]["packages"][1]["depends_on"] = ["sol-core"]
+        source["luna_candidates"][0]["packages"][0]["execution_seconds"] = 0
+        self.assertEqual(ROUTING.evaluate_route(source, POLICY)["route"], "SOL_ONLY")
+
+    def test_v5_same_effort_allocations_are_allowed_and_cheapest_selected(self) -> None:
+        source = v5_request()
+        second = json.loads(json.dumps(source["luna_candidates"][0]))
+        second["allocation_id"] = "allocation-b"
+        second["packages"][1]["execution_credits"] = 1
+        source["luna_candidates"].append(second)
+        result = ROUTING.evaluate_route(source, POLICY)
+        self.assertEqual(result["selected_luna_effort"], "medium")
+        self.assertEqual(result["candidates"][1]["allocation_id"], "allocation-b")
+
+    def test_v5_reports_overlap_and_no_duplicate_cost(self) -> None:
+        result = ROUTING.evaluate_route(v5_request(), POLICY)
+        candidate = result["candidates"][0]
+        self.assertGreater(candidate["sol_luna_overlap_seconds"], 0)
+        self.assertEqual(candidate["duplicate_work_fraction"], 0.0)
+
+    def test_v5_hybrid_dag_respects_cross_executor_dependency(self) -> None:
+        source = v5_request()
+        source["luna_candidates"][0]["packages"][0]["depends_on"] = []
+        source["luna_candidates"][0]["packages"][1]["depends_on"] = ["sol-core"]
+        schedule = ROUTING.package_schedule_v5(source["luna_candidates"][0], requested_writers=1, prefix="candidate")
+        self.assertEqual(schedule["scheduled_package_seconds"], 800.0)
     def test_multi_package_request_above_cap_falls_back_instead_of_running_serially(self) -> None:
         source = multiwriter_request()
         result = ROUTING.evaluate_route(source, POLICY)

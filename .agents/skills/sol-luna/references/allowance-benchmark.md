@@ -6,7 +6,7 @@ Use this protocol only when the task is to quantify Sol-only versus Sol-Luna sub
 
 - Use one account, plan, speed setting, formal repository checkout, task family, starting Git reference, task specification, independent acceptance suite, and Sol-Luna revision.
 - Give Sol-only one complete top-level task in one Sol run. Do not split it into separately dispatched or artificially serialized packages. In the Sol-Luna arm, give its Sol controller that same complete task and measure the controller's full route interval, including every Luna child it launches.
-- Test the production default first: one Luna writer at the lowest task-supported effort while Sol performs complementary Sol-owned work. Treat additional Luna writers as a separate concurrency experiment rather than silently changing the route under test.
+- Test the production default first: one active Luna writer at the lowest task-supported effort, allowed to roll through every Luna-owned package in the frozen allocation while Sol performs only disjoint Sol-owned work. Record delegated coverage separately from active concurrency. Treat additional active writers as a separate experiment rather than silently changing the route under test.
 - Store the campaign ledger and dashboard captures outside the repository. Do not create a clone, copied project, or worktree.
 - Pre-register the route order, pair count, batch size, quality gate, time gate, and minimum allowance advantage. For the first v0.1.1 campaign, test a conservative lower bound of at least 10×.
 - Run counterbalanced pairs. Four pairs in `ABBA` or `BAAB` order are the minimum pilot; use more pairs when the meter remains too coarse.

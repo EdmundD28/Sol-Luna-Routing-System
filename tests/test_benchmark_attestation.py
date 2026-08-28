@@ -78,9 +78,11 @@ class BenchmarkAttestationTests(unittest.TestCase):
 
     def test_binding_and_strict_identity_fail_closed(self) -> None:
         contract = json.loads(self.contract.read_text())
+        original_contract = dict(contract)
         contract["route_revision"] = "v9.9.9"
         self.contract.write_text(json.dumps(contract), encoding="utf-8")
         with self.assertRaises(ATTEST.AttestationError): ATTEST.build_attestation(self.ledger, self.index, self.contract)
+        self.contract.write_text(json.dumps(original_contract), encoding="utf-8")
         self.index.write_text(self.index.read_text().replace('"verification_status": "verified"', '"verification_status": "tampered"'), encoding="utf-8")
         with self.assertRaises(ATTEST.AttestationError): ATTEST.build_attestation(self.ledger, self.index, self.contract)
 

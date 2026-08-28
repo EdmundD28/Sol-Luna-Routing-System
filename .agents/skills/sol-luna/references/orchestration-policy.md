@@ -23,6 +23,8 @@ Task size and reasoning difficulty are separate. Large repetitive work can suit 
 
 ## Package contract
 
+Freeze the complete task allocation before dispatch. Every work unit has exactly one executor (`SOL` or `LUNA`), baseline Sol cost, dependency set, critical-path flag, writable scope, and acceptance IDs. The baseline totals reconcile to the Sol-only estimate, and candidate allocations use the same canonical baseline map. Delegated coverage is the Luna-owned share of baseline Sol credits; it is an explanatory mechanism, not a target to inflate by splitting units. Unique acceptance assignment proves structural non-duplication, not semantic equivalence between differently named work; Sol must still reject shadow investigations during review.
+
 Every dispatch contains:
 
 - the canonical repository root observed by Sol at dispatch, with all package paths resolved relative to that root;
@@ -43,7 +45,7 @@ Do not infer that the child's default current directory equals the target reposi
 
 Maintain `ready`, `awaiting review`, and `approved repair` queues. Dispatch ready non-conflicting work within the writer cap. While Luna runs, Sol performs only Sol-owned critical-path work: architecture, acceptance design, integration preparation, or review of another frozen candidate. Reuse retained worker context only when it saves more than it biases review.
 
-The normal production shape is one Sol controller plus one Luna writer. Sol receives the whole user task and carves out one high-leverage package; the remaining work is not represented as serial Sol packages and is not dispatched through the worker queue. Do not split a task solely to create concurrency. Use a second Luna writer only in a pre-registered benchmark until matched included-allowance and elapsed evidence supports a later policy release.
+The normal production shape is one Sol controller plus one active Luna writer. Active concurrency and total Luna participation are separate: the same Luna may pull multiple ready, non-conflicting packages from the rolling queue when each still has positive marginal delivery benefit. Sol concurrently advances only disjoint critical-path units; it never builds a shadow implementation of Luna-owned work. Every unit is costed once, and mixed Sol/Luna dependencies determine predicted overlap and elapsed time. If no legitimate Sol work remains, record `WAIT_ALLOWED` instead of inventing work. Use a second active Luna writer only in a pre-registered benchmark until matched included-allowance and elapsed evidence supports a later policy release.
 
 Wait only when no ready package, review, integration preparation, or acceptance work remains. Inspect one compact status snapshot before interrupting a stalled worker; do not turn polling into its own workload.
 
@@ -70,7 +72,7 @@ Do not restart an unchanged vague package. `BLOCKED` is reserved for missing aut
 
 ## Evidence and success gate
 
-Record `sol_planning`, `sol_retained_execution`, `luna_execution`, `sol_review`, `repair`, and `integration` separately. A matched Sol-Luna record must include the retained phase even when its measured value is zero. Track source-aware credits or tokens, elapsed seconds, first-pass acceptance, repair rounds, independent defects, final candidate, policy fingerprint, task digest, acceptance-suite digest, effort, writer count, and review depth.
+Record `sol_planning`, `sol_retained_execution`, `luna_execution`, `sol_review`, `repair`, and `integration` separately. A matched Sol-Luna record must include the retained phase even when its measured value is zero. Track source-aware credits or tokens, elapsed seconds, first-pass acceptance, repair rounds, independent defects, final candidate, policy and allocation fingerprints, task digest, acceptance-suite digest, accepted delegated coverage, duplicate work, Sol/Luna overlap, effort, active writer count, and review depth. Acceptance requires complete baseline reconciliation, exactly one executor per unit, non-overlapping write scopes, zero shadow implementation, all package dispositions closed, and the same independent acceptance suite.
 
 A task-family policy change requires matched, independently assessed evidence. Five complete pairs permit human review; stronger claims should use a larger sample. Failed arms remain in the denominator. Improvement requires equal-or-better independent acceptance, no defect regression, at least the configured median credit reduction, no elapsed regression unless another explicit objective justifies it, and Sol planning plus review remaining a minority of total measured cost.
 

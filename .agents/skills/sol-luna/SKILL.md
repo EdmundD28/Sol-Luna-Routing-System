@@ -19,7 +19,7 @@ For a material package, read [references/orchestration-policy.md](references/orc
 python .agents/skills/sol-luna/scripts/routing_policy.py evaluate --input ROUTE.json
 ```
 
-The versioned [routing policy](references/routing-policy.v1.json) accounts for Sol-only execution, Sol planning, retained execution, review, integration, each Luna effort's first-pass probability, execution, expected recovery, final-defect probability, latency, and a default 50% accepted-cost saving floor. Retained Sol work overlaps Luna time but never disappears from cost. The policy never launches work. This prediction is a feasibility guard, not proof about a subscription meter. If inputs cannot be estimated from matched history or concrete task evidence, retain the work in Sol or run a short read-only `luna_scout` feasibility probe.
+The versioned [routing policy](references/routing-policy.v1.json) accounts for a complete single-owner task allocation: Sol-only baseline work, Sol planning and retained critical-path packages, Luna packages, review, integration, expected recovery, final-defect probability, and a default 50% accepted-cost saving floor. Retained Sol work may overlap Luna time but never disappears from cost. The policy never launches work. This prediction is a feasibility guard, not proof about a subscription meter. If inputs cannot be estimated from matched history or concrete task evidence, retain the work in Sol or run a short read-only `luna_scout` feasibility probe.
 
 ## Select Luna effort predictively
 
@@ -41,7 +41,7 @@ Every package binds a canonical repository root, then states one deliverable, re
 
 Before parallel dispatch, validate the ownership plan with `scripts/ownership_guard.py check-plan`; before acceptance, compare observed changed paths with `check-changes`. A violation blocks acceptance. This is an acceptance guard, not a filesystem security boundary.
 
-Default to **one Luna writer**. Sol receives the complete user task, keeps architecture, integration, and a complementary Sol-owned critical-path slice, and delegates only one high-leverage bounded package; do not manufacture two Sol packages or keep Sol idle merely to make the comparison look parallel. A second Luna writer is benchmark-only until matched plan-meter evidence proves equal quality, lower allowance use, and lower elapsed time, followed by an explicit policy release. Read-only review may overlap when it cannot race the candidate.
+Separate coverage from active concurrency. Default to **one active Luna writer**, which may pull multiple ready, non-conflicting, positive-benefit packages. Freeze one complete allocation: each unit has one executor; Sol owns only disjoint critical-path units and never shadow-implements Luna work. A second active writer remains benchmark-only until matched plan-meter evidence proves equal quality, lower allowance and elapsed time, followed by an explicit policy release. Read-only review may overlap safely.
 
 Give Luna only the context required for its objective, contracts, evidence, and constraints. Luna must not spawn agents. Shared entry points, lockfiles, status files, and common generated outputs stay with Sol or one named integrator.
 
@@ -63,7 +63,7 @@ python .agents/skills/sol-luna/scripts/routing_policy.py rework --input REWORK.j
 
 Never repeat the same correction without new evidence. Stop for user direction when the next action requires new authority, a product or architecture decision, destructive action, or expanded scope. Use `FAILED` for in-scope delivery failure and `BLOCKED` only for a missing external decision, input, permission, authority, or state change.
 
-Before completion, Sol verifies the exact final candidate, host-observed Sol/Luna model identity, fresh acceptance evidence, ownership cleanliness, integration behavior, and every required package disposition. Agent or profile labels are not runtime proof. Report route and effort decisions, policy fingerprint, Sol/Luna ownership, retained Sol execution, concurrency, repairs, review depth, acceptance results, elapsed time, five-hour and weekly allowance readings when measured, available purchased-credit or token diagnostics with source and uncertainty, and remaining unverified boundaries.
+Before completion, Sol verifies the final candidate, host-observed identities, fresh acceptance, ownership, integration, and dispositions. Profile labels are not runtime proof. Report route and effort, policy and allocation fingerprints, accepted Luna coverage, structural duplicate-work status, retained Sol execution and overlap, concurrency, repairs, review depth, acceptance, elapsed time, plan-meter readings, other diagnostics with source and uncertainty, and unverified boundaries.
 
 ## Conditional tools
 

@@ -10,6 +10,11 @@ SKILL_ROOT = ROOT / ".agents" / "skills" / "sol-luna"
 
 
 class PackageContractTests(unittest.TestCase):
+    def test_skill_hot_path_stays_bounded(self) -> None:
+        skill = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
+        self.assertLessEqual(len(skill.splitlines()), 85)
+        self.assertLessEqual(len(skill.split()), 1200)
+
     def test_skill_references_every_shipped_evidence_component(self) -> None:
         skill = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
         for relative_path in (

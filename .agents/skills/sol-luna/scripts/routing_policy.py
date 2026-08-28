@@ -25,6 +25,7 @@ PACKAGES_SCHEMA_VERSION = 4
 LEGACY_REQUEST_SCHEMAS = {LEGACY_SINGLE_SCHEMA_VERSION, LEGACY_PACKAGES_SCHEMA_VERSION}
 SINGLE_REQUEST_SCHEMAS = {LEGACY_SINGLE_SCHEMA_VERSION, SCHEMA_VERSION}
 PACKAGE_REQUEST_SCHEMAS = {LEGACY_PACKAGES_SCHEMA_VERSION, PACKAGES_SCHEMA_VERSION}
+V5_REQUEST_SCHEMA_VERSION = 5
 PACKAGE_ID = re.compile(r"[a-z0-9][a-z0-9-]{0,63}")
 WINDOWS_RESERVED_NAMES = {
     "con",
@@ -44,6 +45,20 @@ DEFAULT_POLICY = Path(__file__).resolve().parents[1] / "references" / "routing-p
 
 class PolicyError(ValueError):
     """The routing input or policy violates the executable contract."""
+
+
+def strict_json_loads(source: str) -> Any:
+    def pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for key, value in pairs:
+            if key in result:
+                raise PolicyError(f"duplicate JSON key: {key}")
+            result[key] = value
+        return result
+    try:
+        return json.loads(source, object_pairs_hook=pairs, parse_constant=lambda value: (_ for _ in ()).throw(PolicyError(f"non-finite JSON constant: {value}")))
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise PolicyError(f"invalid JSON: {exc}") from exc
 
 
 class _ExternallyBoundEvidence(dict[str, Any]):
@@ -99,13 +114,10 @@ def display_round(value: Any) -> Any:
     return value
 
 
-def load_policy(path: Path) -> dict[str, Any]:
-    try:
-        policy = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise PolicyError(f"cannot load routing policy: {exc}") from exc
+def validate_policy_mapping(source: Mapping[str, Any]) -> dict[str, Any]:
+    policy = dict(source)
     require_object(policy, "policy")
-    if policy.get("schema_version") != POLICY_SCHEMA_VERSION:
+    if type(policy.get("schema_version")) is not int or policy.get("schema_version") != POLICY_SCHEMA_VERSION:
         raise PolicyError("unsupported routing policy schema_version")
     efforts = policy.get("effort_order")
     if efforts != ["low", "medium", "high", "xhigh", "max"]:
@@ -130,6 +142,10 @@ def load_policy(path: Path) -> dict[str, Any]:
         maximum=1.0,
     )
     integer(policy.get("maximum_initial_writers"), "maximum_initial_writers", minimum=1)
+    integer(policy.get("maximum_active_luna_writers"), "maximum_active_luna_writers", minimum=1)
+    finite_number(policy.get("maximum_duplicate_work_fraction"), "maximum_duplicate_work_fraction", maximum=1.0)
+    if type(policy.get("require_sol_critical_path_overlap")) is not bool:
+        raise PolicyError("require_sol_critical_path_overlap must be boolean")
     integer(policy.get("parallel_review_minimum_pairs"), "parallel_review_minimum_pairs", minimum=1)
     budget = require_object(policy.get("rework_budget"), "rework_budget")
     if integer(budget.get("focused_repairs"), "rework_budget.focused_repairs") != 1:
@@ -137,6 +153,14 @@ def load_policy(path: Path) -> dict[str, Any]:
     if integer(budget.get("effort_escalations"), "rework_budget.effort_escalations") != 1:
         raise PolicyError("the policy permits exactly one effort escalation")
     return dict(policy)
+
+
+def load_policy(path: Path) -> dict[str, Any]:
+    try:
+        policy = strict_json_loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise PolicyError(f"cannot load routing policy: {exc}") from exc
+    return validate_policy_mapping(require_object(policy, "policy"))
 
 
 def policy_fingerprint(policy: Mapping[str, Any]) -> str:
@@ -232,6 +256,16 @@ def _package_path(value: Any, field: str) -> str:
 
 def _paths_overlap(left: str, right: str) -> bool:
     return left == right or left.startswith(right + "/") or right.startswith(left + "/")
+
+
+def _interval_union(intervals: list[tuple[float, float]]) -> list[tuple[float, float]]:
+    merged: list[tuple[float, float]] = []
+    for start, end in sorted(intervals):
+        if merged and start <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+    return merged
 
 
 def _package_probability(value: Any, field: str) -> float:
@@ -379,6 +413,165 @@ def package_schedule(
     }
 
 
+def package_schedule_v5(
+    candidate: Mapping[str, Any], *, requested_writers: int, prefix: str,
+    baseline_reference: Mapping[str, Any] | None = None,
+    acceptance_contract_ids: list[str] | None = None,
+) -> dict[str, Any]:
+    """Validate and schedule the v5 complete Sol/Luna partition.
+
+    v5 is deliberately separate from the v3/v4 package contract: a package is
+    owned by exactly one executor, and Sol retained execution is derived from
+    the SOL lane rather than supplied as coordination metadata.
+    """
+    requested_writers = integer(requested_writers, f"{prefix}.requested_writers", minimum=1)
+    raw_packages = candidate.get("packages")
+    if not isinstance(raw_packages, list) or not raw_packages:
+        raise PolicyError(f"{prefix}.packages must be a non-empty JSON array")
+    required = {
+        "executor", "package_id", "depends_on", "writable_paths", "critical_path", "acceptance_ids",
+        "baseline_sol_credits", "baseline_sol_seconds", "execution_credits",
+        "execution_seconds", "first_pass_probability", "repair_probability",
+        "repair_credits", "repair_seconds", "terminal_failure_probability",
+        "terminal_recovery_credits", "terminal_recovery_seconds", "final_defect_probability",
+    }
+    packages: dict[str, dict[str, Any]] = {}
+    ownership: list[tuple[str, str]] = []
+    baseline: dict[str, Any] = {}
+    assigned_acceptance: list[str] = []
+    for index, raw in enumerate(raw_packages):
+        item = require_object(raw, f"{prefix}.packages[{index}]")
+        missing = required - set(item)
+        if missing:
+            raise PolicyError(f"{prefix}.packages[{index}] missing fields: {sorted(missing)}")
+        unknown = set(item) - required
+        if unknown:
+            raise PolicyError(f"{prefix}.packages[{index}] has unknown fields: {sorted(unknown)}")
+        package_id = require_string(item["package_id"], f"{prefix}.packages[{index}].package_id")
+        if not PACKAGE_ID.fullmatch(package_id) or package_id in packages:
+            raise PolicyError(f"{prefix}.packages[{index}].package_id must be unique stable hyphen-case")
+        executor = require_string(item["executor"], f"{prefix}.packages[{index}].executor").upper()
+        if executor not in {"SOL", "LUNA"}:
+            raise PolicyError(f"{prefix}.packages[{index}].executor must be SOL or LUNA")
+        depends = item["depends_on"]
+        if not isinstance(depends, list) or any(not isinstance(dep, str) or not dep.strip() for dep in depends):
+            raise PolicyError(f"{prefix}.packages[{index}].depends_on must be a JSON array of identifiers")
+        if len(depends) != len(set(depends)):
+            raise PolicyError(f"{prefix}.packages[{index}].depends_on contains duplicates")
+        paths = item["writable_paths"]
+        if not isinstance(paths, list) or not paths:
+            raise PolicyError(f"{prefix}.packages[{index}].writable_paths must be a non-empty JSON array")
+        normalized = [_package_path(path, f"{prefix}.packages[{index}].writable_paths[{n}]") for n, path in enumerate(paths)]
+        if len(normalized) != len(set(normalized)):
+            raise PolicyError(f"{prefix}.packages[{index}].writable_paths contains duplicates")
+        for path in normalized:
+            if any(_paths_overlap(path, other_path) for _, other_path in ownership):
+                raise PolicyError(f"writable ownership overlaps at {prefix}.packages[{index}]")
+            ownership.append((package_id, path))
+        critical = item["critical_path"]
+        if not isinstance(critical, bool):
+            raise PolicyError(f"{prefix}.packages[{index}].critical_path must be boolean")
+        acceptance_ids = item["acceptance_ids"]
+        if not isinstance(acceptance_ids, list) or not acceptance_ids or any(type(value) is not str or not value.strip() for value in acceptance_ids):
+            raise PolicyError(f"{prefix}.packages[{index}].acceptance_ids must be a non-empty string array")
+        if len(acceptance_ids) != len(set(acceptance_ids)):
+            raise PolicyError(f"{prefix}.packages[{index}].acceptance_ids contains duplicates")
+        assigned_acceptance.extend(acceptance_ids)
+        base_credits = finite_number(item["baseline_sol_credits"], f"{prefix}.packages[{index}].baseline_sol_credits")
+        base_seconds = finite_number(item["baseline_sol_seconds"], f"{prefix}.packages[{index}].baseline_sol_seconds")
+        if executor == "SOL" and critical and (base_credits <= 0 or base_seconds <= 0):
+            raise PolicyError("SOL critical-path packages require positive baseline credits and seconds")
+        signature = {"package_id": package_id, "baseline_sol_credits": base_credits, "baseline_sol_seconds": base_seconds, "depends_on": list(depends), "writable_paths": normalized, "critical_path": critical, "acceptance_ids": list(acceptance_ids)}
+        baseline[package_id] = signature
+        first = _package_probability(item["first_pass_probability"], f"{prefix}.packages[{index}].first_pass_probability")
+        repair = _package_probability(item["repair_probability"], f"{prefix}.packages[{index}].repair_probability")
+        terminal = _package_probability(item["terminal_failure_probability"], f"{prefix}.packages[{index}].terminal_failure_probability")
+        if not math.isclose(first + repair + terminal, 1.0, rel_tol=0.0, abs_tol=1e-9):
+            raise PolicyError(f"{prefix}.packages[{index}] result probabilities must sum to 1")
+        execution_credits = finite_number(item["execution_credits"], f"{prefix}.packages[{index}].execution_credits")
+        execution_seconds = finite_number(item["execution_seconds"], f"{prefix}.packages[{index}].execution_seconds")
+        repair_credits = finite_number(item["repair_credits"], f"{prefix}.packages[{index}].repair_credits")
+        repair_seconds = finite_number(item["repair_seconds"], f"{prefix}.packages[{index}].repair_seconds")
+        terminal_credits = finite_number(item["terminal_recovery_credits"], f"{prefix}.packages[{index}].terminal_recovery_credits")
+        terminal_seconds = finite_number(item["terminal_recovery_seconds"], f"{prefix}.packages[{index}].terminal_recovery_seconds")
+        packages[package_id] = {
+            "package_id": package_id, "executor": executor, "depends_on": list(depends),
+            "critical_path": critical, "acceptance_ids": list(acceptance_ids), "execution_credits": execution_credits,
+            "execution_seconds": execution_seconds, "baseline_sol_credits": base_credits,
+            "baseline_sol_seconds": base_seconds, "first_pass_probability": first,
+            "repair_probability": repair, "repair_credits": repair_credits,
+            "repair_seconds": repair_seconds, "terminal_failure_probability": terminal,
+            "terminal_recovery_credits": terminal_credits, "terminal_recovery_seconds": terminal_seconds,
+            "final_defect_probability": _package_probability(item["final_defect_probability"], f"{prefix}.packages[{index}].final_defect_probability"),
+        }
+    if acceptance_contract_ids is not None:
+        if len(assigned_acceptance) != len(acceptance_contract_ids) or sorted(assigned_acceptance) != sorted(acceptance_contract_ids):
+            raise PolicyError("each acceptance_contract_id must be assigned exactly once per allocation")
+    if baseline_reference is not None and baseline != dict(baseline_reference):
+        raise PolicyError("all v5 candidates must use the same complete baseline map")
+    for item in packages.values():
+        if set(item["depends_on"]) - set(packages):
+            raise PolicyError(f"{prefix}.{item['package_id']} has unknown dependencies")
+    if not any(item["executor"] == "LUNA" for item in packages.values()):
+        raise PolicyError(f"{prefix} must contain at least one LUNA package")
+    if not any(item["executor"] == "SOL" and item["critical_path"] for item in packages.values()):
+        raise PolicyError(f"{prefix} must contain a SOL critical_path package")
+    sol_baseline_credits = sum(value["baseline_sol_credits"] for value in baseline.values())
+    sol_baseline_seconds = sum(value["baseline_sol_seconds"] for value in baseline.values())
+    finish: dict[str, float] = {}
+    intervals: dict[str, tuple[float, float]] = {}
+    completed: set[str] = set()
+    active: list[tuple[float, str]] = []
+    now = 0.0
+    while len(completed) < len(packages):
+        available = sorted(
+            item["package_id"] for item in packages.values()
+            if item["package_id"] not in completed
+            and item["package_id"] not in {active_item[1] for active_item in active}
+            and all(dep in completed for dep in item["depends_on"])
+        )
+        sol_busy = any(packages[pid]["executor"] == "SOL" for _, pid in active)
+        luna_busy = sum(packages[pid]["executor"] == "LUNA" for _, pid in active)
+        for package_id in available:
+            item = packages[package_id]
+            if item["executor"] == "SOL" and sol_busy:
+                continue
+            if item["executor"] == "LUNA" and luna_busy >= requested_writers:
+                continue
+            end = now + item["execution_seconds"]
+            active.append((end, package_id))
+            if item["executor"] == "SOL": sol_busy = True
+            else: luna_busy += 1
+        if not active:
+            raise PolicyError(f"{prefix}.packages contains a dependency cycle")
+        next_end = min(end for end, _ in active)
+        now = next_end
+        finished = [(end, pid) for end, pid in active if end == next_end]
+        active = [(end, pid) for end, pid in active if end != next_end]
+        for end, package_id in sorted(finished, key=lambda pair: pair[1]):
+            finish[package_id] = end
+            intervals[package_id] = (end - packages[package_id]["execution_seconds"], end)
+            completed.add(package_id)
+    sol_intervals = [intervals[pid] for pid, item in packages.items() if item["executor"] == "SOL"]
+    luna_intervals = [intervals[pid] for pid, item in packages.items() if item["executor"] == "LUNA"]
+    luna_union = _interval_union(luna_intervals)
+    overlap = sum(max(0.0, min(s1, l1) - max(s0, l0)) for s0, s1 in sol_intervals for l0, l1 in luna_union)
+    expected_recovery_credits = sum(item["repair_probability"] * item["repair_credits"] + item["terminal_failure_probability"] * item["terminal_recovery_credits"] for item in packages.values())
+    expected_recovery_seconds = sum(item["repair_probability"] * item["repair_seconds"] + item["terminal_failure_probability"] * item["terminal_recovery_seconds"] for item in packages.values())
+    return {
+        "package_count": len(packages), "effective_writers": min(requested_writers, sum(item["executor"] == "LUNA" for item in packages.values())),
+        "scheduled_package_seconds": max(finish.values(), default=0.0),
+        "serial_package_seconds": sum(item["execution_seconds"] for item in packages.values()),
+        "expected_package_credits": sum(item["execution_credits"] + item["repair_probability"] * item["repair_credits"] + item["terminal_failure_probability"] * item["terminal_recovery_credits"] for item in packages.values()),
+        "expected_recovery_credits": expected_recovery_credits, "expected_recovery_seconds": expected_recovery_seconds,
+        "first_pass_probability": max(0.0, 1.0 - sum(1.0 - item["first_pass_probability"] for item in packages.values())),
+        "final_defect_probability": min(1.0, sum(item["final_defect_probability"] + item["terminal_failure_probability"] for item in packages.values())),
+        "baseline_map": baseline, "baseline_sol_credits": sol_baseline_credits, "baseline_sol_seconds": sol_baseline_seconds,
+        "sol_luna_overlap_seconds": overlap,
+        "sol_critical_path_overlap_seconds": sum(max(0.0, min(s1, l1) - max(s0, l0)) for pid, (s0, s1) in intervals.items() if packages[pid]["executor"] == "SOL" and packages[pid]["critical_path"] for l0, l1 in luna_union),
+    }
+
+
 def allowed_writers(
     request: Mapping[str, Any],
     policy: Mapping[str, Any],
@@ -442,8 +635,9 @@ def evaluate_route(
     *,
     verified_parallel_evidence: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
+    policy = validate_policy_mapping(require_object(policy, "policy"))
     schema_version = request.get("schema_version")
-    if schema_version not in SINGLE_REQUEST_SCHEMAS | PACKAGE_REQUEST_SCHEMAS:
+    if type(schema_version) is not int or schema_version not in SINGLE_REQUEST_SCHEMAS | PACKAGE_REQUEST_SCHEMAS | {V5_REQUEST_SCHEMA_VERSION}:
         raise PolicyError("unsupported routing request schema_version")
     reject_unknown_fields(
         request,
@@ -457,6 +651,7 @@ def evaluate_route(
             "sol_only",
             "coordination",
             "luna_candidates",
+            "acceptance_contract_ids",
         },
         "request",
     )
@@ -491,28 +686,44 @@ def evaluate_route(
     sol_expected_seconds = sol["execution_seconds"] + (1 - sol["first_pass_probability"]) * sol_recovery_seconds
 
     requested_writers = integer(request.get("requested_writers", 1), "requested_writers", minimum=1)
-    package_mode = schema_version in PACKAGE_REQUEST_SCHEMAS
+    v5_mode = schema_version == V5_REQUEST_SCHEMA_VERSION
+    package_mode = schema_version in PACKAGE_REQUEST_SCHEMAS or v5_mode
     legacy_schema = schema_version in LEGACY_REQUEST_SCHEMAS
     if schema_version in SINGLE_REQUEST_SCHEMAS and requested_writers > 1:
         raise PolicyError("a package routing schema is required for multiwriter inputs")
-    if package_mode and requested_writers < 2:
+    if package_mode and not v5_mode and requested_writers < 2:
         raise PolicyError("package routing schemas require requested_writers greater than 1")
+    if v5_mode and requested_writers < 1:
+        raise PolicyError("v5 requires requested_writers greater than 0")
+    if v5_mode:
+        contract_ids = request.get("acceptance_contract_ids")
+        if not isinstance(contract_ids, list) or not contract_ids or any(type(value) is not str or not value.strip() for value in contract_ids) or len(contract_ids) != len(set(contract_ids)):
+            raise PolicyError("acceptance_contract_ids must be a non-empty unique string array")
     writer_limit = allowed_writers(request, policy, verified_parallel_evidence)
     effective_writers = int(writer_limit["allowed"])
     coordination_source = require_object(request.get("coordination"), "coordination")
-    coordination = coordination_totals(
-        coordination_source,
-        multiwriter=requested_writers > 1,
-        require_retained_execution=not legacy_schema,
-    )
+    if v5_mode:
+        coordination = coordination_totals(coordination_source, multiwriter=True, require_retained_execution=False)
+        if "sol_retained_execution" in coordination_source:
+            raise PolicyError("coordination.sol_retained_execution is not accepted by schema v5")
+    else:
+        coordination = coordination_totals(
+            coordination_source,
+            multiwriter=requested_writers > 1,
+            require_retained_execution=not legacy_schema,
+        )
     candidates_source = request.get("luna_candidates")
     if not isinstance(candidates_source, list) or not candidates_source:
         raise PolicyError("luna_candidates must be a non-empty JSON array")
     seen: set[str] = set()
+    baseline_reference = None
+    allocation_ids: set[str] = set()
     evaluated: list[dict[str, Any]] = []
     for index, raw in enumerate(candidates_source):
         candidate = require_object(raw, f"luna_candidates[{index}]")
         allowed_candidate_fields = (
+            {"effort", "failure_impact", "effort_basis", "allocation_id", "packages"}
+            if v5_mode else
             {"effort", "failure_impact", "effort_basis", "packages"}
             if package_mode
             else {
@@ -533,6 +744,15 @@ def evaluate_route(
                 f"luna_candidates[{index}] has unknown fields: {sorted(unknown_candidate_fields)}"
             )
         effort = normalize_effort(candidate.get("effort"), policy)
+        if v5_mode:
+            allocation_id = require_string(candidate.get("allocation_id"), f"luna_candidates[{index}].allocation_id")
+            if not PACKAGE_ID.fullmatch(allocation_id):
+                raise PolicyError(f"luna_candidates[{index}].allocation_id must be a stable hyphen-case identifier")
+            if allocation_id in allocation_ids:
+                raise PolicyError(f"duplicate allocation_id: {allocation_id}")
+            allocation_ids.add(allocation_id)
+        else:
+            allocation_id = None
         effort_basis = candidate.get("effort_basis")
         if not legacy_schema and effort in {"high", "xhigh", "max"}:
             effort_basis = require_string(
@@ -544,7 +764,7 @@ def evaluate_route(
                 effort_basis,
                 f"luna_candidates[{index}].effort_basis",
             )
-        if effort in seen:
+        if effort in seen and not v5_mode:
             raise PolicyError(f"duplicate Luna effort candidate: {effort}")
         seen.add(effort)
         if package_mode:
@@ -553,7 +773,14 @@ def evaluate_route(
                 raise PolicyError(
                     f"luna_candidates[{index}].packages must be a non-empty JSON array"
                 )
-            schedule = package_schedule(candidate, requested_writers=effective_writers, prefix=f"luna_candidates[{index}]")
+            if v5_mode:
+                active_cap = int(policy.get("maximum_active_luna_writers", 1))
+                schedule = package_schedule_v5(candidate, requested_writers=min(requested_writers, active_cap), prefix=f"luna_candidates[{index}]", baseline_reference=baseline_reference, acceptance_contract_ids=contract_ids)
+                baseline_reference = schedule["baseline_map"] if baseline_reference is None else baseline_reference
+                if not math.isclose(schedule["baseline_sol_credits"], sol["execution_credits"], abs_tol=1e-9) or not math.isclose(schedule["baseline_sol_seconds"], sol["execution_seconds"], abs_tol=1e-9):
+                    raise PolicyError("v5 baseline map must exactly match sol_only execution credits and seconds")
+            else:
+                schedule = package_schedule(candidate, requested_writers=effective_writers, prefix=f"luna_candidates[{index}]")
             first_pass_probability = schedule["first_pass_probability"]
             final_defect_probability = schedule["final_defect_probability"]
             package_seconds = schedule["scheduled_package_seconds"]
@@ -562,6 +789,8 @@ def evaluate_route(
             expected_recovery_seconds = schedule["expected_recovery_seconds"]
             expected_recovery_credits = schedule["expected_recovery_credits"]
             candidate_effective_writers = schedule["effective_writers"]
+            sol_luna_overlap_seconds = schedule.get("sol_luna_overlap_seconds", 0.0)
+            sol_critical_path_overlap_seconds = schedule.get("sol_critical_path_overlap_seconds", 0.0)
         else:
             values = estimate(candidate, f"luna_candidates[{index}]", allow_metadata=True)
             recovery_credits = finite_number(
@@ -578,12 +807,13 @@ def evaluate_route(
             expected_recovery_seconds = (1 - first_pass_probability) * recovery_seconds
             expected_recovery_credits = (1 - first_pass_probability) * recovery_credits
             candidate_effective_writers = 1
+            sol_luna_overlap_seconds = 0.0
+            sol_critical_path_overlap_seconds = 0.0
         expected_credits = coordination["credits"] + package_credits
-        scheduled_seconds = (
-            coordination["serial_seconds"]
-            + max(coordination["retained_execution_seconds"], package_seconds)
-            + expected_recovery_seconds
-        )
+        if v5_mode:
+            scheduled_seconds = coordination["serial_seconds"] + package_seconds + expected_recovery_seconds
+        else:
+            scheduled_seconds = coordination["serial_seconds"] + max(coordination["retained_execution_seconds"], package_seconds) + expected_recovery_seconds
         expected_seconds = scheduled_seconds
         credit_savings = 1 - expected_credits / sol_expected_credits if sol_expected_credits else 0.0
         elapsed_savings = 1 - scheduled_seconds / sol_expected_seconds if sol_expected_seconds else 0.0
@@ -610,6 +840,13 @@ def evaluate_route(
             rejection_reasons.append("coordination_credit_share_too_high")
         if candidate_effective_writers > 1 and package_seconds >= serial_package_seconds:
             rejection_reasons.append("no_parallel_package_speedup")
+        if v5_mode:
+            if sol_luna_overlap_seconds <= 0:
+                rejection_reasons.append("no_sol_luna_overlap")
+            if bool(policy["require_sol_critical_path_overlap"]) and sol_critical_path_overlap_seconds <= 0:
+                rejection_reasons.append("no_sol_critical_path_overlap")
+            if schedule.get("duplicate_work_fraction", 0.0) > float(policy.get("maximum_duplicate_work_fraction", 0.0)):
+                rejection_reasons.append("duplicate_work_fraction_exceeds_policy")
         if latency_limit is not None and expected_seconds > latency_limit:
             rejection_reasons.append("latency_limit_exceeded")
         impact = require_string(candidate.get("failure_impact", "low"), f"luna_candidates[{index}].failure_impact")
@@ -636,6 +873,13 @@ def evaluate_route(
                 "effective_writers": candidate_effective_writers,
                 "package_expected_seconds": package_seconds + expected_recovery_seconds,
                 "failure_impact": impact,
+                "allocation_id": allocation_id,
+                "delegated_baseline_credit_fraction": (sum(v["baseline_sol_credits"] for k, v in schedule.get("baseline_map", {}).items() if next((p for p in candidate.get("packages", []) if p.get("package_id") == k), {}).get("executor") == "LUNA") / sol["execution_credits"] if v5_mode and sol["execution_credits"] else 0.0),
+                "delegated_package_count": (sum(1 for p in candidate.get("packages", []) if p.get("executor") == "LUNA") if v5_mode else None),
+                "sol_retained_package_count": (sum(1 for p in candidate.get("packages", []) if p.get("executor") == "SOL") if v5_mode else None),
+                "sol_luna_overlap_seconds": sol_luna_overlap_seconds,
+                "sol_critical_path_overlap_seconds": sol_critical_path_overlap_seconds,
+                "duplicate_work_fraction": 0.0,
                 "rejection_reasons": rejection_reasons,
             }
         )
@@ -648,6 +892,7 @@ def evaluate_route(
             item["expected_accepted_credits"],
             item["expected_accepted_seconds"],
             effort_rank[item["effort"]],
+            item.get("allocation_id") or "",
         ),
         default=None,
     )
@@ -690,6 +935,13 @@ def evaluate_route(
                     "expected_elapsed_savings_fraction",
                      "coordination_credit_share",
                     "effective_writers",
+                    "allocation_id",
+                    "delegated_baseline_credit_fraction",
+                    "delegated_package_count",
+                    "sol_retained_package_count",
+                    "sol_luna_overlap_seconds",
+                    "sol_critical_path_overlap_seconds",
+                    "duplicate_work_fraction",
                 )
             }
             if selected
@@ -760,47 +1012,95 @@ def rework_decision(source: Mapping[str, Any], policy: Mapping[str, Any]) -> dic
 
 def template() -> dict[str, Any]:
     return {
-        "schema_version": SCHEMA_VERSION,
+        "schema_version": V5_REQUEST_SCHEMA_VERSION,
         "task_family": "bounded-feature",
         "quality_floor": 0.8,
         "minimum_credit_savings_fraction": 0.50,
         "latency_limit_seconds": None,
         "requested_writers": 1,
+        "acceptance_contract_ids": ["accept-core", "accept-analysis", "accept-tests"],
         "sol_only": {
-            "first_pass_probability": 0.9,
+            "first_pass_probability": 1.0,
             "final_defect_probability": 0.02,
             "execution_credits": 100,
             "execution_seconds": 900,
-            "recovery_credits_if_failed": 30,
-            "recovery_seconds_if_failed": 300,
+            "recovery_credits_if_failed": 0,
+            "recovery_seconds_if_failed": 0,
         },
         "coordination": {
             "sol_planning": {"credits": 5, "seconds": 90},
-            "sol_retained_execution": {"credits": 10, "seconds": 300},
             "sol_review": {"credits": 5, "seconds": 120},
             "integration": {"credits": 3, "seconds": 60},
+            "queue": {"credits": 1, "seconds": 10},
+            "merge_contention": {"credits": 1, "seconds": 10},
         },
         "luna_candidates": [
             {
                 "effort": "medium",
-                "first_pass_probability": 0.78,
-                "final_defect_probability": 0.02,
-                "execution_credits": 15,
-                "execution_seconds": 480,
-                "recovery_credits_if_failed": 25,
-                "recovery_seconds_if_failed": 420,
+                "allocation_id": "allocation-default",
                 "failure_impact": "low",
-            },
-            {
-                "effort": "xhigh",
-                "effort_basis": "the Medium estimate is below the required first-pass quality floor",
-                "first_pass_probability": 0.92,
-                "final_defect_probability": 0.01,
-                "execution_credits": 20,
-                "execution_seconds": 500,
-                "recovery_credits_if_failed": 20,
-                "recovery_seconds_if_failed": 300,
-                "failure_impact": "low",
+                "packages": [
+                    {
+                        "executor": "SOL",
+                        "package_id": "sol-core",
+                        "depends_on": [],
+                        "writable_paths": ["src/sol-core.py"],
+                        "critical_path": True,
+                        "acceptance_ids": ["accept-core"],
+                        "baseline_sol_credits": 50,
+                        "baseline_sol_seconds": 450,
+                        "execution_credits": 20,
+                        "execution_seconds": 450,
+                        "first_pass_probability": 1.0,
+                        "repair_probability": 0.0,
+                        "repair_credits": 0,
+                        "repair_seconds": 0,
+                        "terminal_failure_probability": 0.0,
+                        "terminal_recovery_credits": 0,
+                        "terminal_recovery_seconds": 0,
+                        "final_defect_probability": 0.0,
+                    },
+                    {
+                        "executor": "LUNA",
+                        "package_id": "luna-analysis",
+                        "depends_on": [],
+                        "writable_paths": ["src/luna-analysis.py"],
+                        "critical_path": False,
+                        "acceptance_ids": ["accept-analysis"],
+                        "baseline_sol_credits": 25,
+                        "baseline_sol_seconds": 250,
+                        "execution_credits": 8,
+                        "execution_seconds": 250,
+                        "first_pass_probability": 1.0,
+                        "repair_probability": 0.0,
+                        "repair_credits": 0,
+                        "repair_seconds": 0,
+                        "terminal_failure_probability": 0.0,
+                        "terminal_recovery_credits": 0,
+                        "terminal_recovery_seconds": 0,
+                        "final_defect_probability": 0.0,
+                    },
+                    {
+                        "executor": "LUNA",
+                        "package_id": "luna-tests",
+                        "depends_on": [],
+                        "writable_paths": ["tests/luna-tests.py"],
+                        "critical_path": False,
+                        "acceptance_ids": ["accept-tests"],
+                        "baseline_sol_credits": 25,
+                        "baseline_sol_seconds": 200,
+                        "execution_credits": 7,
+                        "execution_seconds": 200,
+                        "first_pass_probability": 1.0,
+                        "repair_probability": 0.0,
+                        "repair_credits": 0,
+                        "repair_seconds": 0,
+                        "terminal_failure_probability": 0.0,
+                        "terminal_recovery_credits": 0,
+                        "terminal_recovery_seconds": 0,
+                        "final_defect_probability": 0.0,
+                    },
+                ],
             },
         ],
     }
@@ -896,7 +1196,7 @@ def main() -> int:
                 "policy_fingerprint": policy_fingerprint(policy),
             }
         else:
-            source = json.loads(args.input.read_text(encoding="utf-8"))
+            source = strict_json_loads(args.input.read_text(encoding="utf-8"))
             source = require_object(source, "input")
             if args.command == "evaluate":
                 verified_evidence = (
