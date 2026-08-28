@@ -144,8 +144,6 @@ def validate_policy_mapping(source: Mapping[str, Any]) -> dict[str, Any]:
     integer(policy.get("maximum_initial_writers"), "maximum_initial_writers", minimum=1)
     integer(policy.get("maximum_active_luna_writers"), "maximum_active_luna_writers", minimum=1)
     finite_number(policy.get("maximum_duplicate_work_fraction"), "maximum_duplicate_work_fraction", maximum=1.0)
-    if type(policy.get("require_sol_critical_path_overlap")) is not bool:
-        raise PolicyError("require_sol_critical_path_overlap must be boolean")
     integer(policy.get("parallel_review_minimum_pairs"), "parallel_review_minimum_pairs", minimum=1)
     budget = require_object(policy.get("rework_budget"), "rework_budget")
     if integer(budget.get("focused_repairs"), "rework_budget.focused_repairs") != 1:
@@ -514,8 +512,6 @@ def package_schedule_v5(
             raise PolicyError(f"{prefix}.{item['package_id']} has unknown dependencies")
     if not any(item["executor"] == "LUNA" for item in packages.values()):
         raise PolicyError(f"{prefix} must contain at least one LUNA package")
-    if not any(item["executor"] == "SOL" and item["critical_path"] for item in packages.values()):
-        raise PolicyError(f"{prefix} must contain a SOL critical_path package")
     sol_baseline_credits = sum(value["baseline_sol_credits"] for value in baseline.values())
     sol_baseline_seconds = sum(value["baseline_sol_seconds"] for value in baseline.values())
     finish: dict[str, float] = {}
@@ -556,6 +552,32 @@ def package_schedule_v5(
     luna_intervals = [intervals[pid] for pid, item in packages.items() if item["executor"] == "LUNA"]
     luna_union = _interval_union(luna_intervals)
     overlap = sum(max(0.0, min(s1, l1) - max(s0, l0)) for s0, s1 in sol_intervals for l0, l1 in luna_union)
+    raw_queue = candidate.get("sol_controller_queue")
+    normalized_queue = None
+    if raw_queue is not None:
+        queue_fields = {
+            "ready_packages", "review_items", "integration_items", "dispatch_items",
+            "acceptance_items",
+        }
+        queue = require_object(raw_queue, f"{prefix}.sol_controller_queue")
+        if set(queue) != queue_fields:
+            raise PolicyError(
+                f"{prefix}.sol_controller_queue must contain exactly {sorted(queue_fields)}"
+            )
+        normalized_queue = {
+            field: integer(queue[field], f"{prefix}.sol_controller_queue.{field}", minimum=0)
+            for field in sorted(queue_fields)
+        }
+    if overlap > 0:
+        controller_mode = "COMPLEMENTARY_PARALLEL"
+    elif sol_intervals:
+        controller_mode = "SEQUENTIAL_HANDOFF"
+    else:
+        if normalized_queue is None:
+            raise PolicyError(f"{prefix}.sol_controller_queue is required for an all-Luna allocation")
+        controller_mode = (
+            "WAIT_ALLOWED" if not any(normalized_queue.values()) else "CONTROLLER_QUEUE_PENDING"
+        )
     expected_recovery_credits = sum(item["repair_probability"] * item["repair_credits"] + item["terminal_failure_probability"] * item["terminal_recovery_credits"] for item in packages.values())
     expected_recovery_seconds = sum(item["repair_probability"] * item["repair_seconds"] + item["terminal_failure_probability"] * item["terminal_recovery_seconds"] for item in packages.values())
     return {
@@ -567,6 +589,8 @@ def package_schedule_v5(
         "first_pass_probability": max(0.0, 1.0 - sum(1.0 - item["first_pass_probability"] for item in packages.values())),
         "final_defect_probability": min(1.0, sum(item["final_defect_probability"] + item["terminal_failure_probability"] for item in packages.values())),
         "baseline_map": baseline, "baseline_sol_credits": sol_baseline_credits, "baseline_sol_seconds": sol_baseline_seconds,
+        "controller_mode": controller_mode,
+        "sol_controller_queue": normalized_queue,
         "sol_luna_overlap_seconds": overlap,
         "sol_critical_path_overlap_seconds": sum(max(0.0, min(s1, l1) - max(s0, l0)) for pid, (s0, s1) in intervals.items() if packages[pid]["executor"] == "SOL" and packages[pid]["critical_path"] for l0, l1 in luna_union),
     }
@@ -722,7 +746,10 @@ def evaluate_route(
     for index, raw in enumerate(candidates_source):
         candidate = require_object(raw, f"luna_candidates[{index}]")
         allowed_candidate_fields = (
-            {"effort", "failure_impact", "effort_basis", "allocation_id", "packages"}
+            {
+                "effort", "failure_impact", "effort_basis", "allocation_id", "packages",
+                "sol_controller_queue",
+            }
             if v5_mode else
             {"effort", "failure_impact", "effort_basis", "packages"}
             if package_mode
@@ -791,6 +818,7 @@ def evaluate_route(
             candidate_effective_writers = schedule["effective_writers"]
             sol_luna_overlap_seconds = schedule.get("sol_luna_overlap_seconds", 0.0)
             sol_critical_path_overlap_seconds = schedule.get("sol_critical_path_overlap_seconds", 0.0)
+            controller_mode = schedule.get("controller_mode")
         else:
             values = estimate(candidate, f"luna_candidates[{index}]", allow_metadata=True)
             recovery_credits = finite_number(
@@ -809,6 +837,7 @@ def evaluate_route(
             candidate_effective_writers = 1
             sol_luna_overlap_seconds = 0.0
             sol_critical_path_overlap_seconds = 0.0
+            controller_mode = None
         expected_credits = coordination["credits"] + package_credits
         if v5_mode:
             scheduled_seconds = coordination["serial_seconds"] + package_seconds + expected_recovery_seconds
@@ -817,7 +846,14 @@ def evaluate_route(
         expected_seconds = scheduled_seconds
         credit_savings = 1 - expected_credits / sol_expected_credits if sol_expected_credits else 0.0
         elapsed_savings = 1 - scheduled_seconds / sol_expected_seconds if sol_expected_seconds else 0.0
-        coordination_share = coordination["overhead_credits"] / expected_credits if expected_credits else 0.0
+        # Measure orchestration burden against the work it is intended to
+        # replace.  Using the candidate's own total as the denominator creates
+        # a perverse incentive: making Luna cheaper can increase the reported
+        # coordination share and reject the most economical allocation.
+        coordination_share = (
+            coordination["overhead_credits"] / sol_expected_credits
+            if sol_expected_credits else 0.0
+        )
         rejection_reasons: list[str] = []
         if legacy_schema:
             rejection_reasons.append("legacy_routing_schema_requires_refresh")
@@ -841,10 +877,8 @@ def evaluate_route(
         if candidate_effective_writers > 1 and package_seconds >= serial_package_seconds:
             rejection_reasons.append("no_parallel_package_speedup")
         if v5_mode:
-            if sol_luna_overlap_seconds <= 0:
-                rejection_reasons.append("no_sol_luna_overlap")
-            if bool(policy["require_sol_critical_path_overlap"]) and sol_critical_path_overlap_seconds <= 0:
-                rejection_reasons.append("no_sol_critical_path_overlap")
+            if controller_mode == "CONTROLLER_QUEUE_PENDING":
+                rejection_reasons.append("unallocated_sol_controller_work")
             if schedule.get("duplicate_work_fraction", 0.0) > float(policy.get("maximum_duplicate_work_fraction", 0.0)):
                 rejection_reasons.append("duplicate_work_fraction_exceeds_policy")
         if latency_limit is not None and expected_seconds > latency_limit:
@@ -877,6 +911,7 @@ def evaluate_route(
                 "delegated_baseline_credit_fraction": (sum(v["baseline_sol_credits"] for k, v in schedule.get("baseline_map", {}).items() if next((p for p in candidate.get("packages", []) if p.get("package_id") == k), {}).get("executor") == "LUNA") / sol["execution_credits"] if v5_mode and sol["execution_credits"] else 0.0),
                 "delegated_package_count": (sum(1 for p in candidate.get("packages", []) if p.get("executor") == "LUNA") if v5_mode else None),
                 "sol_retained_package_count": (sum(1 for p in candidate.get("packages", []) if p.get("executor") == "SOL") if v5_mode else None),
+                "controller_mode": controller_mode,
                 "sol_luna_overlap_seconds": sol_luna_overlap_seconds,
                 "sol_critical_path_overlap_seconds": sol_critical_path_overlap_seconds,
                 "duplicate_work_fraction": 0.0,
@@ -939,6 +974,7 @@ def evaluate_route(
                     "delegated_baseline_credit_fraction",
                     "delegated_package_count",
                     "sol_retained_package_count",
+                    "controller_mode",
                     "sol_luna_overlap_seconds",
                     "sol_critical_path_overlap_seconds",
                     "duplicate_work_fraction",

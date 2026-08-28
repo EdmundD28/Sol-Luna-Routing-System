@@ -19,18 +19,34 @@ from pathlib import Path
 from typing import Any, Callable, Mapping
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 3
 ROUTES = {"SOL_ONLY", "SOL_LUNA"}
 DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
 LABEL = re.compile(r"[a-z0-9][a-z0-9-]{1,63}")
 IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
 ZERO_PREVIOUS = "0" * 64
 LIMIT_KINDS = ("five_hour", "weekly")
+DEFAULT_STARTING_COMMIT_SHA = "0" * 40
+DEFAULT_TASK_DIGEST = "sha256:" + "0" * 64
+DEFAULT_TARGET_ELAPSED_MIN_SECONDS = 1200
+DEFAULT_TARGET_ELAPSED_MAX_SECONDS = 2400
+DEFAULT_METER_RESOLUTION = 1.0
+DEFAULT_SOL_LUNA_WORKER_COUNT = 1
+DEFAULT_SOL_LUNA_ACTIVE_LUNA_WRITER_COUNT = 1
+TOPOLOGIES = {
+    "sol_only": "single-controller-no-workers",
+    "sol_luna": "single-controller-one-active-luna",
+}
 
 INIT_FIELDS = {
     "schema_version", "event_type", "previous_event_sha256", "contract_digest",
     "usage_scope_digest", "task_family", "batch_size",
     "reading_uncertainty_percentage_points", "first_routes", "windows",
+    "starting_commit_sha", "task_spec_digest", "acceptance_suite_digest",
+    "sol_only_topology", "sol_luna_topology", "target_elapsed_min_seconds",
+    "target_elapsed_max_seconds", "meter_resolution_percentage_points",
+    "repair_policy_digest", "sol_luna_worker_count",
+    "sol_luna_active_luna_writer_count",
 }
 BEGIN_FIELDS = {
     "schema_version", "event_type", "previous_event_sha256", "pair_id", "route",
@@ -38,9 +54,15 @@ BEGIN_FIELDS = {
     "start_evidence_digest", "excluded_since_previous_end_percentage_points",
 }
 END_FIELDS = {
-    "schema_version", "event_type", "previous_event_sha256", "route",
+    "schema_version", "event_type", "previous_event_sha256", "pair_id", "route",
     "observed_at", "remaining_percent", "end_evidence_digest", "elapsed_seconds",
-    "independent_acceptance", "defects", "record",
+    "candidate_digest",
+}
+ACCEPTANCE_FIELDS = {
+    "schema_version", "event_type", "previous_event_sha256", "pair_id", "route",
+    "candidate_digest", "acceptance_command_digest", "acceptance_result_digest",
+    "acceptance_suite_digest", "observed_at", "acceptance_elapsed_seconds",
+    "independent_acceptance", "defects",
 }
 WINDOW_FIELDS = {"window_id", "reset_at"}
 
@@ -85,6 +107,12 @@ def require_exact_fields(value: Any, fields: set[str], name: str) -> Mapping[str
 def require_digest(value: Any, name: str) -> str:
     if not isinstance(value, str) or not DIGEST.fullmatch(value):
         raise CampaignError(f"{name} must be a lowercase sha256 digest")
+    return value
+
+
+def require_commit_sha(value: Any, name: str) -> str:
+    if not isinstance(value, str) or not re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", value):
+        raise CampaignError(f"{name} must be a 40- or 64-character lowercase commit SHA")
     return value
 
 
@@ -153,6 +181,12 @@ def combined_evidence_digest(start_digest: str, end_digest: str) -> str:
     return sha256_bytes(canonical_bytes([start_digest, end_digest]))
 
 
+def acceptance_event_digest(event: Mapping[str, Any]) -> str:
+    """Digest the bound acceptance payload, excluding the mutable chain link."""
+    payload = {key: value for key, value in event.items() if key != "previous_event_sha256"}
+    return sha256_bytes(canonical_bytes(payload))
+
+
 def _event_previous(event_bytes: bytes) -> str:
     return hashlib.sha256(event_bytes).hexdigest()
 
@@ -174,6 +208,35 @@ def _validate_init(event: Mapping[str, Any]) -> dict[str, Any]:
         "reading_uncertainty_percentage_points", maximum=10,
     )
     first_routes = normalize_first_routes(source["first_routes"])
+    starting_commit_sha = require_commit_sha(source["starting_commit_sha"], "starting_commit_sha")
+    frozen_digests = {
+        field: require_digest(source[field], field)
+        for field in ("task_spec_digest", "acceptance_suite_digest", "repair_policy_digest")
+    }
+    sol_only_topology = require_label(source["sol_only_topology"], "sol_only_topology")
+    sol_luna_topology = require_label(source["sol_luna_topology"], "sol_luna_topology")
+    sol_luna_worker_count = positive_integer(
+        source["sol_luna_worker_count"], "sol_luna_worker_count"
+    )
+    sol_luna_active_luna_writer_count = positive_integer(
+        source["sol_luna_active_luna_writer_count"],
+        "sol_luna_active_luna_writer_count",
+    )
+    if sol_luna_active_luna_writer_count > sol_luna_worker_count:
+        raise CampaignError(
+            "sol_luna_active_luna_writer_count cannot exceed sol_luna_worker_count"
+        )
+    target_min = source["target_elapsed_min_seconds"]
+    target_max = source["target_elapsed_max_seconds"]
+    if (
+        isinstance(target_min, bool) or not isinstance(target_min, int) or target_min < 0
+        or isinstance(target_max, bool) or not isinstance(target_max, int) or target_max <= target_min
+    ):
+        raise CampaignError("target elapsed bounds must be ordered non-negative integers")
+    meter_resolution = finite_number(
+        source["meter_resolution_percentage_points"],
+        "meter_resolution_percentage_points", minimum=1e-9, maximum=100,
+    )
     windows = require_exact_fields(source["windows"], set(LIMIT_KINDS), "windows")
     normalized_windows: dict[str, dict[str, str]] = {}
     for kind in LIMIT_KINDS:
@@ -190,6 +253,15 @@ def _validate_init(event: Mapping[str, Any]) -> dict[str, Any]:
         "batch_size": batch_size,
         "reading_uncertainty_percentage_points": uncertainty,
         "first_routes": first_routes,
+        "starting_commit_sha": starting_commit_sha,
+        **frozen_digests,
+        "sol_only_topology": sol_only_topology,
+        "sol_luna_topology": sol_luna_topology,
+        "sol_luna_worker_count": sol_luna_worker_count,
+        "sol_luna_active_luna_writer_count": sol_luna_active_luna_writer_count,
+        "target_elapsed_min_seconds": target_min,
+        "target_elapsed_max_seconds": target_max,
+        "meter_resolution_percentage_points": meter_resolution,
         "windows": normalized_windows,
     }
 
@@ -199,6 +271,7 @@ def _new_state(config: dict[str, Any]) -> dict[str, Any]:
         "config": config,
         "records": [],
         "active": None,
+        "pending_end": None,
         "last_end": None,
         "route_revisions": {},
         "excluded": {kind: 0.0 for kind in LIMIT_KINDS},
@@ -214,9 +287,17 @@ def _expected_arm(state: Mapping[str, Any]) -> tuple[int, str, str, int]:
     return index, sequence[index], f"pair-{pair_number:03d}", index % 2 + 1
 
 
-def _validate_percent_map(value: Any, name: str) -> dict[str, float]:
+def _validate_percent_map(
+    value: Any, name: str, *, meter_resolution: float | None = None
+) -> dict[str, float]:
     source = require_exact_fields(value, set(LIMIT_KINDS), name)
-    return {kind: finite_number(source[kind], f"{name}.{kind}", maximum=100) for kind in LIMIT_KINDS}
+    result = {kind: finite_number(source[kind], f"{name}.{kind}", maximum=100) for kind in LIMIT_KINDS}
+    if meter_resolution is not None:
+        for kind, amount in result.items():
+            quotient = amount / meter_resolution
+            if not math.isclose(quotient, round(quotient), rel_tol=0.0, abs_tol=1e-9):
+                raise CampaignError(f"{name}.{kind} must be an integer multiple of meter resolution")
+    return result
 
 
 def _apply_begin(state: dict[str, Any], event: Mapping[str, Any]) -> None:
@@ -230,6 +311,8 @@ def _apply_begin(state: dict[str, Any], event: Mapping[str, Any]) -> None:
         raise CampaignError("invalid begin_arm event")
     if state["active"] is not None:
         raise CampaignError("only one campaign arm may be active")
+    if state["pending_end"] is not None:
+        raise CampaignError("independent acceptance is required before the next arm")
     _, expected_route, expected_pair, expected_position = _expected_arm(state)
     if source["route"] != expected_route:
         raise CampaignError(f"next route must be {expected_route}")
@@ -249,10 +332,14 @@ def _apply_begin(state: dict[str, Any], event: Mapping[str, Any]) -> None:
         reset = require_timestamp(state["config"]["windows"][kind]["reset_at"], f"{kind} reset_at")
         if observed >= reset:
             raise CampaignError(f"begin observation crosses or reaches the {kind} reset boundary")
-    remaining = _validate_percent_map(source["remaining_percent"], "remaining_percent")
+    remaining = _validate_percent_map(
+        source["remaining_percent"], "remaining_percent",
+        meter_resolution=state["config"]["meter_resolution_percentage_points"],
+    )
     excluded = _validate_percent_map(
         source["excluded_since_previous_end_percentage_points"],
         "excluded_since_previous_end_percentage_points",
+        meter_resolution=state["config"]["meter_resolution_percentage_points"],
     )
     last_end = state["last_end"]
     if last_end is None:
@@ -284,20 +371,15 @@ def _apply_begin(state: dict[str, Any], event: Mapping[str, Any]) -> None:
     }
 
 
-def _expected_record(state: Mapping[str, Any], event: Mapping[str, Any]) -> dict[str, Any]:
-    active = state["active"]
-    assert active is not None
-    record = require_exact_fields(event["record"], set(ALLOWANCE_METER.RECORD_FIELDS), "record")
-    end_digest = require_digest(event["end_evidence_digest"], "end_evidence_digest")
-    end_at = require_timestamp(event["observed_at"], "observed_at")
-    remaining = _validate_percent_map(event["remaining_percent"], "remaining_percent")
-    elapsed = finite_number(event["elapsed_seconds"], "elapsed_seconds")
-    acceptance = event["independent_acceptance"]
-    if acceptance not in {"PASSED", "FAILED"}:
-        raise CampaignError("independent_acceptance must be PASSED or FAILED")
-    defects = event["defects"]
-    if isinstance(defects, bool) or not isinstance(defects, int) or defects < 0:
-        raise CampaignError("defects must be a non-negative integer")
+def _build_record(
+    state: Mapping[str, Any], pending: Mapping[str, Any], acceptance: Mapping[str, Any]
+) -> dict[str, Any]:
+    active = pending["active"]
+    end_digest = pending["end_digest"]
+    end_at = pending["end_at"]
+    remaining = pending["remaining"]
+    acceptance_value = acceptance["independent_acceptance"]
+    defects = acceptance["defects"]
     expected_limits: dict[str, Any] = {}
     for kind in LIMIT_KINDS:
         expected_limits[kind] = {
@@ -317,21 +399,43 @@ def _expected_record(state: Mapping[str, Any], event: Mapping[str, Any]) -> dict
         "route_revision": active["route_revision"],
         "arm_position": active["arm_position"],
         "batch_size": state["config"]["batch_size"],
-        "independent_acceptance": acceptance,
+        "independent_acceptance": acceptance_value,
         "defects": defects,
-        "elapsed_seconds": elapsed,
+        "elapsed_seconds": pending["elapsed_seconds"],
         "measurement_scope": "ROUTE_TASK_INTERVAL_ONLY",
         "contamination_status": "NO_OTHER_SHARED_USAGE_OBSERVED",
         "source": "chatgpt-usage-dashboard-v1",
         "evidence_digest": combined_evidence_digest(active["start_evidence_digest"], end_digest),
         "benchmark_contract_digest": state["config"]["contract_digest"],
         "usage_scope_digest": state["config"]["usage_scope_digest"],
+        "starting_commit_sha": state["config"]["starting_commit_sha"],
+        "task_spec_digest": state["config"]["task_spec_digest"],
+        "acceptance_suite_digest": state["config"]["acceptance_suite_digest"],
+        "sol_only_topology": state["config"]["sol_only_topology"],
+        "sol_luna_topology": state["config"]["sol_luna_topology"],
+        "top_level_run_count": 1,
+        "worker_count": 0 if active["route"] == "SOL_ONLY" else state["config"]["sol_luna_worker_count"],
+        "active_luna_writer_count": 0 if active["route"] == "SOL_ONLY" else state["config"]["sol_luna_active_luna_writer_count"],
+        "target_elapsed_min_seconds": state["config"]["target_elapsed_min_seconds"],
+        "target_elapsed_max_seconds": state["config"]["target_elapsed_max_seconds"],
+        "meter_resolution_percentage_points": state["config"]["meter_resolution_percentage_points"],
+        "repair_policy_digest": state["config"]["repair_policy_digest"],
         "limits": expected_limits,
     }
-    normalized = ALLOWANCE_METER.validate_record(record)
-    if normalized != ALLOWANCE_METER.validate_record(expected):
-        raise CampaignError("end_arm record does not match the active arm and campaign configuration")
-    return normalized
+    return ALLOWANCE_METER.validate_record(expected)
+
+
+def _validate_end_reading(state: Mapping[str, Any], event: Mapping[str, Any]) -> dict[str, Any]:
+    active = state["active"]
+    assert active is not None
+    end_digest = require_digest(event["end_evidence_digest"], "end_evidence_digest")
+    end_at = require_timestamp(event["observed_at"], "observed_at")
+    remaining = _validate_percent_map(
+        event["remaining_percent"], "remaining_percent",
+        meter_resolution=state["config"]["meter_resolution_percentage_points"],
+    )
+    elapsed = finite_number(event["elapsed_seconds"], "elapsed_seconds")
+    return {"active": active, "end_digest": end_digest, "end_at": end_at, "remaining": remaining, "elapsed_seconds": elapsed}
 
 
 def _apply_end(state: dict[str, Any], event: Mapping[str, Any]) -> None:
@@ -348,28 +452,72 @@ def _apply_end(state: dict[str, Any], event: Mapping[str, Any]) -> None:
         raise CampaignError("end_arm has no active arm or duplicates a prior ending")
     if source["route"] != active["route"]:
         raise CampaignError("end_arm route does not match the active arm")
-    try:
-        record = _expected_record(state, source)
-    except ALLOWANCE_METER.AllowanceError as exc:
-        raise CampaignError(str(exc)) from exc
-    end_at = require_timestamp(record["limits"]["five_hour"]["after_observed_at"], "end observed_at")
+    if source["pair_id"] != active["pair_id"]:
+        raise CampaignError("end_arm pair_id does not match the active arm")
+    if state["pending_end"] is not None:
+        raise CampaignError("an arm end is awaiting its independent acceptance event")
+    candidate_digest = require_digest(source["candidate_digest"], "candidate_digest")
+    pending = _validate_end_reading(state, source)
+    pending["candidate_digest"] = candidate_digest
+    end_at = pending["end_at"]
     if end_at <= active["observed_at"]:
         raise CampaignError("end observation must be strictly later than begin observation")
     for kind in LIMIT_KINDS:
-        limit = record["limits"][kind]
-        kind_end = require_timestamp(limit["after_observed_at"], f"{kind} end observed_at")
+        kind_end = end_at
         if kind_end != end_at:
             raise CampaignError("both meter readings must use the same end observation time")
         reset = require_timestamp(state["config"]["windows"][kind]["reset_at"], f"{kind} reset_at")
         if end_at >= reset:
             raise CampaignError(f"end observation crosses or reaches the {kind} reset boundary")
+    state["pending_end"] = pending
+    state["active"] = None
+
+
+def _apply_acceptance(state: dict[str, Any], event: Mapping[str, Any]) -> None:
+    source = require_exact_fields(event, ACCEPTANCE_FIELDS, "record_acceptance event")
+    if (
+        source["schema_version"] != SCHEMA_VERSION
+        or source["event_type"] != "record_acceptance"
+    ):
+        raise CampaignError("invalid record_acceptance event")
+    pending = state["pending_end"]
+    if pending is None:
+        raise CampaignError("record_acceptance has no pending arm end")
+    active = pending["active"]
+    if source["pair_id"] != active["pair_id"] or source["route"] != active["route"]:
+        raise CampaignError("record_acceptance does not match the pending arm")
+    candidate_digest = require_digest(source["candidate_digest"], "candidate_digest")
+    if candidate_digest != pending["candidate_digest"]:
+        raise CampaignError("record_acceptance candidate_digest does not match the route result")
+    require_digest(source["acceptance_command_digest"], "acceptance_command_digest")
+    require_digest(source["acceptance_result_digest"], "acceptance_result_digest")
+    if require_digest(source["acceptance_suite_digest"], "acceptance_suite_digest") != state["config"]["acceptance_suite_digest"]:
+        raise CampaignError("record_acceptance acceptance_suite_digest differs from campaign")
+    observed_at = require_timestamp(source["observed_at"], "record_acceptance observed_at")
+    if observed_at <= pending["end_at"]:
+        raise CampaignError("record_acceptance must occur after route interval end")
+    if state["last_end"] is not None and observed_at <= state["last_end"]["observed_at"]:
+        raise CampaignError("record_acceptance must precede the next arm and follow the prior end")
+    acceptance = source["independent_acceptance"]
+    if acceptance not in {"PASSED", "FAILED"}:
+        raise CampaignError("independent_acceptance must be PASSED or FAILED")
+    defects = source["defects"]
+    if isinstance(defects, bool) or not isinstance(defects, int) or defects < 0:
+        raise CampaignError("defects must be a non-negative integer")
+    acceptance_elapsed = finite_number(
+        source["acceptance_elapsed_seconds"], "acceptance_elapsed_seconds"
+    )
+    record = _build_record(state, pending, source)
+    if record["independent_acceptance"] != acceptance or record["defects"] != defects:
+        raise CampaignError("record_acceptance result does not match the bound record")
     state["records"].append(record)
     state["last_end"] = {
-        "observed_at": end_at,
-        "observed_at_text": end_at.isoformat(),
-        "remaining_percent": {kind: record["limits"][kind]["after_remaining_percent"] for kind in LIMIT_KINDS},
+        "observed_at": pending["end_at"],
+        "observed_at_text": pending["end_at"].isoformat(),
+        "remaining_percent": pending["remaining"],
     }
     state["active"] = None
+    state["pending_end"] = None
 
 
 def replay(ledger: Path) -> dict[str, Any]:
@@ -402,6 +550,8 @@ def replay(ledger: Path) -> dict[str, Any]:
                 _apply_begin(state, event)
             elif event.get("event_type") == "end_arm":
                 _apply_end(state, event)
+            elif event.get("event_type") == "record_acceptance":
+                _apply_acceptance(state, event)
             else:
                 raise CampaignError(f"ledger line {number} has an unknown event_type")
         previous = _event_previous(line)
@@ -490,6 +640,8 @@ def _append(ledger: Path, builder: Callable[[dict[str, Any]], dict[str, Any]]) -
             _apply_begin(state, event)
         elif event.get("event_type") == "end_arm":
             _apply_end(state, event)
+        elif event.get("event_type") == "record_acceptance":
+            _apply_acceptance(state, event)
         else:
             raise CampaignError("write command produced an unknown event_type")
         events.append(event)
@@ -503,6 +655,17 @@ def initialize(
     batch_size: int, reading_uncertainty: float, first_routes: str | list[str],
     five_hour_window_id: str, five_hour_reset_at: str,
     weekly_window_id: str, weekly_reset_at: str,
+    starting_commit_sha: str = DEFAULT_STARTING_COMMIT_SHA,
+    task_spec_digest: str = DEFAULT_TASK_DIGEST,
+    acceptance_suite_digest: str = DEFAULT_TASK_DIGEST,
+    sol_only_topology: str = TOPOLOGIES["sol_only"],
+    sol_luna_topology: str = TOPOLOGIES["sol_luna"],
+    sol_luna_worker_count: int = DEFAULT_SOL_LUNA_WORKER_COUNT,
+    sol_luna_active_luna_writer_count: int = DEFAULT_SOL_LUNA_ACTIVE_LUNA_WRITER_COUNT,
+    target_elapsed_min_seconds: int = DEFAULT_TARGET_ELAPSED_MIN_SECONDS,
+    target_elapsed_max_seconds: int = DEFAULT_TARGET_ELAPSED_MAX_SECONDS,
+    meter_resolution_percentage_points: float = DEFAULT_METER_RESOLUTION,
+    repair_policy_digest: str = DEFAULT_TASK_DIGEST,
 ) -> dict[str, Any]:
     event = {
         "schema_version": SCHEMA_VERSION,
@@ -518,6 +681,17 @@ def initialize(
             "five_hour": {"window_id": five_hour_window_id, "reset_at": five_hour_reset_at},
             "weekly": {"window_id": weekly_window_id, "reset_at": weekly_reset_at},
         },
+        "starting_commit_sha": starting_commit_sha,
+        "task_spec_digest": task_spec_digest,
+        "acceptance_suite_digest": acceptance_suite_digest,
+        "sol_only_topology": sol_only_topology,
+        "sol_luna_topology": sol_luna_topology,
+        "sol_luna_worker_count": sol_luna_worker_count,
+        "sol_luna_active_luna_writer_count": sol_luna_active_luna_writer_count,
+        "target_elapsed_min_seconds": target_elapsed_min_seconds,
+        "target_elapsed_max_seconds": target_elapsed_max_seconds,
+        "meter_resolution_percentage_points": meter_resolution_percentage_points,
+        "repair_policy_digest": repair_policy_digest,
     }
     _validate_init(event)
     with ExclusiveLedgerLock(ledger):
@@ -545,7 +719,7 @@ def begin_arm(
         remaining = _validate_percent_map({
             "five_hour": five_hour_remaining_percent,
             "weekly": weekly_remaining_percent,
-        }, "remaining_percent")
+        }, "remaining_percent", meter_resolution=state["config"]["meter_resolution_percentage_points"])
         last_end = state["last_end"]
         if last_end is None:
             excluded = {kind: 0.0 for kind in LIMIT_KINDS}
@@ -580,55 +754,24 @@ def begin_arm(
 
 
 def end_arm(
-    ledger: Path, *, route: str, observed_at: str,
+    ledger: Path, *, pair_id: str, route: str, observed_at: str,
     five_hour_remaining_percent: float, weekly_remaining_percent: float,
     end_evidence_digest: str, elapsed_seconds: float,
-    independent_acceptance: str, defects: int,
+    candidate_digest: str,
 ) -> dict[str, Any]:
     def build(state: dict[str, Any]) -> dict[str, Any]:
         active = state["active"]
         if active is None:
             raise CampaignError("there is no active arm to end")
+        if pair_id != active["pair_id"]:
+            raise CampaignError("end_arm pair_id does not match the active arm")
         if route != active["route"]:
             raise CampaignError("end_arm route does not match the active arm")
-        record = {
-            "schema_version": SCHEMA_VERSION,
-            "pair_id": active["pair_id"],
-            "task_family": state["config"]["task_family"],
-            "route": route,
-            "route_revision": active["route_revision"],
-            "arm_position": active["arm_position"],
-            "batch_size": state["config"]["batch_size"],
-            "independent_acceptance": independent_acceptance,
-            "defects": defects,
-            "elapsed_seconds": elapsed_seconds,
-            "measurement_scope": "ROUTE_TASK_INTERVAL_ONLY",
-            "contamination_status": "NO_OTHER_SHARED_USAGE_OBSERVED",
-            "source": "chatgpt-usage-dashboard-v1",
-            "evidence_digest": combined_evidence_digest(active["start_evidence_digest"], end_evidence_digest),
-            "benchmark_contract_digest": state["config"]["contract_digest"],
-            "usage_scope_digest": state["config"]["usage_scope_digest"],
-            "limits": {
-                kind: {
-                    "window_id": state["config"]["windows"][kind]["window_id"],
-                    "before_observed_at": active["observed_at_text"],
-                    "after_observed_at": observed_at,
-                    "window_reset_at": state["config"]["windows"][kind]["reset_at"],
-                    "before_remaining_percent": active["remaining_percent"][kind],
-                    "after_remaining_percent": (
-                        five_hour_remaining_percent if kind == "five_hour" else weekly_remaining_percent
-                    ),
-                    "reading_uncertainty_percentage_points": state["config"][
-                        "reading_uncertainty_percentage_points"
-                    ],
-                }
-                for kind in LIMIT_KINDS
-            },
-        }
         return {
             "schema_version": SCHEMA_VERSION,
             "event_type": "end_arm",
             "previous_event_sha256": "",
+            "pair_id": active["pair_id"],
             "route": route,
             "observed_at": observed_at,
             "remaining_percent": {
@@ -637,13 +780,37 @@ def end_arm(
             },
             "end_evidence_digest": end_evidence_digest,
             "elapsed_seconds": elapsed_seconds,
-            "independent_acceptance": independent_acceptance,
-            "defects": defects,
-            "record": record,
+            "candidate_digest": candidate_digest,
         }
 
-    event = _append(ledger, build)
-    return event["record"]
+    return _append(ledger, build)
+
+
+def record_acceptance(
+    ledger: Path, *, pair_id: str, route: str, candidate_digest: str,
+    acceptance_command_digest: str, acceptance_result_digest: str,
+    acceptance_suite_digest: str, observed_at: str,
+    acceptance_elapsed_seconds: float, independent_acceptance: str, defects: int,
+) -> dict[str, Any]:
+    def build(state: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "schema_version": SCHEMA_VERSION,
+            "event_type": "record_acceptance",
+            "previous_event_sha256": "",
+            "pair_id": pair_id,
+            "route": route,
+            "candidate_digest": candidate_digest,
+            "acceptance_command_digest": acceptance_command_digest,
+            "acceptance_result_digest": acceptance_result_digest,
+            "acceptance_suite_digest": acceptance_suite_digest,
+            "observed_at": observed_at,
+            "acceptance_elapsed_seconds": acceptance_elapsed_seconds,
+            "independent_acceptance": independent_acceptance,
+            "defects": defects,
+        }
+
+    _append(ledger, build)
+    return replay(ledger)["records"][-1]
 
 
 def campaign_status(ledger: Path) -> dict[str, Any]:
@@ -668,7 +835,16 @@ def campaign_status(ledger: Path) -> dict[str, Any]:
         "completed_arms": len(records),
         "planned_pairs": len(state["config"]["first_routes"]),
         "active_arm": active_output,
-        "next_route": sequence[next_index] if next_index < len(sequence) else None,
+        "next_route": (
+            None if state["pending_end"] is not None
+            else sequence[next_index] if next_index < len(sequence) else None
+        ),
+        "pending_acceptance": None if state["pending_end"] is None else {
+            "pair_id": state["pending_end"]["active"]["pair_id"],
+            "route": state["pending_end"]["active"]["route"],
+            "observed_at": state["pending_end"]["end_at"].isoformat(),
+            "candidate_digest": state["pending_end"]["candidate_digest"],
+        },
         "last_reading": None if last is None else {
             "observed_at": last["observed_at_text"], "remaining_percent": last["remaining_percent"]
         },
@@ -677,11 +853,25 @@ def campaign_status(ledger: Path) -> dict[str, Any]:
 
 
 def assess_campaign(
-    ledger: Path, *, minimum_advantage_multiple: float = 10.0, minimum_pairs: int = 4,
+    ledger: Path, *, minimum_advantage_multiple: float = 10.0, minimum_pairs: int = 5,
 ) -> dict[str, Any]:
+    if isinstance(minimum_pairs, bool) or not isinstance(minimum_pairs, int) or minimum_pairs < 5:
+        raise CampaignError("production campaign minimum_pairs must be at least 5")
     state = replay(ledger)
+    config = state["config"]
+    placeholder_digest = "sha256:" + "0" * 64
+    if (
+        config["starting_commit_sha"] in {"0" * 40, "0" * 64}
+        or any(
+            config[field] == placeholder_digest
+            for field in ("task_spec_digest", "acceptance_suite_digest", "repair_policy_digest")
+        )
+    ):
+        raise CampaignError("production assessment requires non-placeholder frozen identity fields")
     if state["active"] is not None:
         raise CampaignError("cannot assess while an arm is active")
+    if state["pending_end"] is not None:
+        raise CampaignError("independent acceptance event is required before assessment")
     try:
         return ALLOWANCE_METER.assess(
             state["records"], minimum_advantage_multiple=minimum_advantage_multiple,
@@ -706,9 +896,29 @@ def parser() -> argparse.ArgumentParser:
     init.add_argument("--five-hour-reset-at", required=True)
     init.add_argument("--weekly-window-id", required=True)
     init.add_argument("--weekly-reset-at", required=True)
+    init.add_argument("--starting-commit-sha", required=True)
+    init.add_argument("--task-spec-digest", required=True)
+    init.add_argument("--acceptance-suite-digest", required=True)
+    init.add_argument("--sol-only-topology", default=TOPOLOGIES["sol_only"])
+    init.add_argument("--sol-luna-topology", default=TOPOLOGIES["sol_luna"])
+    init.add_argument(
+        "--sol-luna-worker-count", type=int, default=DEFAULT_SOL_LUNA_WORKER_COUNT
+    )
+    init.add_argument(
+        "--sol-luna-active-luna-writer-count", type=int,
+        default=DEFAULT_SOL_LUNA_ACTIVE_LUNA_WRITER_COUNT,
+    )
+    init.add_argument("--target-elapsed-min-seconds", type=int, default=DEFAULT_TARGET_ELAPSED_MIN_SECONDS)
+    init.add_argument("--target-elapsed-max-seconds", type=int, default=DEFAULT_TARGET_ELAPSED_MAX_SECONDS)
+    init.add_argument(
+        "--meter-resolution-percentage-points", type=float, default=DEFAULT_METER_RESOLUTION
+    )
+    init.add_argument("--repair-policy-digest", required=True)
     for name in ("begin-arm", "end-arm"):
         command = commands.add_parser(name)
         command.add_argument("--ledger", required=True, type=Path)
+        if name == "end-arm":
+            command.add_argument("--pair-id", required=True)
         command.add_argument("--route", required=True, choices=sorted(ROUTES))
         command.add_argument("--observed-at", required=True)
         command.add_argument("--five-hour-remaining-percent", required=True, type=float)
@@ -719,14 +929,25 @@ def parser() -> argparse.ArgumentParser:
         else:
             command.add_argument("--end-evidence-digest", required=True)
             command.add_argument("--elapsed-seconds", required=True, type=float)
-            command.add_argument("--independent-acceptance", required=True, choices=("PASSED", "FAILED"))
-            command.add_argument("--defects", required=True, type=int)
+            command.add_argument("--candidate-digest", required=True)
+    acceptance = commands.add_parser("record-acceptance")
+    acceptance.add_argument("--ledger", required=True, type=Path)
+    acceptance.add_argument("--pair-id", required=True)
+    acceptance.add_argument("--route", required=True, choices=sorted(ROUTES))
+    acceptance.add_argument("--candidate-digest", required=True)
+    acceptance.add_argument("--acceptance-command-digest", required=True)
+    acceptance.add_argument("--acceptance-result-digest", required=True)
+    acceptance.add_argument("--acceptance-suite-digest", required=True)
+    acceptance.add_argument("--observed-at", required=True)
+    acceptance.add_argument("--acceptance-elapsed-seconds", required=True, type=float)
+    acceptance.add_argument("--independent-acceptance", required=True, choices=("PASSED", "FAILED"))
+    acceptance.add_argument("--defects", required=True, type=int)
     status_command = commands.add_parser("status")
     status_command.add_argument("--ledger", required=True, type=Path)
     assess_command = commands.add_parser("assess")
     assess_command.add_argument("--ledger", required=True, type=Path)
     assess_command.add_argument("--minimum-advantage-multiple", type=float, default=10.0)
-    assess_command.add_argument("--minimum-pairs", type=int, default=4)
+    assess_command.add_argument("--minimum-pairs", type=int, default=5)
     return result
 
 
@@ -741,6 +962,17 @@ def main() -> int:
                 first_routes=args.first_routes, five_hour_window_id=args.five_hour_window_id,
                 five_hour_reset_at=args.five_hour_reset_at, weekly_window_id=args.weekly_window_id,
                 weekly_reset_at=args.weekly_reset_at,
+                starting_commit_sha=args.starting_commit_sha,
+                task_spec_digest=args.task_spec_digest,
+                acceptance_suite_digest=args.acceptance_suite_digest,
+                sol_only_topology=args.sol_only_topology,
+                sol_luna_topology=args.sol_luna_topology,
+                sol_luna_worker_count=args.sol_luna_worker_count,
+                sol_luna_active_luna_writer_count=args.sol_luna_active_luna_writer_count,
+                target_elapsed_min_seconds=args.target_elapsed_min_seconds,
+                target_elapsed_max_seconds=args.target_elapsed_max_seconds,
+                meter_resolution_percentage_points=args.meter_resolution_percentage_points,
+                repair_policy_digest=args.repair_policy_digest,
             )
         elif args.command == "begin-arm":
             output = begin_arm(
@@ -752,12 +984,24 @@ def main() -> int:
             )
         elif args.command == "end-arm":
             output = end_arm(
-                args.ledger, route=args.route, observed_at=args.observed_at,
+                args.ledger, pair_id=args.pair_id, route=args.route, observed_at=args.observed_at,
                 five_hour_remaining_percent=args.five_hour_remaining_percent,
                 weekly_remaining_percent=args.weekly_remaining_percent,
                 end_evidence_digest=args.end_evidence_digest,
                 elapsed_seconds=args.elapsed_seconds,
-                independent_acceptance=args.independent_acceptance, defects=args.defects,
+                candidate_digest=args.candidate_digest,
+            )
+        elif args.command == "record-acceptance":
+            output = record_acceptance(
+                args.ledger, pair_id=args.pair_id, route=args.route,
+                candidate_digest=args.candidate_digest,
+                acceptance_command_digest=args.acceptance_command_digest,
+                acceptance_result_digest=args.acceptance_result_digest,
+                acceptance_suite_digest=args.acceptance_suite_digest,
+                observed_at=args.observed_at,
+                acceptance_elapsed_seconds=args.acceptance_elapsed_seconds,
+                independent_acceptance=args.independent_acceptance,
+                defects=args.defects,
             )
         elif args.command == "status":
             output = campaign_status(args.ledger)

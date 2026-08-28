@@ -11,7 +11,7 @@ Quality and safety are hard gates. Among equally accepted routes, minimize inclu
 
 ## Decide before dispatch
 
-Choose and record `SOL_ONLY` or `SOL_LUNA` before the first worker. Do not delegate when estimates are missing, the work is tightly coupled, or coordination and expected recovery erase the saving.
+Choose and record `SOL_ONLY` or `SOL_LUNA` before the first worker. Do not delegate when estimates are missing or coordination and recovery erase the saving.
 
 For a material package, read [references/orchestration-policy.md](references/orchestration-policy.md), create an explicit estimate, and use:
 
@@ -37,11 +37,11 @@ Use `luna_reviewer` for read-only review and `luna_scout` for bounded feasibilit
 
 ## Bound packages and concurrency
 
-Every package binds the repository root, deliverable, dependencies, exclusive relative write paths, Sol-reserved files, acceptance, forbidden actions, and compact handoff. For a stable-domain envelope, Sol freezes those outer constraints while one Luna decomposes, implements, preflights, and closes out inside them; Sol does not pre-script Luna's internal units. State the root explicitly for nested checkouts. Redact private roots from public receipts. Writers never overlap; handoff freezes ownership until repair.
+Every package binds the repository root, deliverable, dependencies, exclusive relative write paths, Sol-reserved files, acceptance, forbidden actions, and compact handoff. For a stable-domain envelope, Sol freezes those constraints while one Luna decomposes, implements, preflights, and closes out; Sol does not pre-script Luna's internal units. Redact private roots from public receipts. Writers never overlap; handoff freezes ownership until repair.
 
 Before dispatch, run `scripts/ownership_guard.py check-plan`; schema 2 binds executors, units, acceptances, partitions, and digest, while schema 1 is compatibility-only. Before acceptance, compare changed paths with `check-changes`. Violations block acceptance. This is not a filesystem security boundary.
 
-Separate accepted Luna coverage from active concurrency. Maximize the share of accepted work that Luna genuinely replaces, subject to positive marginal benefit and the same quality gate; more calls without avoided Sol work are not coverage. Default to **one active Luna writer**, which may pull multiple ready, non-conflicting packages. Prefer reusing that worker for adjacent packages in the same stable domain when retained context saves reload cost; switch when the domain or assumptions change. Freeze one complete allocation: each unit has one executor; Sol owns only disjoint critical-path units and never shadow-implements Luna work. A second active writer remains benchmark-only until matched plan-meter evidence proves equal quality, lower allowance and elapsed time, followed by an explicit policy release. Read-only review may overlap safely.
+Separate accepted Luna coverage from active concurrency. Maximize baseline-cost-weighted work that Luna genuinely replaces after subtracting Sol replay; more calls or smaller packages without avoided Sol work are not coverage. Default to **one active Luna writer**, which may pull multiple ready, non-conflicting packages. Prefer reusing that worker for adjacent packages in the same stable domain when retained context saves reload cost; switch when the domain or assumptions change. Freeze one complete allocation: each unit has one executor. While Luna runs, Sol advances only disjoint valuable work, then review, integration preparation, and next dispatch; never shadow-implement Luna work or invent work to create overlap. Waiting is allowed only after those queues are explicitly empty. A second active writer remains benchmark-only until matched plan-meter evidence proves equal quality, lower allowance and elapsed time, followed by an explicit policy release.
 
 Give Luna only the context required for its objective, contracts, evidence, and constraints. Luna must not spawn agents. Shared entry points, lockfiles, status files, and common generated outputs stay with Sol or one named integrator.
 
@@ -63,14 +63,14 @@ python .agents/skills/sol-luna/scripts/routing_policy.py rework --input REWORK.j
 
 Never repeat the same correction without new evidence. Stop for user direction when the next action requires new authority, a product or architecture decision, destructive action, or expanded scope. Use `FAILED` for in-scope delivery failure and `BLOCKED` only for a missing external decision, input, permission, authority, or state change.
 
-Before completion, Sol verifies the candidate, host-observed identities, fresh acceptance, ownership, integration, and dispositions. A repeated Sol action is shadow work unless discrepancy, safety, nondeterminism, or candidate drift justified it; subtract it from effective Luna substitution. Report route, effort, fingerprints, accepted Luna coverage, shadow work, overlap, concurrency, repairs, review, acceptance, elapsed time, plan readings, uncertainty, and unverified boundaries.
+Before completion, Sol verifies the candidate, host-observed identities, fresh acceptance, ownership, integration, and dispositions. A repeated Sol action is shadow work unless discrepancy, safety, nondeterminism, or candidate drift justified it; subtract the whole affected baseline claim from weighted Luna coverage. Report route, effort, fingerprints, weighted coverage, shadow work, overlap, concurrency, repairs, review, acceptance, elapsed time, plan readings, uncertainty, and unverified boundaries.
 
 ## Conditional tools
 
 - For runtime identity or boundary compliance, read [references/evidence-and-runtime.md](references/evidence-and-runtime.md) and use `scripts/runtime_receipt.py` against one explicitly identified session. Self-report is not proof.
 - For persistent phase evidence or routing comparisons, use `scripts/evidence_ledger.py`; its `feedback` command converts exact task-family cohorts into a fail-closed policy posture. Self-declared `exact` credit is insufficient: the gate also requires an independently supplied claim index bound to each record and receipt. It is advisory and never routes automatically.
 - For phase evidence, use schema-2 `scripts/phase_tracker.py` with executor IDs; it reports execution unions and cross-actor overlap, excludes review, and keeps legacy journals read-only.
-- For one-envelope Luna delivery, assess its candidate-bound handoff and Sol replay actions with `scripts/delegation_contract.py`; this measures substitution but never replaces independent acceptance.
+- For one-envelope Luna delivery, freeze and assess the schema-2 candidate-bound handoff and baseline-weighted Sol replay claims with `scripts/delegation_contract.py`; these estimates measure structural substitution, not actual plan allowance, and never replace independent acceptance.
 - For matched Sol-only versus Sol-Luna evaluation, use `scripts/matched_eval.py` with the same starting commit, task digest, policy fingerprint, and independent acceptance-suite digest.
 - For a subscription-allowance benchmark, read [references/allowance-benchmark.md](references/allowance-benchmark.md), record route-only intervals with `scripts/allowance_campaign.py`, bind host receipts with `scripts/benchmark_identity.py`, and assess the retained dashboard readings with `scripts/allowance_meter.py`. Five-hour percentage points are primary; weekly percentage points are separate corroboration.
 - After a completed allowance campaign has a verified identity index and frozen benchmark contract, use `scripts/benchmark_attestation.py` to emit one deterministic, redacted structural attestation; it does not decide the economic threshold.

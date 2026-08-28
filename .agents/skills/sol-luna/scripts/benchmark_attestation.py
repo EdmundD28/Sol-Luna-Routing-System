@@ -19,7 +19,13 @@ EFFORTS = {"low", "medium", "high", "xhigh", "max"}
 ROUTES = {"SOL_ONLY", "SOL_LUNA"}
 CONTROLLER_ROLES = {"default", "worker"}
 WRITER_ROLES = {"worker", "luna_worker", "luna_worker_low", "luna_worker_medium", "luna_worker_high", "luna_worker_xhigh", "luna_worker_max"}
-CONTRACT_FIELDS = {"schema_version", "campaign_id", "benchmark_contract_digest", "task_spec_digest", "acceptance_suite_digest", "policy_fingerprint", "route_revision", "expected_pairs", "expected_batch_size", "expected_sol_luna_effort", "expected_sol_luna_writer_count"}
+CONTRACT_FIELDS = {
+    "schema_version", "campaign_id", "benchmark_contract_digest", "task_spec_digest",
+    "acceptance_suite_digest", "policy_fingerprint", "route_revision", "expected_pairs",
+    "expected_batch_size", "expected_sol_luna_effort", "expected_sol_luna_worker_count",
+    "expected_sol_luna_active_luna_writer_count", "expected_sol_only_topology",
+    "expected_sol_luna_topology",
+}
 INDEX_FIELDS = {"schema_version", "campaign_id", "sol_luna_effort", "sol_luna_writer_count", "runs", "verification_status", "index_sha256"}
 RUN_FIELDS = {"pair_id", "route", "controller", "workers"}
 IDENTITY_FIELDS = {"model", "effort", "role", "provider", "receipt_sha256"}
@@ -93,27 +99,41 @@ def _safe_input(path: Path, name: str) -> Path:
 
 def _validate_contract(raw: Mapping[str, Any]) -> dict[str, Any]:
     source = _exact(raw, CONTRACT_FIELDS, "contract")
-    if isinstance(source["schema_version"], bool) or not isinstance(source["schema_version"], int) or source["schema_version"] != 1:
+    if isinstance(source["schema_version"], bool) or not isinstance(source["schema_version"], int) or source["schema_version"] != 2:
         raise AttestationError("contract has unsupported schema_version")
     result = {key: _digest(source[key], key) for key in ("benchmark_contract_digest", "task_spec_digest", "acceptance_suite_digest", "policy_fingerprint")}
     result.update({"campaign_id": _id(source["campaign_id"], "campaign_id"), "route_revision": _id(source["route_revision"], "route_revision")})
     result["expected_pairs"] = _positive(source["expected_pairs"], "expected_pairs")
+    if result["expected_pairs"] < 5:
+        raise AttestationError("expected_pairs must be at least 5")
     result["expected_batch_size"] = _positive(source["expected_batch_size"], "expected_batch_size")
     if not isinstance(source["expected_sol_luna_effort"], str) or source["expected_sol_luna_effort"] not in EFFORTS:
         raise AttestationError("expected_sol_luna_effort is invalid")
     result["expected_sol_luna_effort"] = source["expected_sol_luna_effort"]
-    if isinstance(source["expected_sol_luna_writer_count"], bool) or not isinstance(source["expected_sol_luna_writer_count"], int) or source["expected_sol_luna_writer_count"] not in {1, 2}:
-        raise AttestationError("expected_sol_luna_writer_count must be 1 or 2")
-    result["expected_sol_luna_writer_count"] = source["expected_sol_luna_writer_count"]
+    result["expected_sol_luna_worker_count"] = _positive(
+        source["expected_sol_luna_worker_count"], "expected_sol_luna_worker_count"
+    )
+    result["expected_sol_luna_active_luna_writer_count"] = _positive(
+        source["expected_sol_luna_active_luna_writer_count"],
+        "expected_sol_luna_active_luna_writer_count",
+    )
+    if result["expected_sol_luna_active_luna_writer_count"] > result["expected_sol_luna_worker_count"]:
+        raise AttestationError("active Luna writer count cannot exceed worker count")
+    result["expected_sol_only_topology"] = _id(
+        source["expected_sol_only_topology"], "expected_sol_only_topology"
+    )
+    result["expected_sol_luna_topology"] = _id(
+        source["expected_sol_luna_topology"], "expected_sol_luna_topology"
+    )
     return result
 
 def _validate_identity(raw: Mapping[str, Any], contract: Mapping[str, Any]) -> dict[str, Any]:
     source = _exact(raw, INDEX_FIELDS, "identity index")
     if isinstance(source["schema_version"], bool) or not isinstance(source["schema_version"], int) or source["schema_version"] != 2 or source["verification_status"] != "verified":
         raise AttestationError("identity index is not verified schema 2")
-    if source["campaign_id"] != contract["campaign_id"] or source["sol_luna_effort"] != contract["expected_sol_luna_effort"] or source["sol_luna_writer_count"] != contract["expected_sol_luna_writer_count"]:
+    if source["campaign_id"] != contract["campaign_id"] or source["sol_luna_effort"] != contract["expected_sol_luna_effort"] or source["sol_luna_writer_count"] != contract["expected_sol_luna_worker_count"]:
         raise AttestationError("identity index does not match contract")
-    if not isinstance(source["sol_luna_effort"], str) or source["sol_luna_effort"] not in EFFORTS or isinstance(source["sol_luna_writer_count"], bool) or not isinstance(source["sol_luna_writer_count"], int) or source["sol_luna_writer_count"] not in {1, 2}:
+    if not isinstance(source["sol_luna_effort"], str) or source["sol_luna_effort"] not in EFFORTS or isinstance(source["sol_luna_writer_count"], bool) or not isinstance(source["sol_luna_writer_count"], int) or source["sol_luna_writer_count"] < 1:
         raise AttestationError("identity index effort or writer count is invalid")
     _digest(source["index_sha256"], "index_sha256")
     content = dict(source); digest = content.pop("index_sha256")
@@ -137,7 +157,7 @@ def _validate_identity(raw: Mapping[str, Any], contract: Mapping[str, Any]) -> d
         if (controller["model"], controller["effort"], controller["provider"]) != ("gpt-5.6-sol", "high", "openai") or controller["role"] not in CONTROLLER_ROLES:
             raise AttestationError("controller identity is not host-observed gpt-5.6-sol/high OpenAI")
         workers = run["workers"]
-        if not isinstance(workers, list) or len(workers) != (0 if run["route"] == "SOL_ONLY" else contract["expected_sol_luna_writer_count"]):
+        if not isinstance(workers, list) or len(workers) != (0 if run["route"] == "SOL_ONLY" else contract["expected_sol_luna_worker_count"]):
             raise AttestationError("identity worker count does not match route")
         out_workers = []
         for j, worker in enumerate(workers):
@@ -155,12 +175,35 @@ def build_attestation(campaign_ledger: Path, identity_index: Path, contract: Pat
     except Exception as exc:
         if isinstance(exc, CAMPAIGN.CampaignError): raise AttestationError(str(exc)) from exc
         raise AttestationError(f"cannot replay campaign: {exc}") from exc
-    if state["active"] is not None or len(state["records"]) != spec["expected_pairs"] * 2 or state["config"]["batch_size"] != spec["expected_batch_size"] or state["config"]["contract_digest"] != spec["benchmark_contract_digest"]:
+    config = state["config"]
+    if (
+        state["active"] is not None
+        or state.get("pending_end") is not None
+        or len(state["records"]) != spec["expected_pairs"] * 2
+        or config["batch_size"] != spec["expected_batch_size"]
+        or config["contract_digest"] != spec["benchmark_contract_digest"]
+        or config["task_spec_digest"] != spec["task_spec_digest"]
+        or config["acceptance_suite_digest"] != spec["acceptance_suite_digest"]
+        or config["sol_luna_worker_count"] != spec["expected_sol_luna_worker_count"]
+        or config["sol_luna_active_luna_writer_count"] != spec["expected_sol_luna_active_luna_writer_count"]
+        or config["sol_only_topology"] != spec["expected_sol_only_topology"]
+        or config["sol_luna_topology"] != spec["expected_sol_luna_topology"]
+    ):
         raise AttestationError("campaign is incomplete or does not match contract")
     records = state["records"]
     for record in records:
         if record["route_revision"] != spec["route_revision"] or record["independent_acceptance"] != "PASSED" or record["defects"] != 0 or record["measurement_scope"] != "ROUTE_TASK_INTERVAL_ONLY" or record["contamination_status"] != "NO_OTHER_SHARED_USAGE_OBSERVED":
             raise AttestationError("campaign record violates attestation requirements")
+        expected_workers = 0 if record["route"] == "SOL_ONLY" else config["sol_luna_worker_count"]
+        expected_active = 0 if record["route"] == "SOL_ONLY" else config["sol_luna_active_luna_writer_count"]
+        if (
+            record["sol_only_topology"] != config["sol_only_topology"]
+            or record["sol_luna_topology"] != config["sol_luna_topology"]
+            or record["top_level_run_count"] != 1
+            or record["worker_count"] != expected_workers
+            or record["active_luna_writer_count"] != expected_active
+        ):
+            raise AttestationError("campaign does not match contract: record topology does not match frozen campaign")
     pair_routes: dict[str, set[str]] = {}
     for record in records: pair_routes.setdefault(record["pair_id"], set()).add(record["route"])
     if len(pair_routes) != spec["expected_pairs"] or any(routes != ROUTES for routes in pair_routes.values()): raise AttestationError("campaign records do not contain exact route pairs")
@@ -171,7 +214,7 @@ def build_attestation(campaign_ledger: Path, identity_index: Path, contract: Pat
     last_event = state["last_event_sha256"]
     if not isinstance(last_event, str) or not re.fullmatch(r"[0-9a-f]{64}", last_event):
         raise AttestationError("campaign last event digest is malformed")
-    output = {"schema_version": 1, "campaign_id": spec["campaign_id"], "route_revision": spec["route_revision"], "benchmark_contract_digest": spec["benchmark_contract_digest"], "task_spec_digest": spec["task_spec_digest"], "acceptance_suite_digest": spec["acceptance_suite_digest"], "policy_fingerprint": spec["policy_fingerprint"], "completed_pairs": spec["expected_pairs"], "arm_count": len(records), "sol_luna_effort": spec["expected_sol_luna_effort"], "sol_luna_writer_count": spec["expected_sol_luna_writer_count"], "five_hour_window_id": windows["five_hour"]["window_id"], "weekly_window_id": windows["weekly"]["window_id"], "campaign_last_event_sha256": "sha256:" + last_event, "identity_index_sha256": index["index_sha256"], "records_sha256": sha256_bytes(canonical_bytes(records)), "verification_status": "verified"}
+    output = {"schema_version": 2, "campaign_id": spec["campaign_id"], "route_revision": spec["route_revision"], "benchmark_contract_digest": spec["benchmark_contract_digest"], "task_spec_digest": spec["task_spec_digest"], "acceptance_suite_digest": spec["acceptance_suite_digest"], "policy_fingerprint": spec["policy_fingerprint"], "completed_pairs": spec["expected_pairs"], "arm_count": len(records), "sol_luna_effort": spec["expected_sol_luna_effort"], "sol_luna_worker_count": spec["expected_sol_luna_worker_count"], "sol_luna_active_luna_writer_count": spec["expected_sol_luna_active_luna_writer_count"], "sol_only_topology": spec["expected_sol_only_topology"], "sol_luna_topology": spec["expected_sol_luna_topology"], "five_hour_window_id": windows["five_hour"]["window_id"], "weekly_window_id": windows["weekly"]["window_id"], "campaign_last_event_sha256": "sha256:" + last_event, "identity_index_sha256": index["index_sha256"], "records_sha256": sha256_bytes(canonical_bytes(records)), "verification_status": "verified"}
     output["attestation_sha256"] = sha256_bytes(canonical_bytes(output))
     return output
 

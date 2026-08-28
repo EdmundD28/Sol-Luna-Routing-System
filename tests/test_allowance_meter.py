@@ -33,6 +33,20 @@ def record(
             "arm_position": arm_position or (1 if route == "SOL_ONLY" else 2),
             "elapsed_seconds": elapsed,
             "evidence_digest": "sha256:" + ("1" if route == "SOL_ONLY" else "2") * 64,
+            "starting_commit_sha": "a" * 40,
+            "task_spec_digest": "sha256:" + "d" * 64,
+            "acceptance_suite_digest": "sha256:" + "e" * 64,
+            "sol_only_topology": "single-controller-no-workers",
+            "sol_luna_topology": "single-controller-one-active-luna",
+            "top_level_run_count": 1,
+            "worker_count": 0 if route == "SOL_ONLY" else 1,
+            "active_luna_writer_count": 0 if route == "SOL_ONLY" else 1,
+            # Keep the existing unit fixtures short; the production default is
+            # exercised explicitly by test_target_elapsed_bounds_hold.
+            "target_elapsed_min_seconds": 1,
+            "target_elapsed_max_seconds": 1000,
+            "meter_resolution_percentage_points": 1,
+            "repair_policy_digest": "sha256:" + "f" * 64,
         }
     )
     position = result["arm_position"]
@@ -212,6 +226,63 @@ class AllowanceMeterTests(unittest.TestCase):
             source["elapsed_seconds"] = value
             with self.subTest(value=value), self.assertRaises(METER.AllowanceError):
                 METER.validate_record(source)
+
+    def test_target_elapsed_bounds_hold_out_of_band_pairs(self) -> None:
+        sol = record("SOL_ONLY", before=100, after=70, elapsed=100)
+        luna = record("SOL_LUNA", before=70, after=69, elapsed=80)
+        for item in (sol, luna):
+            item["target_elapsed_min_seconds"] = 1200
+            item["target_elapsed_max_seconds"] = 2400
+        result = METER.assess([sol, luna], minimum_advantage_multiple=5, minimum_pairs=2)
+        self.assertFalse(result["pairs"][0]["elapsed_in_target"])
+        self.assertIn("elapsed_outside_target_window", result["pairs"][0]["reasons"])
+        self.assertEqual(result["campaign_status"], "HOLD")
+
+    def test_rejects_false_meter_precision(self) -> None:
+        source = record("SOL_ONLY", before=100, after=60, elapsed=100)
+        source["limits"]["five_hour"]["after_remaining_percent"] = 60.5
+        with self.assertRaisesRegex(METER.AllowanceError, "integer multiple"):
+            METER.validate_record(source)
+
+    def test_rejects_topology_mismatch(self) -> None:
+        source = record("SOL_ONLY", before=100, after=60, elapsed=100)
+        source["worker_count"] = 1
+        with self.assertRaisesRegex(METER.AllowanceError, "topology"):
+            METER.validate_record(source)
+
+    def test_accepts_preregistered_multi_worker_luna_topology(self) -> None:
+        sol = record("SOL_ONLY", before=100, after=70, elapsed=100)
+        luna = record("SOL_LUNA", before=70, after=69, elapsed=80)
+        for source in (sol, luna):
+            source["sol_only_topology"] = "sol-controller-v2"
+            source["sol_luna_topology"] = "controller-with-luna-pool-v2"
+        luna["worker_count"] = 3
+        luna["active_luna_writer_count"] = 2
+        result = METER.assess([sol, luna], minimum_advantage_multiple=1, minimum_pairs=2)
+        self.assertEqual(result["campaign_status"], "HOLD")
+        self.assertIn("insufficient_predeclared_pairs", result["campaign"]["reasons"])
+
+    def test_rejects_active_luna_count_above_frozen_worker_count(self) -> None:
+        source = record("SOL_LUNA", before=100, after=60, elapsed=100)
+        source["worker_count"] = 2
+        source["active_luna_writer_count"] = 3
+        with self.assertRaisesRegex(METER.AllowanceError, "topology"):
+            METER.validate_record(source)
+
+    def test_rejects_cross_pair_windows_and_frozen_digests(self) -> None:
+        records = []
+        for index in range(2):
+            pair_id = f"pair-{index + 1:03d}"
+            sol = record("SOL_ONLY", before=100, after=70, elapsed=100, pair_id=pair_id)
+            luna = record("SOL_LUNA", before=70, after=69, elapsed=80, pair_id=pair_id)
+            records.extend((sol, luna))
+        records[-1]["limits"]["five_hour"]["window_id"] = "other-window"
+        with self.assertRaisesRegex(METER.AllowanceError, "window_id differs across campaign"):
+            METER.assess(records, minimum_advantage_multiple=5, minimum_pairs=2)
+        records[-1]["limits"]["five_hour"]["window_id"] = records[0]["limits"]["five_hour"]["window_id"]
+        records[-1]["task_spec_digest"] = "sha256:" + "9" * 64
+        with self.assertRaisesRegex(METER.AllowanceError, "task_spec_digest differs"):
+            METER.assess(records, minimum_advantage_multiple=5, minimum_pairs=2)
 
 
 if __name__ == "__main__":

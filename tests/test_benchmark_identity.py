@@ -200,6 +200,29 @@ class BenchmarkIdentityTests(unittest.TestCase):
         self.assertEqual(len(luna_run["workers"]), 2)
         self.assertEqual(index["sol_luna_writer_count"], 2)
 
+        manifest["runs"][1]["worker_receipts"].append(
+            self.write_receipt(
+                "luna-c.json",
+                receipt(
+                    model="gpt-5.6-luna",
+                    role="worker",
+                    marker="luna-c",
+                    effort="medium",
+                ),
+            )
+        )
+        manifest["sol_luna_writer_count"] = 3
+        self.write_manifest(manifest)
+        index = IDENTITY.build_index(self.manifest)
+        luna_run = next(run for run in index["runs"] if run["route"] == "SOL_LUNA")
+        self.assertEqual(len(luna_run["workers"]), 3)
+        self.assertEqual(index["sol_luna_writer_count"], 3)
+
+        manifest["sol_luna_writer_count"] = 0
+        self.write_manifest(manifest)
+        with self.assertRaisesRegex(IDENTITY.IdentityError, "positive integer"):
+            IDENTITY.build_index(self.manifest)
+
     def test_self_report_unknown_identity_and_non_host_provenance_fail_closed(self) -> None:
         variants = []
         source = receipt(model="gpt-5.6-sol", role="default", marker="bad")

@@ -248,9 +248,9 @@ def build_index(manifest: Path) -> dict[str, Any]:
     if (
         isinstance(sol_luna_writer_count, bool)
         or not isinstance(sol_luna_writer_count, int)
-        or sol_luna_writer_count not in {1, 2}
+        or sol_luna_writer_count < 1
     ):
-        raise IdentityError("sol_luna_writer_count must be 1 or 2")
+        raise IdentityError("sol_luna_writer_count must be a positive integer")
     if not isinstance(source["runs"], list) or not source["runs"]:
         raise IdentityError("runs must be a non-empty JSON array")
     output_runs: list[dict[str, Any]] = []

@@ -97,9 +97,11 @@ class PackageContractTests(unittest.TestCase):
         skill = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
         policy = (SKILL_ROOT / "references" / "orchestration-policy.md").read_text(encoding="utf-8")
         self.assertIn("Sol does not pre-script Luna's internal units", skill)
-        self.assertIn("subtract it from effective Luna substitution", skill)
+        self.assertIn("subtract the whole affected baseline claim", skill)
         self.assertIn("Stable-domain delegation envelope", policy)
-        self.assertIn("Replayed actions are shadow work", policy)
+        self.assertIn("A replay shadows its whole claim", policy)
+        self.assertIn("baseline-cost-weighted", skill)
+        self.assertIn("schema-2 candidate-bound handoff", skill)
 
 
 if __name__ == "__main__":

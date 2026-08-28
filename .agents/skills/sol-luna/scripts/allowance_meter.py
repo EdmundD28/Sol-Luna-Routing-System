@@ -15,11 +15,18 @@ from pathlib import Path
 from typing import Any, Mapping
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 3
 LABEL = re.compile(r"[a-z0-9][a-z0-9-]{1,63}")
 DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
 ROUTES = {"SOL_ONLY", "SOL_LUNA"}
 LIMIT_KINDS = {"five_hour", "weekly"}
+DEFAULT_TARGET_ELAPSED_MIN_SECONDS = 1200
+DEFAULT_TARGET_ELAPSED_MAX_SECONDS = 2400
+DEFAULT_METER_RESOLUTION = 1.0
+TOPOLOGIES = {
+    "sol_only": "single-controller-no-workers",
+    "sol_luna": "single-controller-one-active-luna",
+}
 RECORD_FIELDS = {
     "schema_version",
     "pair_id",
@@ -37,6 +44,18 @@ RECORD_FIELDS = {
     "evidence_digest",
     "benchmark_contract_digest",
     "usage_scope_digest",
+    "starting_commit_sha",
+    "task_spec_digest",
+    "acceptance_suite_digest",
+    "sol_only_topology",
+    "sol_luna_topology",
+    "top_level_run_count",
+    "worker_count",
+    "active_luna_writer_count",
+    "target_elapsed_min_seconds",
+    "target_elapsed_max_seconds",
+    "meter_resolution_percentage_points",
+    "repair_policy_digest",
     "limits",
 }
 LIMIT_FIELDS = {
@@ -78,6 +97,19 @@ def require_digest(value: Any, field: str) -> str:
     return value
 
 
+def require_commit_sha(value: Any, field: str) -> str:
+    if not isinstance(value, str) or not re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", value):
+        raise AllowanceError(f"{field} must be a 40- or 64-character lowercase commit SHA")
+    return value
+
+
+def require_multiple(value: float, resolution: float, field: str) -> float:
+    quotient = value / resolution
+    if not math.isclose(quotient, round(quotient), rel_tol=0.0, abs_tol=1e-9):
+        raise AllowanceError(f"{field} must be an integer multiple of meter resolution")
+    return value
+
+
 def require_timestamp(value: Any, field: str) -> datetime:
     if not isinstance(value, str) or value != value.strip():
         raise AllowanceError(f"{field} must be an ISO-8601 timestamp with an offset")
@@ -100,7 +132,9 @@ def finite_number(value: Any, field: str, *, minimum: float = 0.0, maximum: floa
     return result
 
 
-def validate_limit(value: Any, field: str) -> dict[str, Any]:
+def validate_limit(
+    value: Any, field: str, *, meter_resolution: float = DEFAULT_METER_RESOLUTION
+) -> dict[str, Any]:
     source = require_object(value, field)
     unsupported = set(source) - LIMIT_FIELDS
     missing = LIMIT_FIELDS - set(source)
@@ -110,6 +144,8 @@ def validate_limit(value: Any, field: str) -> dict[str, Any]:
         raise AllowanceError(f"{field} is missing fields: {sorted(missing)}")
     before = finite_number(source["before_remaining_percent"], f"{field}.before_remaining_percent", maximum=100)
     after = finite_number(source["after_remaining_percent"], f"{field}.after_remaining_percent", maximum=100)
+    require_multiple(before, meter_resolution, f"{field}.before_remaining_percent")
+    require_multiple(after, meter_resolution, f"{field}.after_remaining_percent")
     uncertainty = finite_number(
         source["reading_uncertainty_percentage_points"],
         f"{field}.reading_uncertainty_percentage_points",
@@ -166,9 +202,54 @@ def validate_record(value: Any) -> dict[str, Any]:
         raise AllowanceError("measurement_scope must exclude referee and between-arm work")
     if source["source"] != "chatgpt-usage-dashboard-v1":
         raise AllowanceError("source must be chatgpt-usage-dashboard-v1")
+    starting_commit_sha = require_commit_sha(source["starting_commit_sha"], "starting_commit_sha")
+    frozen_digests = {
+        field: require_digest(source[field], field)
+        for field in ("task_spec_digest", "acceptance_suite_digest", "repair_policy_digest")
+    }
+    sol_only_topology = require_label(source["sol_only_topology"], "sol_only_topology")
+    sol_luna_topology = require_label(source["sol_luna_topology"], "sol_luna_topology")
+    for field in ("top_level_run_count", "worker_count", "active_luna_writer_count"):
+        number = source[field]
+        if isinstance(number, bool) or not isinstance(number, int) or number < 0:
+            raise AllowanceError(f"{field} must be a non-negative integer")
+    observed_topology = (
+        source["top_level_run_count"], source["worker_count"], source["active_luna_writer_count"]
+    )
+    if route == "SOL_ONLY":
+        valid_topology = observed_topology == (1, 0, 0)
+    else:
+        valid_topology = (
+            source["top_level_run_count"] == 1
+            and source["worker_count"] >= 1
+            and 1 <= source["active_luna_writer_count"] <= source["worker_count"]
+        )
+    if not valid_topology:
+        raise AllowanceError(f"{route} topology does not match the frozen contract")
+    target_min = source["target_elapsed_min_seconds"]
+    target_max = source["target_elapsed_max_seconds"]
+    if (
+        isinstance(target_min, bool) or not isinstance(target_min, int) or target_min < 0
+        or isinstance(target_max, bool) or not isinstance(target_max, int) or target_max <= target_min
+    ):
+        raise AllowanceError("target elapsed bounds must be ordered non-negative integers")
+    meter_resolution = finite_number(
+        source["meter_resolution_percentage_points"],
+        "meter_resolution_percentage_points", minimum=1e-9, maximum=100,
+    )
     raw_limits = require_object(source["limits"], "limits")
     if set(raw_limits) != LIMIT_KINDS:
         raise AllowanceError("limits must contain exactly five_hour and weekly")
+    limits = {
+        kind: validate_limit(raw_limits[kind], f"limits.{kind}", meter_resolution=meter_resolution)
+        for kind in sorted(LIMIT_KINDS)
+    }
+    if {
+        limits[kind]["before_observed_at"] for kind in LIMIT_KINDS
+    } != {limits["five_hour"]["before_observed_at"]} or {
+        limits[kind]["after_observed_at"] for kind in LIMIT_KINDS
+    } != {limits["five_hour"]["after_observed_at"]}:
+        raise AllowanceError("five_hour and weekly readings must share the route interval boundaries")
     return {
         "schema_version": SCHEMA_VERSION,
         "pair_id": require_label(source["pair_id"], "pair_id"),
@@ -188,7 +269,17 @@ def validate_record(value: Any) -> dict[str, Any]:
             source["benchmark_contract_digest"], "benchmark_contract_digest"
         ),
         "usage_scope_digest": require_digest(source["usage_scope_digest"], "usage_scope_digest"),
-        "limits": {kind: validate_limit(raw_limits[kind], f"limits.{kind}") for kind in sorted(LIMIT_KINDS)},
+        "starting_commit_sha": starting_commit_sha,
+        **frozen_digests,
+        "sol_only_topology": sol_only_topology,
+        "sol_luna_topology": sol_luna_topology,
+        "top_level_run_count": source["top_level_run_count"],
+        "worker_count": source["worker_count"],
+        "active_luna_writer_count": source["active_luna_writer_count"],
+        "target_elapsed_min_seconds": target_min,
+        "target_elapsed_max_seconds": target_max,
+        "meter_resolution_percentage_points": meter_resolution,
+        "limits": limits,
     }
 
 
@@ -244,9 +335,27 @@ def assess(
         raise AllowanceError("task_family differs across campaign")
     if len({record["batch_size"] for record in normalized}) > 1:
         raise AllowanceError("batch_size differs across campaign")
+    frozen_fields = (
+        "starting_commit_sha", "task_spec_digest", "acceptance_suite_digest",
+        "sol_only_topology", "sol_luna_topology", "top_level_run_count",
+        "target_elapsed_min_seconds", "target_elapsed_max_seconds",
+        "meter_resolution_percentage_points", "repair_policy_digest",
+    )
+    for field in frozen_fields:
+        if len({record[field] for record in normalized}) > 1:
+            raise AllowanceError(f"{field} differs across campaign")
+    for kind in LIMIT_KINDS:
+        if len({record["limits"][kind]["window_id"] for record in normalized}) > 1:
+            raise AllowanceError(f"{kind} window_id differs across campaign")
+        if len({record["limits"][kind]["window_reset_at"] for record in normalized}) > 1:
+            raise AllowanceError(f"{kind} window_reset_at differs across campaign")
     for route in ROUTES:
         if len({record["route_revision"] for record in normalized if record["route"] == route}) > 1:
             raise AllowanceError(f"{route} route_revision differs across campaign")
+        for field in ("top_level_run_count", "worker_count", "active_luna_writer_count"):
+            values = {record[field] for record in normalized if record["route"] == route}
+            if len(values) > 1:
+                raise AllowanceError(f"{route} {field} differs across campaign")
     grouped: dict[str, dict[str, dict[str, Any]]] = {}
     for record in normalized:
         pair = grouped.setdefault(record["pair_id"], {})
@@ -300,6 +409,11 @@ def assess(
             and luna["defects"] <= sol["defects"]
         )
         elapsed_improved = luna["elapsed_seconds"] < sol["elapsed_seconds"]
+        target_min = sol["target_elapsed_min_seconds"]
+        target_max = sol["target_elapsed_max_seconds"]
+        elapsed_in_target = all(
+            target_min <= record["elapsed_seconds"] <= target_max for record in (sol, luna)
+        )
         five_hour_lower = intervals["five_hour"]["advantage"][
             "conservative_advantage_multiple_lower_bound"
         ]
@@ -313,12 +427,15 @@ def assess(
             reasons.append("conservative_allowance_advantage_below_floor")
         if not elapsed_improved:
             reasons.append("elapsed_not_strictly_faster")
+        if not elapsed_in_target:
+            reasons.append("elapsed_outside_target_window")
         results.append(
             {
                 "pair_id": pair_id,
                 "quality_passed": quality_passed,
                 "allowance_improved": allowance_improved,
                 "elapsed_improved": elapsed_improved,
+                "elapsed_in_target": elapsed_in_target,
                 "first_route": first["route"],
                 "limits": intervals,
                 "status": "PASS" if not reasons else "HOLD",
@@ -349,6 +466,7 @@ def assess(
         record["elapsed_seconds"] for record in normalized if record["route"] == "SOL_LUNA"
     )
     elapsed_improved = total_luna_elapsed < total_sol_elapsed
+    elapsed_in_target = all(item["elapsed_in_target"] for item in results)
     primary_lower = campaign_limits["five_hour"]["advantage"][
         "conservative_advantage_multiple_lower_bound"
     ]
@@ -372,6 +490,8 @@ def assess(
         campaign_reasons.append("weekly_meter_contradicts_direction")
     if not elapsed_improved:
         campaign_reasons.append("elapsed_not_strictly_faster")
+    if not elapsed_in_target:
+        campaign_reasons.append("elapsed_outside_target_window")
     return {
         "schema_version": SCHEMA_VERSION,
         "measurement": "chatgpt_plan_limit_remaining_percentage_points",
@@ -385,7 +505,8 @@ def assess(
             "counterbalanced": counterbalanced,
             "quality_passed": quality_passed,
             "allowance_improved": allowance_improved,
-            "elapsed_improved": elapsed_improved,
+        "elapsed_improved": elapsed_improved,
+        "elapsed_in_target": elapsed_in_target,
             "elapsed_seconds": {"sol_only": total_sol_elapsed, "sol_luna": total_luna_elapsed},
             "limits": campaign_limits,
             "status": "PASS" if not campaign_reasons else "HOLD",
@@ -439,6 +560,18 @@ def template() -> dict[str, Any]:
         "evidence_digest": digest,
         "benchmark_contract_digest": digest,
         "usage_scope_digest": digest,
+        "starting_commit_sha": "0" * 40,
+        "task_spec_digest": digest,
+        "acceptance_suite_digest": digest,
+        "sol_only_topology": TOPOLOGIES["sol_only"],
+        "sol_luna_topology": TOPOLOGIES["sol_luna"],
+        "top_level_run_count": 1,
+        "worker_count": 1,
+        "active_luna_writer_count": 1,
+        "target_elapsed_min_seconds": DEFAULT_TARGET_ELAPSED_MIN_SECONDS,
+        "target_elapsed_max_seconds": DEFAULT_TARGET_ELAPSED_MAX_SECONDS,
+        "meter_resolution_percentage_points": DEFAULT_METER_RESOLUTION,
+        "repair_policy_digest": digest,
         "limits": {"five_hour": dict(limit), "weekly": dict(limit)},
     }
 
@@ -452,7 +585,7 @@ def parser() -> argparse.ArgumentParser:
     assess_command = sub.add_parser("assess")
     assess_command.add_argument("--input", required=True, type=Path, help="JSON array of matched records")
     assess_command.add_argument("--minimum-advantage-multiple", type=float, default=10.0)
-    assess_command.add_argument("--minimum-pairs", type=int, default=4)
+    assess_command.add_argument("--minimum-pairs", type=int, default=5)
     return result
 
 

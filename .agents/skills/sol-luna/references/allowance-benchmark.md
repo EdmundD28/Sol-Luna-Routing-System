@@ -4,12 +4,12 @@ Use this protocol only when the task is to quantify Sol-only versus Sol-Luna sub
 
 ## Freeze the comparison
 
-- Use one account, plan, speed setting, formal repository checkout, task family, starting Git reference, task specification, independent acceptance suite, and Sol-Luna revision.
-- Give Sol-only one complete top-level task in one Sol run. Do not split it into separately dispatched or artificially serialized packages. In the Sol-Luna arm, give its Sol controller that same complete task and measure the controller's full route interval, including every Luna child it launches.
-- Test the production default first: one active Luna writer at the lowest task-supported effort, allowed to roll through every Luna-owned package in the frozen allocation while Sol performs only disjoint Sol-owned work. Record delegated coverage separately from active concurrency. Treat additional active writers as a separate experiment rather than silently changing the route under test.
+- Use one account, plan, speed setting, formal repository checkout, task family, starting Git reference, task specification, independent acceptance suite, and Sol-Luna revision. Freeze their digests in the campaign `init` event.
+- Give Sol-only one complete top-level task in one Sol run. Sol may naturally decompose its own work, but the experiment controller must not turn it into separately dispatched or artificially serialized packages. In the Sol-Luna arm, give its Sol controller that same complete task and measure the controller's full route interval, including every Luna child it launches.
+- Freeze the Sol-Luna worker count and active Luna-writer count in the campaign `init` event. The defaults are one worker and one active writer, but a pre-registered campaign may use any `worker_count >= 1` and `1 <= active_luna_writer_count <= worker_count`. Keep the topology label alongside those counts. Record delegated coverage separately from active concurrency; concurrency is a frozen treatment parameter, never an optimization target.
 - Store the campaign ledger and dashboard captures outside the repository. Do not create a clone, copied project, or worktree.
-- Pre-register the route order, pair count, batch size, quality gate, time gate, and minimum allowance advantage. For the first v0.1.1 campaign, test a conservative lower bound of at least 10×.
-- Run counterbalanced pairs. Four pairs in `ABBA` or `BAAB` order are the minimum pilot; use more pairs when the meter remains too coarse.
+- Pre-register the route order, pair count, batch size, quality gate, time gate, and minimum allowance advantage. A production campaign requires at least five pairs; for the first v0.1.1 campaign, test a conservative lower bound of at least 10×.
+- Run counterbalanced pairs. Five pairs with a 3/2 first-arm split are the minimum production campaign; use more pairs when the meter remains too coarse.
 
 ## Read the meters
 
@@ -39,14 +39,21 @@ python .agents/skills/sol-luna/scripts/allowance_campaign.py init `
   --task-family bounded-feature `
   --batch-size 1 `
   --reading-uncertainty 1 `
-  --first-routes SOL_ONLY,SOL_LUNA,SOL_LUNA,SOL_ONLY `
+  --first-routes SOL_ONLY,SOL_LUNA,SOL_LUNA,SOL_ONLY,SOL_ONLY `
+  --starting-commit-sha 0123456789abcdef0123456789abcdef01234567 `
+  --task-spec-digest sha256:2222222222222222222222222222222222222222222222222222222222222222 `
+  --acceptance-suite-digest sha256:3333333333333333333333333333333333333333333333333333333333333333 `
+  --sol-luna-worker-count 1 --sol-luna-active-luna-writer-count 1 `
+  --target-elapsed-min-seconds 1200 --target-elapsed-max-seconds 2400 `
+  --meter-resolution-percentage-points 1 `
+  --repair-policy-digest sha256:4444444444444444444444444444444444444444444444444444444444444444 `
   --five-hour-window-id five-hour-001 `
   --five-hour-reset-at 2026-08-28T12:00:00+10:00 `
   --weekly-window-id weekly-001 `
   --weekly-reset-at 2026-09-01T00:00:00+10:00
 ```
 
-Immediately before launching an arm, take settled readings and record them. The command derives the pair and position from the registered order:
+Immediately before launching an arm, take settled readings and record them. The command derives the pair and position from the registered order. Readings must be integer multiples of the frozen meter resolution; an out-of-band or reset reading invalidates the campaign:
 
 ```powershell
 python .agents/skills/sol-luna/scripts/allowance_campaign.py begin-arm `
@@ -57,15 +64,29 @@ python .agents/skills/sol-luna/scripts/allowance_campaign.py begin-arm `
   --start-evidence-digest sha256:2222222222222222222222222222222222222222222222222222222222222222
 ```
 
-End the interval as soon as the tested Agent returns. `--elapsed-seconds` covers only that route interval. Independent acceptance still runs after the interval, but its result and defect count are attached to the route record:
+End the interval as soon as the tested Agent returns. `--elapsed-seconds` covers only that route interval and is formally comparable only inside the frozen 1200–2400 second target. The route end records only the candidate digest and settled meter reading. Then run the independent acceptance outside the route interval and append a `record-acceptance` event before beginning the next arm. That event binds the candidate digest, acceptance command/result/suite digests, observation time, referee elapsed time, and `PASSED`/`FAILED` plus defects. Referee time is part of the excluded between-arm gap and is never assigned to either route. Assessment refuses a pending route end or any missing acceptance event.
 
 ```powershell
 python .agents/skills/sol-luna/scripts/allowance_campaign.py end-arm `
   --ledger C:\benchmark\campaign.jsonl `
-  --route SOL_ONLY --observed-at 2026-08-28T09:10:00+10:00 `
+  --pair-id pair-001 --route SOL_ONLY --observed-at 2026-08-28T09:10:00+10:00 `
   --five-hour-remaining-percent 92 --weekly-remaining-percent 99 `
   --end-evidence-digest sha256:3333333333333333333333333333333333333333333333333333333333333333 `
-  --elapsed-seconds 600 --independent-acceptance PASSED --defects 0
+  --elapsed-seconds 1500 `
+  --candidate-digest sha256:5555555555555555555555555555555555555555555555555555555555555555
+```
+
+Then append the independent referee result:
+
+```powershell
+python .agents/skills/sol-luna/scripts/allowance_campaign.py record-acceptance `
+  --ledger C:\benchmark\campaign.jsonl --pair-id pair-001 --route SOL_ONLY `
+  --candidate-digest sha256:5555555555555555555555555555555555555555555555555555555555555555 `
+  --acceptance-command-digest sha256:6666666666666666666666666666666666666666666666666666666666666666 `
+  --acceptance-result-digest sha256:7777777777777777777777777777777777777777777777777777777777777777 `
+  --acceptance-suite-digest sha256:3333333333333333333333333333333333333333333333333333333333333333 `
+  --observed-at 2026-08-28T09:12:00+10:00 --acceptance-elapsed-seconds 120 `
+  --independent-acceptance PASSED --defects 0
 ```
 
 `status` is lock-free and read-only. It reports the active arm, next route, last readings, completed pairs, and cumulative excluded controller/referee consumption for each window. `assess` refuses an active arm and keeps five-hour and weekly results separate:
@@ -74,7 +95,7 @@ python .agents/skills/sol-luna/scripts/allowance_campaign.py end-arm `
 python .agents/skills/sol-luna/scripts/allowance_campaign.py status --ledger C:\benchmark\campaign.jsonl
 python .agents/skills/sol-luna/scripts/allowance_campaign.py assess `
   --ledger C:\benchmark\campaign.jsonl `
-  --minimum-advantage-multiple 10 --minimum-pairs 4
+  --minimum-advantage-multiple 10 --minimum-pairs 5
 ```
 
 Every ledger event is compact, sorted-key UTF-8 JSONL and links to the SHA-256 of the preceding canonical event. Before every write, the complete history is replayed semantically. Writers use an `O_EXCL` `.lock`, a flushed and `fsync`-ed same-directory temporary file, and `os.replace`; a foreign lock is never removed. A reset boundary, time reversal, wrong route, increased reading, damaged chain, unsupported field, or record inconsistent with its begin/end evidence fails closed.
@@ -114,7 +135,7 @@ python .agents/skills/sol-luna/scripts/benchmark_identity.py build `
   --output C:\benchmark\identity-index.json
 ```
 
-The builder requires verified, fully readable explicit-session receipts with host-observed model, reasoning effort, role, and provider. `SOL_ONLY` is exactly one OpenAI `gpt-5.6-sol/high` controller and no worker. `SOL_LUNA` uses the same controller plus the manifest's explicitly declared one or two OpenAI `gpt-5.6-luna` writers at the declared effort. The production benchmark sets `sol_luna_writer_count` to `1`; `2` is reserved for a separately pre-registered concurrency experiment and does not raise the production routing cap. Every Sol-Luna arm in one campaign must use the same shape and effort. A logical receipt cannot be reused anywhere in the campaign, even when whitespace, indentation, or JSON key order differs. Absolute paths, drive paths, traversal, control characters, Windows device names, symlinks, missing routes, role/model/effort impersonation, self-report proof, unknown fields, and an existing output fail closed.
+The builder requires verified, fully readable explicit-session receipts with host-observed model, reasoning effort, role, and provider. `SOL_ONLY` is exactly one OpenAI `gpt-5.6-sol/high` controller and no worker. `SOL_LUNA` uses the same controller plus the campaign's frozen worker/writer topology; every Sol-Luna arm in one campaign must use the same shape and effort. A logical receipt cannot be reused anywhere in the campaign, even when whitespace, indentation, or JSON key order differs. Absolute paths, drive paths, traversal, control characters, Windows device names, symlinks, missing routes, role/model/effort impersonation, self-report proof, unknown fields, and an existing output fail closed.
 
 The output allowlist contains only the campaign and pair identifiers, declared Luna effort and writer count, route, redacted controller/writer identity values, receipt SHA-256 values, verification status, schema version, and a SHA-256 over the canonical index without that digest field. Each `receipt_sha256` is computed over the parsed receipt's sorted-key, compact canonical JSON, so it is stable across equivalent serializations. The index never copies receipt paths, source/thread references, working directories, or agent paths. Output uses a same-directory flushed and `fsync`-ed temporary file followed by `os.replace`.
 
@@ -130,7 +151,7 @@ python .agents/skills/sol-luna/scripts/benchmark_attestation.py build `
   --output C:\benchmark\attestation.json
 ```
 
-The contract is a strict schema-1 JSON object declaring the campaign ID, route revision, expected pair and batch counts, Luna effort and writer count, and the benchmark-contract, task-spec, acceptance-suite, and policy SHA-256 values. The builder replays the authoritative campaign ledger, requires a complete zero-defect accepted campaign with unchanged meter windows, verifies the identity-index digest and exact pair/route membership, and checks host-observed OpenAI `gpt-5.6-sol/high` controllers plus the declared OpenAI `gpt-5.6-luna` writers. Inputs must be regular non-symlink files. The output parent must already be a directory, the output must not exist or alias an input, and the builder writes atomically without including paths, timestamps, session references, prompts, or notes. Its attestation proves structural coherence only; use `allowance_meter.py` to decide the economic threshold.
+The contract is a strict schema-2 JSON object declaring the campaign ID, route revision, expected pair and batch counts, Luna effort, total worker pool, maximum active Luna writers, both topology labels, and the benchmark-contract, task-spec, acceptance-suite, and policy SHA-256 values. The builder replays the authoritative campaign ledger, requires a complete zero-defect accepted campaign with unchanged meter windows, verifies the identity-index digest and exact pair/route membership, and checks host-observed OpenAI `gpt-5.6-sol/high` controllers plus the declared OpenAI `gpt-5.6-luna` workers. Identity receipts prove participation, while the frozen campaign fields separately preserve the active-writer treatment. Inputs must be regular non-symlink files. The output parent must already be a directory, the output must not exist or alias an input, and the builder writes atomically without including paths, timestamps, session references, prompts, or notes. Its attestation proves structural coherence only; use `allowance_meter.py` to decide the economic threshold.
 
 ## Accept or hold
 

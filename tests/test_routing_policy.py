@@ -189,7 +189,7 @@ def v5_request() -> dict:
 
 class RoutingPolicyTests(unittest.TestCase):
     def test_direct_policy_mapping_is_strictly_validated_without_mutation(self) -> None:
-        for field, value in (("maximum_active_luna_writers", None), ("maximum_duplicate_work_fraction", True), ("require_sol_critical_path_overlap", 1)):
+        for field, value in (("maximum_active_luna_writers", None), ("maximum_duplicate_work_fraction", True)):
             malformed = dict(POLICY)
             malformed.pop(field, None)
             if value is not None:
@@ -242,22 +242,96 @@ class RoutingPolicyTests(unittest.TestCase):
         source["luna_candidates"][1]["packages"][1] = dict(source["luna_candidates"][1]["packages"][1], baseline_sol_seconds=401)
         with self.assertRaises(ROUTING.PolicyError): ROUTING.evaluate_route(source, POLICY)
 
-    def test_v5_rejects_double_owner_and_missing_sol_critical_path(self) -> None:
+    def test_v5_rejects_double_owner(self) -> None:
         source = v5_request()
         source["luna_candidates"][0]["packages"][1]["writable_paths"] = source["luna_candidates"][0]["packages"][0]["writable_paths"]
         with self.assertRaises(ROUTING.PolicyError): ROUTING.evaluate_route(source, POLICY)
-        source = v5_request()
-        source["luna_candidates"][0]["packages"][0]["critical_path"] = False
-        with self.assertRaises(ROUTING.PolicyError): ROUTING.evaluate_route(source, POLICY)
 
-    def test_v5_rejects_no_overlap_and_coordination_retained_field(self) -> None:
+    def test_v5_all_luna_allocation_allows_productive_sol_wait(self) -> None:
+        source = v5_request()
+        for item in source["luna_candidates"][0]["packages"]:
+            item["executor"] = "LUNA"
+            item["execution_credits"] = 5
+            item["execution_seconds"] = 350
+        source["luna_candidates"][0]["sol_controller_queue"] = {
+            "ready_packages": 0,
+            "review_items": 0,
+            "integration_items": 0,
+            "dispatch_items": 0,
+            "acceptance_items": 0,
+        }
+        result = ROUTING.evaluate_route(source, POLICY)
+        self.assertEqual(result["route"], "SOL_LUNA")
+        self.assertEqual(result["selected_metrics"]["controller_mode"], "WAIT_ALLOWED")
+        self.assertEqual(result["selected_metrics"]["sol_retained_package_count"], 0)
+        self.assertEqual(result["selected_metrics"]["delegated_baseline_credit_fraction"], 1.0)
+        self.assertEqual(result["selected_metrics"]["sol_luna_overlap_seconds"], 0.0)
+
+    def test_v5_wait_requires_an_explicit_empty_controller_queue(self) -> None:
+        source = v5_request()
+        for item in source["luna_candidates"][0]["packages"]:
+            item["executor"] = "LUNA"
+            item["execution_credits"] = 5
+            item["execution_seconds"] = 350
+        with self.assertRaisesRegex(ROUTING.PolicyError, "sol_controller_queue"):
+            ROUTING.evaluate_route(source, POLICY)
+        source["luna_candidates"][0]["sol_controller_queue"] = {
+            "ready_packages": 0,
+            "review_items": 1,
+            "integration_items": 0,
+            "dispatch_items": 0,
+            "acceptance_items": 0,
+        }
+        result = ROUTING.evaluate_route(source, POLICY)
+        self.assertEqual(result["route"], "SOL_ONLY")
+        self.assertEqual(result["candidates"][0]["controller_mode"], "CONTROLLER_QUEUE_PENDING")
+        self.assertIn(
+            "unallocated_sol_controller_work", result["candidates"][0]["rejection_reasons"]
+        )
+
+    def test_v5_mixed_allocation_rejects_malformed_controller_queue(self) -> None:
+        source = v5_request()
+        source["luna_candidates"][0]["sol_controller_queue"] = "not-a-snapshot"
+        with self.assertRaisesRegex(ROUTING.PolicyError, "sol_controller_queue"):
+            ROUTING.evaluate_route(source, POLICY)
+        source = v5_request()
+        source["luna_candidates"][0]["sol_controller_queue"] = {
+            "ready_packages": 0,
+            "review_items": 0,
+            "integration_items": 0,
+            "dispatch_items": 0,
+        }
+        with self.assertRaisesRegex(ROUTING.PolicyError, "acceptance_items"):
+            ROUTING.evaluate_route(source, POLICY)
+
+    def test_lower_luna_cost_cannot_worsen_coordination_share(self) -> None:
+        ordinary = v5_request()
+        ordinary_result = ROUTING.evaluate_route(ordinary, POLICY)
+        cheaper = v5_request()
+        for item in cheaper["luna_candidates"][0]["packages"]:
+            if item["executor"] == "LUNA":
+                item["execution_credits"] /= 10
+        cheaper_result = ROUTING.evaluate_route(cheaper, POLICY)
+        ordinary_candidate = ordinary_result["candidates"][0]
+        cheaper_candidate = cheaper_result["candidates"][0]
+        self.assertEqual(
+            cheaper_candidate["coordination_credit_share"],
+            ordinary_candidate["coordination_credit_share"],
+        )
+        self.assertNotIn(
+            "coordination_credit_share_too_high", cheaper_candidate["rejection_reasons"]
+        )
+
+    def test_v5_allows_sequential_handoff_but_rejects_coordination_retained_field(self) -> None:
         source = v5_request()
         source["coordination"]["sol_retained_execution"] = {"credits": 0, "seconds": 0}
         with self.assertRaises(ROUTING.PolicyError): ROUTING.evaluate_route(source, POLICY)
         source = v5_request()
         source["luna_candidates"][0]["packages"][1]["depends_on"] = ["sol-core"]
         source["luna_candidates"][0]["packages"][0]["execution_seconds"] = 0
-        self.assertEqual(ROUTING.evaluate_route(source, POLICY)["route"], "SOL_ONLY")
+        result = ROUTING.evaluate_route(source, POLICY)
+        self.assertEqual(result["route"], "SOL_LUNA")
+        self.assertEqual(result["selected_metrics"]["controller_mode"], "SEQUENTIAL_HANDOFF")
 
     def test_v5_same_effort_allocations_are_allowed_and_cheapest_selected(self) -> None:
         source = v5_request()
@@ -273,6 +347,7 @@ class RoutingPolicyTests(unittest.TestCase):
         result = ROUTING.evaluate_route(v5_request(), POLICY)
         candidate = result["candidates"][0]
         self.assertGreater(candidate["sol_luna_overlap_seconds"], 0)
+        self.assertEqual(candidate["controller_mode"], "COMPLEMENTARY_PARALLEL")
         self.assertEqual(candidate["duplicate_work_fraction"], 0.0)
 
     def test_v5_hybrid_dag_respects_cross_executor_dependency(self) -> None:
