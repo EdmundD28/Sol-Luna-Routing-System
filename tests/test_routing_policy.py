@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import hashlib
 import json
 import io
 import sys
@@ -187,6 +188,42 @@ def v5_request() -> dict:
     return source
 
 
+def _sha256_json(value: dict | list) -> str:
+    return "sha256:" + hashlib.sha256(ROUTING.canonical_json(value)).hexdigest()
+
+
+def schema6_request(*, first_pass_accepted: int = 1, observations: int = 1) -> tuple[dict, dict]:
+    source = v5_request()
+    source["schema_version"] = 6
+    source["acceptance_suite_digest"] = _sha256_json(source["acceptance_contract_ids"])
+    candidate = source["luna_candidates"][0]
+    shape = ROUTING.package_schedule_v5(candidate, requested_writers=1, prefix="fixture")["allocation_shape_fingerprint"]
+    evidence = {
+        "evidence_id": "evidence-medium-a",
+        "task_family": source["task_family"],
+        "effort": candidate["effort"],
+        "allocation_shape_fingerprint": shape,
+        "acceptance_suite_digest": source["acceptance_suite_digest"],
+        "observations": observations,
+        "first_pass_accepted": first_pass_accepted,
+        "final_defect_runs": 0,
+        "source_kind": "controlled-routing-campaign",
+    }
+    evidence["evidence_digest"] = _sha256_json(evidence)
+    candidate["quality_evidence_id"] = evidence["evidence_id"]
+    return source, evidence
+
+
+def bound_quality(source: dict, *evidence: dict) -> dict:
+    return ROUTING._ExternallyBoundQualityEvidence(
+        ROUTING.quality_evidence_index(
+            list(evidence),
+            task_family=source["task_family"],
+            acceptance_suite_digest=source["acceptance_suite_digest"],
+        )
+    )
+
+
 class RoutingPolicyTests(unittest.TestCase):
     def test_direct_policy_mapping_is_strictly_validated_without_mutation(self) -> None:
         for field, value in (
@@ -207,22 +244,29 @@ class RoutingPolicyTests(unittest.TestCase):
         ROUTING.evaluate_route(v5_request(), unchanged)
         self.assertEqual(unchanged, POLICY)
 
-    def test_template_is_evaluable_v5_complete_allocation(self) -> None:
+    def test_template_is_evaluable_v6_complete_allocation(self) -> None:
         source = ROUTING.template()
-        self.assertEqual(source["schema_version"], 5)
+        evidence_document = ROUTING.quality_evidence_template()
+        self.assertEqual(source["schema_version"], 6)
+        self.assertRegex(source["acceptance_suite_digest"], r"^sha256:[0-9a-f]{64}$")
+        self.assertNotIn("quality_evidence", source)
+        self.assertEqual(len(evidence_document["evidence"]), 1)
+        self.assertEqual(
+            source["luna_candidates"][0]["quality_evidence_id"],
+            evidence_document["evidence"][0]["evidence_id"],
+        )
         self.assertNotIn("sol_retained_execution", source["coordination"])
         candidate = source["luna_candidates"][0]
         self.assertEqual(candidate["allocation_id"], "allocation-default")
         self.assertEqual({item["executor"] for item in candidate["packages"]}, {"SOL", "LUNA"})
         self.assertTrue(any(item["executor"] == "SOL" and item["critical_path"] for item in candidate["packages"]))
-        result = ROUTING.evaluate_route(source, POLICY)
-        self.assertEqual(result["route"], "SOL_LUNA")
-        selected = result["selected_metrics"]
-        self.assertEqual(selected["allocation_id"], "allocation-default")
-        self.assertEqual(selected["delegated_package_count"], 2)
-        self.assertEqual(selected["sol_retained_package_count"], 1)
-        self.assertGreater(selected["sol_luna_overlap_seconds"], 0)
-        self.assertEqual(selected["duplicate_work_fraction"], 0.0)
+        result = ROUTING.evaluate_route(
+            source,
+            POLICY,
+            verified_quality_evidence=bound_quality(source, *evidence_document["evidence"]),
+        )
+        self.assertEqual(result["route"], "SOL_ONLY")
+        self.assertIsNone(result["selected_metrics"])
 
     def test_v5_one_active_luna_writer_rolls_multiple_packages(self) -> None:
         source = v5_request()
@@ -905,9 +949,12 @@ class RoutingPolicyTests(unittest.TestCase):
                 "ledger.jsonl",
                 "--verified-credit-receipts",
                 "receipts.json",
+                "--quality-evidence-index",
+                "quality.json",
             ]
         )
         self.assertEqual(args.verified_credit_receipts, Path("receipts.json"))
+        self.assertEqual(args.quality_evidence_index, Path("quality.json"))
 
     def test_evaluate_receipt_index_requires_ledger(self) -> None:
         stderr = io.StringIO()
@@ -1050,6 +1097,192 @@ class RoutingPolicyTests(unittest.TestCase):
     def test_policy_fingerprint_is_stable_and_route_never_executes(self) -> None:
         self.assertEqual(ROUTING.policy_fingerprint(POLICY), ROUTING.policy_fingerprint(POLICY))
         self.assertFalse(ROUTING.evaluate_route(request(), POLICY)["automatic_execution_allowed"])
+
+    def test_schema6_selects_matching_medium_quality_evidence_and_exposes_only_reference(self) -> None:
+        source, evidence = schema6_request()
+        result = ROUTING.evaluate_route(
+            source,
+            POLICY,
+            verified_quality_evidence=bound_quality(source, evidence),
+        )
+        self.assertEqual(result["route"], "SOL_LUNA")
+        selected = result["candidates"][0]
+        self.assertEqual(selected["quality_evidence_id"], "evidence-medium-a")
+        self.assertEqual(selected["quality_evidence_source"], "controlled-routing-campaign")
+        self.assertNotIn("quality_evidence", selected)
+        self.assertNotIn("observations", selected)
+
+    def test_schema6_p010_zero_of_one_evidence_rejects_ninety_percent_self_report(self) -> None:
+        source, evidence = schema6_request(first_pass_accepted=0, observations=1)
+        for item in source["luna_candidates"][0]["packages"]:
+            item["first_pass_probability"] = 0.9
+            item["repair_probability"] = 0.1
+            item["repair_credits"] = 1
+            item["repair_seconds"] = 1
+        result = ROUTING.evaluate_route(
+            source,
+            POLICY,
+            verified_quality_evidence=bound_quality(source, evidence),
+        )
+        self.assertEqual(result["route"], "SOL_ONLY")
+        self.assertFalse(result["candidates"][0]["eligible"])
+
+    def test_schema6_evidence_family_effort_shape_suite_and_digest_mismatch_fail_closed(self) -> None:
+        for field, value in (
+            ("task_family", "other-family"),
+            ("acceptance_suite_digest", "sha256:" + "1" * 64),
+            ("evidence_digest", "sha256:" + "2" * 64),
+        ):
+            source, evidence = schema6_request()
+            evidence[field] = value
+            with self.subTest(field=field), self.assertRaises(ROUTING.PolicyError):
+                bound_quality(source, evidence)
+
+        for field, value in (
+            ("effort", "high"),
+            ("allocation_shape_fingerprint", "sha256:" + "0" * 64),
+        ):
+            source, evidence = schema6_request()
+            evidence[field] = value
+            evidence["evidence_digest"] = _sha256_json(
+                {
+                    key: item
+                    for key, item in evidence.items()
+                    if key != "evidence_digest"
+                }
+            )
+            result = ROUTING.evaluate_route(
+                source,
+                POLICY,
+                verified_quality_evidence=bound_quality(source, evidence),
+            )
+            with self.subTest(field=field):
+                self.assertEqual(result["route"], "SOL_ONLY")
+                self.assertFalse(result["candidates"][0]["eligible"])
+
+    def test_schema6_requires_bound_unique_strict_evidence(self) -> None:
+        source, evidence = schema6_request()
+        del source["luna_candidates"][0]["quality_evidence_id"]
+        try:
+            result = ROUTING.evaluate_route(
+                source,
+                POLICY,
+                verified_quality_evidence=bound_quality(source, evidence),
+            )
+        except ROUTING.PolicyError:
+            pass
+        else:
+            self.assertEqual(result["route"], "SOL_ONLY")
+            self.assertFalse(result["candidates"][0]["eligible"])
+
+        for malformed in (
+            {"observations": True},
+            {"first_pass_accepted": 2},
+            {"final_defect_runs": -1},
+            {"evidence_id": "evidence-medium-a", "extra": 1},
+        ):
+            candidate, evidence = schema6_request()
+            evidence.update(malformed)
+            with self.subTest(malformed=malformed), self.assertRaises(ROUTING.PolicyError):
+                bound_quality(candidate, evidence)
+
+        duplicate, evidence = schema6_request()
+        with self.assertRaises(ROUTING.PolicyError):
+            bound_quality(duplicate, evidence, dict(evidence))
+
+    def test_schema6_input_is_not_mutated_and_schema5_remains_compatible(self) -> None:
+        source, evidence = schema6_request()
+        before = json.loads(json.dumps(source))
+        ROUTING.evaluate_route(
+            source,
+            POLICY,
+            verified_quality_evidence=bound_quality(source, evidence),
+        )
+        self.assertEqual(source, before)
+        self.assertEqual(ROUTING.evaluate_route(v5_request(), POLICY)["route"], "SOL_LUNA")
+
+    def test_schema6_missing_external_evidence_fails_closed(self) -> None:
+        source, _ = schema6_request()
+        with self.assertRaises(ROUTING.PolicyError):
+            ROUTING.evaluate_route(source, POLICY)
+
+    def test_schema6_rejects_plain_mapping_and_loads_strict_external_index(self) -> None:
+        source, evidence = schema6_request()
+        plain = ROUTING.quality_evidence_index(
+            [evidence],
+            task_family=source["task_family"],
+            acceptance_suite_digest=source["acceptance_suite_digest"],
+        )
+        with self.assertRaises(ROUTING.PolicyError):
+            ROUTING.evaluate_route(source, POLICY, verified_quality_evidence=plain)
+
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "quality.json"
+            path.write_text(
+                json.dumps({"schema_version": 1, "evidence": [evidence]}),
+                encoding="utf-8",
+            )
+            loaded = ROUTING.load_quality_evidence_index(
+                path,
+                task_family=source["task_family"],
+                acceptance_suite_digest=source["acceptance_suite_digest"],
+            )
+            self.assertIsInstance(loaded, ROUTING._ExternallyBoundQualityEvidence)
+            self.assertEqual(
+                ROUTING.evaluate_route(
+                    source,
+                    POLICY,
+                    verified_quality_evidence=loaded,
+                )["route"],
+                "SOL_LUNA",
+            )
+
+            path.write_text(
+                json.dumps({"schema_version": 1, "evidence": [evidence], "extra": 1}),
+                encoding="utf-8",
+            )
+            with self.assertRaises(ROUTING.PolicyError):
+                ROUTING.load_quality_evidence_index(
+                    path,
+                    task_family=source["task_family"],
+                    acceptance_suite_digest=source["acceptance_suite_digest"],
+                )
+
+    def test_schema6_cli_requires_and_uses_external_quality_index(self) -> None:
+        source, evidence = schema6_request()
+        with tempfile.TemporaryDirectory() as temp:
+            route_path = Path(temp) / "route.json"
+            evidence_path = Path(temp) / "quality.json"
+            route_path.write_text(json.dumps(source), encoding="utf-8")
+            evidence_path.write_text(
+                json.dumps({"schema_version": 1, "evidence": [evidence]}),
+                encoding="utf-8",
+            )
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+            with mock.patch.object(
+                sys,
+                "argv",
+                [
+                    "routing_policy.py",
+                    "evaluate",
+                    "--input",
+                    str(route_path),
+                    "--quality-evidence-index",
+                    str(evidence_path),
+                ],
+            ), mock.patch("sys.stdout", stdout), mock.patch("sys.stderr", stderr):
+                self.assertEqual(ROUTING.main(), 0)
+            self.assertEqual(json.loads(stdout.getvalue())["route"], "SOL_LUNA")
+            self.assertEqual(stderr.getvalue(), "")
+
+            with mock.patch.object(
+                sys,
+                "argv",
+                ["routing_policy.py", "evaluate", "--input", str(route_path)],
+            ), mock.patch("sys.stdout", io.StringIO()), mock.patch("sys.stderr", stderr := io.StringIO()):
+                self.assertEqual(ROUTING.main(), 2)
+            self.assertIn("externally loaded quality evidence index", stderr.getvalue())
 
 
 if __name__ == "__main__":

@@ -34,11 +34,12 @@ Invoke explicitly:
 $sol-luna <substantial task>
 ```
 
-Sol estimates each eligible route before dispatch. Policy `1.9.0` requires at least 80% predicted first-pass acceptance, no predicted final-defect regression, at least 50% expected accepted-cost reduction by default, and no expected elapsed regression. It prefers independently verifiable Luna leaf work, requires same-allocation lower-effort quality evidence before putting High+ Luna on the critical path, caps incremental Sol-plus-context burden against delegated baseline, and still rejects shadow ownership. Evidence-backed repair can continue with the same Luna for at most three attempts only while a frozen cost budget and positive marginal net substitution remain; a candidate-bound preflight moves boundary evidence into Luna's first handoff before Sol review. It is a route guard; only matched account-meter readings prove subscription-allowance savings.
+Sol estimates each eligible route before dispatch. Policy `1.10.0` requires at least 80% predicted first-pass acceptance, no predicted final-defect regression, at least 50% expected accepted-cost reduction by default, and no expected elapsed regression. It prefers independently verifiable Luna leaf work, requires same-allocation lower-effort quality evidence before putting High+ Luna on the critical path, caps incremental Sol-plus-context burden against delegated baseline, and still rejects shadow ownership. Evidence-backed repair can continue with the same Luna for at most three attempts only while a frozen cost budget and positive marginal net substitution remain; a candidate-bound preflight moves boundary evidence into Luna's first handoff before Sol review. It is a route guard; only matched account-meter readings prove subscription-allowance savings.
 
 ```powershell
 python .agents/skills/sol-luna/scripts/routing_policy.py template
-python .agents/skills/sol-luna/scripts/routing_policy.py evaluate --input route.json
+python .agents/skills/sol-luna/scripts/routing_policy.py quality-evidence-template
+python .agents/skills/sol-luna/scripts/routing_policy.py evaluate --input route.json --quality-evidence-index quality.json
 python .agents/skills/sol-luna/scripts/routing_policy.py evaluate --ledger runtime/sol-luna/ledger.jsonl --verified-credit-receipts runtime/sol-luna/verified-credit-receipts.json --input route.json
 python .agents/skills/sol-luna/scripts/routing_policy.py review --input review.json
 python .agents/skills/sol-luna/scripts/routing_policy.py rework --input rework.json
@@ -47,6 +48,7 @@ python .agents/skills/sol-luna/scripts/net_substitution.py template
 ```
 
 The policy is advisory and never launches a worker automatically. Missing estimates stay unknown; Sol can retain the task or run a short read-only scout probe.
+The default schema-6 template keeps quality records in a separate strict index and binds each candidate by content to the same task family, Luna effort, allocation shape, and acceptance-suite digest. Its placeholder evidence intentionally routes to Sol-only until replaced with observations. A plain request mapping cannot impersonate that external index. Schema 5 remains readable for compatibility, but is not current production evidence.
 
 ## Profiles
 

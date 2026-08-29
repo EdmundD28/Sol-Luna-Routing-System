@@ -20,7 +20,7 @@ python .agents/skills/sol-luna/scripts/net_substitution.py evaluate --input ALLO
 python .agents/skills/sol-luna/scripts/routing_policy.py evaluate --input ROUTE.json
 ```
 
-For multi-package work, `net_substitution.py` enumerates bounded allocations, context reuse, and incremental Sol work. Encode its allocation in `ROUTE.json`; the [routing policy](references/routing-policy.v1.json) checks effort, quality, cost, and time. Both are advisory. Unknowns retain work in Sol or justify a read-only scout.
+For multi-package work, `net_substitution.py` enumerates bounded allocations, context reuse, and incremental Sol work. Encode its allocation in `ROUTE.json`; the [routing policy](references/routing-policy.v1.json) checks effort, quality, cost, and time. Advisory only. Unknowns retain work in Sol or justify a read-only scout. Schema 6 externally binds quality to task family, effort, allocation shape, and acceptance suite; schema 5 is compatibility-only.
 
 ## Select Luna effort predictively
 

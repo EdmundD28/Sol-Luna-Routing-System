@@ -21,6 +21,8 @@ Route lower when requirements are explicit, scope is isolated, acceptance is det
 
 Task size and reasoning difficulty are separate. Large repetitive work can suit Low or Medium; a small ambiguous defect can justify XHigh. When uncertainty is material, first repartition, route upward, retain the work in Sol, or run a read-only scout probe that returns `READY`, `NEEDS_REPARTITION`, or `INSUFFICIENT_CONTEXT` without editing.
 
+For a new production route, schema 6 binds every candidate's claimed first-pass and final-defect probabilities to an externally loaded evidence record with the same task family, actual Luna effort, allocation-shape fingerprint, and acceptance-suite digest. A candidate cannot claim a better rate than that record observed. Missing or mismatched evidence retains the work in Sol; schema 5 remains readable for compatibility but is not current production evidence.
+
 ## Package contract
 
 Freeze the complete task allocation before dispatch. Every work unit has exactly one executor (`SOL` or `LUNA`), baseline Sol cost, dependency set, critical-path flag, writable scope, and acceptance IDs. The baseline totals reconcile to the Sol-only estimate, and candidate allocations use the same canonical baseline map. Delegated coverage is the Luna-owned share of baseline Sol cost; accepted coverage subtracts the whole affected claim when Sol replays it. These are routing weights, not authenticated plan-allowance readings, and cannot be inflated by splitting units. Unique acceptance assignment proves structural non-duplication, not semantic equivalence between differently named work; Sol must still reject shadow investigations during review.

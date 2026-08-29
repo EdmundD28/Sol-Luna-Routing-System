@@ -26,6 +26,7 @@ LEGACY_REQUEST_SCHEMAS = {LEGACY_SINGLE_SCHEMA_VERSION, LEGACY_PACKAGES_SCHEMA_V
 SINGLE_REQUEST_SCHEMAS = {LEGACY_SINGLE_SCHEMA_VERSION, SCHEMA_VERSION}
 PACKAGE_REQUEST_SCHEMAS = {LEGACY_PACKAGES_SCHEMA_VERSION, PACKAGES_SCHEMA_VERSION}
 V5_REQUEST_SCHEMA_VERSION = 5
+V6_REQUEST_SCHEMA_VERSION = 6
 PACKAGE_ID = re.compile(r"[a-z0-9][a-z0-9-]{0,63}")
 WINDOWS_RESERVED_NAMES = {
     "con",
@@ -65,6 +66,10 @@ class _ExternallyBoundEvidence(dict[str, Any]):
     """Private marker for advisory ledger evidence without provider proof."""
 
 
+class _ExternallyBoundQualityEvidence(dict[str, dict[str, Any]]):
+    """Private marker for quality evidence loaded outside the route request."""
+
+
 def finite_number(value: Any, field: str, *, minimum: float = 0.0, maximum: float | None = None) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(float(value)):
         raise PolicyError(f"{field} must be a finite number")
@@ -97,6 +102,108 @@ def require_string(value: Any, field: str) -> str:
     if not isinstance(value, str) or not value.strip() or "\n" in value or "\r" in value:
         raise PolicyError(f"{field} must be a non-empty single-line string")
     return value.strip()
+
+
+def require_digest(value: Any, field: str) -> str:
+    digest = require_string(value, field)
+    if not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
+        raise PolicyError(f"{field} must be a lower-case SHA-256 digest")
+    return digest
+
+
+QUALITY_EVIDENCE_FIELDS = {
+    "evidence_id", "task_family", "effort", "allocation_shape_fingerprint",
+    "acceptance_suite_digest", "observations", "first_pass_accepted",
+    "final_defect_runs", "source_kind", "evidence_digest",
+}
+QUALITY_EVIDENCE_SOURCES = {
+    "candidate-preflight",
+    "controlled-routing-campaign",
+    "independent-evaluation",
+    "matched-history",
+}
+
+
+def _quality_evidence_digest(source: Mapping[str, Any]) -> str:
+    payload = {key: value for key, value in source.items() if key != "evidence_digest"}
+    return "sha256:" + hashlib.sha256(canonical_json(payload)).hexdigest()
+
+
+def quality_evidence_index(
+    value: Any,
+    *,
+    task_family: str,
+    acceptance_suite_digest: str,
+) -> dict[str, dict[str, Any]]:
+    if not isinstance(value, list) or not value:
+        raise PolicyError("quality_evidence must be a non-empty JSON array")
+    result: dict[str, dict[str, Any]] = {}
+    for index, raw in enumerate(value):
+        prefix = f"quality_evidence[{index}]"
+        item = require_object(raw, prefix)
+        reject_unknown_fields(item, QUALITY_EVIDENCE_FIELDS, prefix)
+        missing = QUALITY_EVIDENCE_FIELDS - set(item)
+        if missing:
+            raise PolicyError(f"{prefix} missing fields: {sorted(missing)}")
+        evidence_id = require_string(item["evidence_id"], f"{prefix}.evidence_id")
+        if not PACKAGE_ID.fullmatch(evidence_id) or evidence_id in result:
+            raise PolicyError(f"{prefix}.evidence_id must be unique stable hyphen-case")
+        if require_string(item["task_family"], f"{prefix}.task_family") != task_family:
+            raise PolicyError(f"{prefix}.task_family does not match request")
+        effort = require_string(item["effort"], f"{prefix}.effort").lower()
+        if effort not in {"low", "medium", "high", "xhigh", "max"}:
+            raise PolicyError(f"{prefix}.effort is unsupported")
+        shape = require_digest(item["allocation_shape_fingerprint"], f"{prefix}.allocation_shape_fingerprint")
+        suite = require_digest(item["acceptance_suite_digest"], f"{prefix}.acceptance_suite_digest")
+        if suite != acceptance_suite_digest:
+            raise PolicyError(f"{prefix}.acceptance_suite_digest does not match request")
+        observations = integer(item["observations"], f"{prefix}.observations", minimum=1)
+        accepted = integer(item["first_pass_accepted"], f"{prefix}.first_pass_accepted")
+        defects = integer(item["final_defect_runs"], f"{prefix}.final_defect_runs")
+        if accepted > observations or defects > observations:
+            raise PolicyError(f"{prefix} counts exceed observations")
+        source_kind = require_string(item["source_kind"], f"{prefix}.source_kind")
+        if source_kind not in QUALITY_EVIDENCE_SOURCES:
+            raise PolicyError(f"{prefix}.source_kind is unsupported")
+        evidence_digest = require_digest(item["evidence_digest"], f"{prefix}.evidence_digest")
+        if evidence_digest != _quality_evidence_digest(item):
+            raise PolicyError(f"{prefix}.evidence_digest does not match content")
+        result[evidence_id] = {
+            "evidence_id": evidence_id,
+            "task_family": task_family,
+            "effort": effort,
+            "allocation_shape_fingerprint": shape,
+            "acceptance_suite_digest": suite,
+            "observations": observations,
+            "first_pass_probability": accepted / observations,
+            "final_defect_probability": defects / observations,
+            "source_kind": source_kind,
+            "evidence_digest": evidence_digest,
+        }
+    return result
+
+
+def load_quality_evidence_index(
+    path: Path,
+    *,
+    task_family: str,
+    acceptance_suite_digest: str,
+) -> _ExternallyBoundQualityEvidence:
+    try:
+        document = strict_json_loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError) as exc:
+        raise PolicyError(f"cannot load quality evidence index: {exc}") from exc
+    source = require_object(document, "quality evidence index")
+    reject_unknown_fields(source, {"schema_version", "evidence"}, "quality evidence index")
+    if type(source.get("schema_version")) is not int or source["schema_version"] != 1:
+        raise PolicyError("unsupported quality evidence index schema_version")
+    return _ExternallyBoundQualityEvidence(
+        quality_evidence_index(
+            source.get("evidence"),
+            task_family=task_family,
+            acceptance_suite_digest=acceptance_suite_digest,
+        )
+    )
 
 
 def canonical_json(document: Mapping[str, Any]) -> bytes:
@@ -695,10 +802,11 @@ def evaluate_route(
     policy: Mapping[str, Any],
     *,
     verified_parallel_evidence: Mapping[str, Any] | None = None,
+    verified_quality_evidence: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     policy = validate_policy_mapping(require_object(policy, "policy"))
     schema_version = request.get("schema_version")
-    if type(schema_version) is not int or schema_version not in SINGLE_REQUEST_SCHEMAS | PACKAGE_REQUEST_SCHEMAS | {V5_REQUEST_SCHEMA_VERSION}:
+    if type(schema_version) is not int or schema_version not in SINGLE_REQUEST_SCHEMAS | PACKAGE_REQUEST_SCHEMAS | {V5_REQUEST_SCHEMA_VERSION, V6_REQUEST_SCHEMA_VERSION}:
         raise PolicyError("unsupported routing request schema_version")
     reject_unknown_fields(
         request,
@@ -713,6 +821,7 @@ def evaluate_route(
             "coordination",
             "luna_candidates",
             "acceptance_contract_ids",
+            "acceptance_suite_digest",
         },
         "request",
     )
@@ -747,7 +856,8 @@ def evaluate_route(
     sol_expected_seconds = sol["execution_seconds"] + (1 - sol["first_pass_probability"]) * sol_recovery_seconds
 
     requested_writers = integer(request.get("requested_writers", 1), "requested_writers", minimum=1)
-    v5_mode = schema_version == V5_REQUEST_SCHEMA_VERSION
+    quality_evidence_mode = schema_version == V6_REQUEST_SCHEMA_VERSION
+    v5_mode = schema_version in {V5_REQUEST_SCHEMA_VERSION, V6_REQUEST_SCHEMA_VERSION}
     package_mode = schema_version in PACKAGE_REQUEST_SCHEMAS or v5_mode
     legacy_schema = schema_version in LEGACY_REQUEST_SCHEMAS
     if schema_version in SINGLE_REQUEST_SCHEMAS and requested_writers > 1:
@@ -760,6 +870,19 @@ def evaluate_route(
         contract_ids = request.get("acceptance_contract_ids")
         if not isinstance(contract_ids, list) or not contract_ids or any(type(value) is not str or not value.strip() for value in contract_ids) or len(contract_ids) != len(set(contract_ids)):
             raise PolicyError("acceptance_contract_ids must be a non-empty unique string array")
+    evidence_index: Mapping[str, Any] = {}
+    if quality_evidence_mode:
+        acceptance_suite_digest = require_digest(
+            request.get("acceptance_suite_digest"), "acceptance_suite_digest"
+        )
+        if not isinstance(verified_quality_evidence, _ExternallyBoundQualityEvidence):
+            raise PolicyError("routing schema 6 requires an externally loaded quality evidence index")
+        evidence_index = require_object(
+            verified_quality_evidence,
+            "verified_quality_evidence",
+        )
+    elif "acceptance_suite_digest" in request or verified_quality_evidence is not None:
+        raise PolicyError("quality evidence requires routing schema 6")
     writer_limit = allowed_writers(request, policy, verified_parallel_evidence)
     effective_writers = int(writer_limit["allowed"])
     coordination_source = require_object(request.get("coordination"), "coordination")
@@ -785,6 +908,11 @@ def evaluate_route(
         allowed_candidate_fields = (
             {
                 "effort", "failure_impact", "effort_basis", "allocation_id", "packages",
+                "sol_controller_queue", "quality_evidence_id",
+            }
+            if quality_evidence_mode else
+            {
+                "effort", "failure_impact", "effort_basis", "allocation_id", "packages",
                 "sol_controller_queue",
             }
             if v5_mode else
@@ -808,6 +936,22 @@ def evaluate_route(
                 f"luna_candidates[{index}] has unknown fields: {sorted(unknown_candidate_fields)}"
             )
         effort = normalize_effort(candidate.get("effort"), policy)
+        quality_evidence_id = None
+        quality_evidence = None
+        if quality_evidence_mode:
+            quality_evidence_id = require_string(
+                candidate.get("quality_evidence_id"),
+                f"luna_candidates[{index}].quality_evidence_id",
+            )
+            quality_evidence = evidence_index.get(quality_evidence_id)
+            if quality_evidence is None:
+                raise PolicyError(
+                    f"luna_candidates[{index}].quality_evidence_id is unknown"
+                )
+            if quality_evidence["task_family"] != task_family:
+                raise PolicyError("quality evidence task_family does not match request")
+            if quality_evidence["acceptance_suite_digest"] != acceptance_suite_digest:
+                raise PolicyError("quality evidence acceptance_suite_digest does not match request")
         if v5_mode:
             allocation_id = require_string(candidate.get("allocation_id"), f"luna_candidates[{index}].allocation_id")
             if not PACKAGE_ID.fullmatch(allocation_id):
@@ -892,6 +1036,16 @@ def evaluate_route(
             if sol_expected_credits else 0.0
         )
         rejection_reasons: list[str] = []
+        if quality_evidence_mode:
+            assert quality_evidence is not None
+            if quality_evidence["effort"] != effort:
+                rejection_reasons.append("quality_evidence_effort_mismatch")
+            if quality_evidence["allocation_shape_fingerprint"] != schedule["allocation_shape_fingerprint"]:
+                rejection_reasons.append("quality_evidence_allocation_shape_mismatch")
+            if first_pass_probability > quality_evidence["first_pass_probability"] + 1e-12:
+                rejection_reasons.append("quality_evidence_first_pass_overstated")
+            if final_defect_probability + 1e-12 < quality_evidence["final_defect_probability"]:
+                rejection_reasons.append("quality_evidence_final_defect_understated")
         if legacy_schema:
             rejection_reasons.append("legacy_routing_schema_requires_refresh")
         if package_mode and requested_writers > effective_writers:
@@ -929,6 +1083,8 @@ def evaluate_route(
             {
                 "effort": effort,
                 "effort_basis": effort_basis,
+                "quality_evidence_id": quality_evidence_id,
+                "quality_evidence_source": quality_evidence["source_kind"] if quality_evidence else None,
                 "eligible": not rejection_reasons,
                 "expected_accepted_credits": expected_credits,
                 "expected_accepted_seconds": expected_seconds,
@@ -967,6 +1123,10 @@ def evaluate_route(
             "first_pass_probability_below_floor",
             "predicted_defect_rate_regresses",
             "high_failure_impact_requires_0.9_first_pass_probability",
+            "quality_evidence_effort_mismatch",
+            "quality_evidence_allocation_shape_mismatch",
+            "quality_evidence_first_pass_overstated",
+            "quality_evidence_final_defect_understated",
         }
         for candidate in evaluated:
             if candidate["effort"] not in {"high", "xhigh", "max"}:
@@ -1053,6 +1213,8 @@ def evaluate_route(
                     "luna_critical_path_package_count",
                     "allocation_shape_fingerprint",
                     "duplicate_work_fraction",
+                    "quality_evidence_id",
+                    "quality_evidence_source",
                 )
             }
             if selected
@@ -1170,8 +1332,8 @@ def rework_decision(source: Mapping[str, Any], policy: Mapping[str, Any]) -> dic
 
 
 def template() -> dict[str, Any]:
-    return {
-        "schema_version": V5_REQUEST_SCHEMA_VERSION,
+    source = {
+        "schema_version": V6_REQUEST_SCHEMA_VERSION,
         "task_family": "bounded-feature",
         "quality_floor": 0.8,
         "minimum_credit_savings_fraction": 0.50,
@@ -1197,6 +1359,7 @@ def template() -> dict[str, Any]:
             {
                 "effort": "medium",
                 "allocation_id": "allocation-default",
+                "quality_evidence_id": "evidence-medium-default",
                 "failure_impact": "low",
                 "packages": [
                     {
@@ -1263,6 +1426,36 @@ def template() -> dict[str, Any]:
             },
         ],
     }
+    acceptance_suite_digest = "sha256:" + hashlib.sha256(
+        canonical_json(source["acceptance_contract_ids"])
+    ).hexdigest()
+    source["acceptance_suite_digest"] = acceptance_suite_digest
+    return source
+
+
+def quality_evidence_template() -> dict[str, Any]:
+    source = template()
+    candidate = source["luna_candidates"][0]
+    allocation_shape_fingerprint = package_schedule_v5(
+        candidate,
+        requested_writers=1,
+        prefix="quality_evidence_template.luna_candidates[0]",
+        acceptance_contract_ids=source["acceptance_contract_ids"],
+    )["allocation_shape_fingerprint"]
+    acceptance_suite_digest = source["acceptance_suite_digest"]
+    evidence = {
+        "evidence_id": "evidence-medium-default",
+        "task_family": source["task_family"],
+        "effort": "medium",
+        "allocation_shape_fingerprint": allocation_shape_fingerprint,
+        "acceptance_suite_digest": acceptance_suite_digest,
+        "observations": 1,
+        "first_pass_accepted": 0,
+        "final_defect_runs": 1,
+        "source_kind": "candidate-preflight",
+    }
+    evidence["evidence_digest"] = _quality_evidence_digest(evidence)
+    return {"schema_version": 1, "evidence": [evidence]}
 
 
 def verified_parallel_evidence_from_ledger(
@@ -1330,11 +1523,13 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--policy", type=Path, default=DEFAULT_POLICY)
     sub = result.add_subparsers(dest="command", required=True)
     sub.add_parser("template")
+    sub.add_parser("quality-evidence-template")
     sub.add_parser("fingerprint")
     evaluate = sub.add_parser("evaluate")
     evaluate.add_argument("--input", required=True, type=Path)
     evaluate.add_argument("--ledger", type=Path)
     evaluate.add_argument("--verified-credit-receipts", type=Path)
+    evaluate.add_argument("--quality-evidence-index", type=Path)
     for name in ("review", "rework"):
         command = sub.add_parser(name)
         command.add_argument("--input", required=True, type=Path)
@@ -1349,6 +1544,8 @@ def main() -> int:
         policy = load_policy(args.policy)
         if args.command == "template":
             output = template()
+        elif args.command == "quality-evidence-template":
+            output = quality_evidence_template()
         elif args.command == "fingerprint":
             output = {
                 "policy_version": policy["policy_version"],
@@ -1358,6 +1555,18 @@ def main() -> int:
             source = strict_json_loads(args.input.read_text(encoding="utf-8"))
             source = require_object(source, "input")
             if args.command == "evaluate":
+                verified_quality = (
+                    load_quality_evidence_index(
+                        args.quality_evidence_index,
+                        task_family=require_string(source.get("task_family"), "task_family"),
+                        acceptance_suite_digest=require_digest(
+                            source.get("acceptance_suite_digest"),
+                            "acceptance_suite_digest",
+                        ),
+                    )
+                    if args.quality_evidence_index
+                    else None
+                )
                 verified_evidence = (
                     verified_parallel_evidence_from_ledger(
                         args.ledger,
@@ -1372,6 +1581,7 @@ def main() -> int:
                     source,
                     policy,
                     verified_parallel_evidence=verified_evidence,
+                    verified_quality_evidence=verified_quality,
                 )
             elif args.command == "review":
                 output = review_depth(source)
