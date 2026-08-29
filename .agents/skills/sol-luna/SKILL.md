@@ -45,7 +45,7 @@ Before dispatch, run `scripts/ownership_guard.py check-plan`; schema 2 binds exe
 
 Calls, packages, actions, and writer count never enter the benefit numerator. Default to **one active Luna writer**; reuse it while the domain is stable and switch when the domain, assumptions, or independence need changes. Add a writer only when its marginal net substitution is positive. Freeze one executor per unit. Reserve a disjoint Sol lane for acceptance or integration preparation while Luna runs. Sol never shadow-implements Luna work; wait only when controller queues are empty.
 
-Give Luna only the context required for its objective, contracts, evidence, and constraints. Luna must not spawn agents. Shared entry points, lockfiles, status files, and common generated outputs stay with Sol or one named integrator.
+Give Luna only the context required for its objective, contracts, evidence, and constraints. Luna must not spawn agents. Before the first material handoff, Luna runs acceptance and relevant schema, boundary, capacity, derived-value, immutability, and error probes bound to the candidate; structured handoffs use `scripts/handoff_preflight.py`. `HOLD` is incomplete, not permission for Sol replay. Sol reviews from this evidence and returns only exact new failures to the same Luna. Shared entry points, lock/status files, and common outputs stay with Sol or one integrator.
 
 ## Review, repair, and finish
 

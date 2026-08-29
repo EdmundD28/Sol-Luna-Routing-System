@@ -113,6 +113,19 @@ class HandoffPreflightTests(unittest.TestCase):
         with self.assertRaises(PREFLIGHT.PreflightError):
             PREFLIGHT.evaluate(spaced_device)
 
+        colon_device = copy.deepcopy(self.source)
+        colon_device["changed_paths"] = ["src/core/nul:stream"]
+        with self.assertRaises(PREFLIGHT.PreflightError):
+            PREFLIGHT.evaluate(colon_device)
+
+    def test_surrogate_path_is_rejected_without_mutation(self) -> None:
+        candidate = copy.deepcopy(self.source)
+        candidate["changed_paths"] = ["src/core/\ud800.py"]
+        before = copy.deepcopy(candidate)
+        with self.assertRaises(PREFLIGHT.PreflightError):
+            PREFLIGHT.evaluate(candidate)
+        self.assertEqual(candidate, before)
+
     def test_acceptance_and_probe_completeness_uniqueness_matrix(self) -> None:
         missing = copy.deepcopy(self.source)
         missing["acceptance_results"] = []

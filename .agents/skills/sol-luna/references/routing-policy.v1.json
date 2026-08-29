@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "policy_version": "1.7.0",
+  "policy_version": "1.8.0",
   "minimum_expected_credit_savings_fraction": 0.50,
   "minimum_expected_elapsed_savings_fraction": 0.0,
   "maximum_coordination_credit_share": 0.5,

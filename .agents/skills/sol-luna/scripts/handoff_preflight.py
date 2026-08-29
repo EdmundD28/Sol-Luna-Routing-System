@@ -122,14 +122,14 @@ def _path(value: Any, field: str) -> str:
     windows = PureWindowsPath(value)
     if windows.drive or windows.root:
         raise PreflightError(f"{field} must not be an absolute or drive path")
-    if any(unicodedata.category(char) == "Cc" for char in value):
+    if any(unicodedata.category(char) in {"Cc", "Cs"} for char in value):
         raise PreflightError(f"{field} contains a control character")
 
     parts = value.split("/")
     if any(part in {"", ".", ".."} for part in parts):
         raise PreflightError(f"{field} contains an unsafe path segment")
     for part in parts:
-        device_base = part.rstrip(" .").split(".", 1)[0].rstrip(" .").casefold()
+        device_base = re.split(r"[.:]", part.rstrip(" ."), maxsplit=1)[0].rstrip(" .").casefold()
         if device_base in WINDOWS_RESERVED:
             raise PreflightError(f"{field} contains a reserved Windows device name")
     normalized = "/".join(PurePosixPath(value).parts)
