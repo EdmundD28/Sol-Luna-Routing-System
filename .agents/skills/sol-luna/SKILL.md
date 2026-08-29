@@ -50,6 +50,9 @@ Freeze a route-independent repair cap by acceptance claim or baseline weight. Re
 
 Before completion, Sol verifies the final candidate, identities, fresh acceptance, ownership, and dispositions. A common independent referee runs outside both route intervals; Luna-specific review, integration, replay, and rework remain inside `SOL_LUNA`. Report quality, included-plan readings, elapsed time, Sol rewrites/reclaims, and uncertainty; keep legacy journals read-only.
 
+For a complete-Luna package, the same Luna runs targeted checks during implementation and one full authoritative suite on the final candidate; Sol verifies the candidate snapshot and causal coverage instead of repeating the full suite by default.
+Sol reruns only the smallest triggered check for candidate drift, incomplete evidence, nondeterminism, failure, repair, or material security/platform risk; if Luna cannot access the authoritative environment, Luna performs causal/targeted checks and Sol runs that environment once.
+
 ## Optional diagnostics
 
 Use these only when their evidence question exists, not on every successful dispatch. Runtime and billing trust boundaries: [references/evidence-and-runtime.md](references/evidence-and-runtime.md), `scripts/runtime_receipt.py`, `scripts/evidence_ledger.py`, `scripts/phase_tracker.py`. Envelope and lifecycle diagnostics: `scripts/delegation_contract.py` for a schema-2 candidate-bound handoff, `scripts/closure_contract.py`, `scripts/lifecycle_contract.py`, `scripts/native_lifecycle_receipt.py`. Matched experiments: `scripts/matched_eval.py`. A persistent ledger needs an independently supplied claim index bound to each record and receipt; diagnostic credits or tokens cannot convert included-plan percentages.

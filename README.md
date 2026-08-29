@@ -92,6 +92,14 @@ The Skill uses standard-library Python tools:
 | `credit_model.py` | Estimate purchased credits from classified phase usage and a fingerprinted rate card; never convert included plan percentages |
 | `frontier_planner.py` / `frontier_cli.py` | Project deterministic queues and a repair-first retained-domain Luna envelope without ever dispatching work |
 | `handoff_preflight.py` / `handoff_preflight_cli.py` | Expose candidate-bound missing, failed, stale, scope, and risk evidence before Sol review without ever accepting work |
+| `candidate_snapshot.py` | Read-only content-addressed snapshot and verification of the exact Git candidate |
+
+Snapshot a candidate relative to `HEAD` (or an explicit commit), then verify its `candidate_digest` without staging or writing:
+
+```powershell
+python -B .agents/skills/sol-luna/scripts/candidate_snapshot.py snapshot --repo .
+python -B .agents/skills/sol-luna/scripts/candidate_snapshot.py verify --repo . --expected sha256:LOWERCASE_DIGEST
+```
 
 ### Production ownership and phase schemas
 
@@ -102,6 +110,8 @@ Phase journal schema 2 is the production write format. Every production interval
 Execution metrics use half-open intervals `[start, end)`: `executor_execution_union_seconds` merges overlapping or adjacent execution for each executor, `execution_union_seconds` merges all execution, and `execution_overlap_seconds` measures only cross-actor execution overlap. Planning, review, repair, and integration are not execution; in particular, review never inflates overlap. These unions are auditable execution measures, not a claim about end-to-end wall-clock duration.
 
 The matched harness binds each pair to the same starting candidate, task digest, independent acceptance-suite digest, policy fingerprint, and observed runtime identity. It does not launch paid model work. See [runtime and evidence details](.agents/skills/sol-luna/references/evidence-and-runtime.md) and [the orchestration policy](.agents/skills/sol-luna/references/orchestration-policy.md).
+
+Complete-Luna validation uses one Luna implementation loop with targeted checks and one final authoritative full suite; Sol verifies the candidate snapshot and causal coverage, rerunning only the smallest check triggered by drift, incomplete evidence, nondeterminism, failure, repair, or material security/platform risk. If Luna cannot access the authoritative environment, Luna performs causal/targeted checks and Sol runs that environment once; the common external referee remains outside route intervals.
 
 ## Installation lifecycle
 
