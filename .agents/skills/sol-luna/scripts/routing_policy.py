@@ -175,8 +175,20 @@ def reasoning_effort_floor(
         reasons.append("acceptance_nondeterministic")
     if not normalized["architecture_settled"] and signal_count >= 4:
         minimum = "xhigh"
-    elif semantic == "high" or signal_count >= 2:
+    elif (
+        semantic == "high"
+        or signal_count >= 3
+        or (
+            signal_count >= 2
+            and (
+                not normalized["architecture_settled"]
+                or not normalized["deterministic_acceptance"]
+            )
+        )
+    ):
         minimum = "high"
+    elif signal_count >= 2:
+        minimum = "medium"
     elif semantic == "medium" or signal_count == 1 or not normalized["architecture_settled"] or not normalized["deterministic_acceptance"]:
         minimum = "medium"
     else:

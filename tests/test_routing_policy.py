@@ -1529,6 +1529,7 @@ class RoutingPolicyTests(unittest.TestCase):
         cases = (
             (schema7_profile(), "low", 0),
             (schema7_profile(cross_module_invariants=True), "medium", 1),
+            (schema7_profile(cross_module_invariants=True, strict_serialization=True), "medium", 2),
             (schema7_profile(semantic_coupling="high"), "high", 1),
             (schema7_profile(architecture_settled=False, cross_module_invariants=True,
                              multi_interface_contract=True, adversarial_edge_cases=True,
@@ -1541,6 +1542,42 @@ class RoutingPolicyTests(unittest.TestCase):
                 self.assertEqual(result["complexity_signal_count"], count)
                 self.assertIsInstance(result["reasons"], list)
                 self.assertNotEqual(result["minimum_effort"], "max")
+
+    def test_schema7_settled_two_signal_profile_is_medium_but_unsettled_is_high(self) -> None:
+        settled = ROUTING.reasoning_effort_floor(
+            schema7_profile(cross_module_invariants=True, strict_serialization=True),
+            POLICY,
+        )
+        self.assertEqual(settled["minimum_effort"], "medium")
+        unsettled = ROUTING.reasoning_effort_floor(
+            schema7_profile(
+                architecture_settled=False,
+                cross_module_invariants=True,
+                strict_serialization=True,
+            ),
+            POLICY,
+        )
+        self.assertEqual(unsettled["minimum_effort"], "high")
+
+    def test_schema7_reasoning_floor_three_signal_and_nondeterministic_boundaries(self) -> None:
+        three = ROUTING.reasoning_effort_floor(
+            schema7_profile(
+                cross_module_invariants=True,
+                strict_serialization=True,
+                adversarial_edge_cases=True,
+            ),
+            POLICY,
+        )
+        self.assertEqual(three["minimum_effort"], "high")
+        nondeterministic = ROUTING.reasoning_effort_floor(
+            schema7_profile(
+                deterministic_acceptance=False,
+                cross_module_invariants=True,
+                strict_serialization=True,
+            ),
+            POLICY,
+        )
+        self.assertEqual(nondeterministic["minimum_effort"], "high")
 
     def test_schema7_p010_medium_is_below_floor_but_evidenced_high_is_selectable(self) -> None:
         profile = schema7_profile(
@@ -1572,6 +1609,23 @@ class RoutingPolicyTests(unittest.TestCase):
         source, _ = schema7_request(schema7_profile(semantic_coupling="high"), effort="high")
         with self.assertRaises(ROUTING.PolicyError):
             ROUTING.evaluate_route(source, POLICY)
+
+    def test_schema7_medium_still_requires_bound_quality_evidence(self) -> None:
+        source, evidence = schema7_request(
+            schema7_profile(
+                cross_module_invariants=True,
+                strict_serialization=True,
+            ),
+            effort="medium",
+        )
+        with self.assertRaises(ROUTING.PolicyError):
+            ROUTING.evaluate_route(source, POLICY)
+        result = ROUTING.evaluate_route(
+            source,
+            POLICY,
+            verified_quality_evidence=bound_quality(source, evidence),
+        )
+        self.assertEqual(result["selected_luna_effort"], "medium")
 
     def test_schema7_input_is_unchanged_and_schema6_remains_compatible(self) -> None:
         source, evidence = schema7_request()
