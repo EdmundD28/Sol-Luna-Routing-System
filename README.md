@@ -89,6 +89,16 @@ The Skill uses standard-library Python tools:
 | `credit_model.py` | Estimate purchased credits from classified phase usage and a fingerprinted rate card; never convert included plan percentages |
 | `frontier_planner.py` / `frontier_cli.py` | Project deterministic queues and a repair-first retained-domain Luna envelope without ever dispatching work |
 | `handoff_preflight.py` / `handoff_preflight_cli.py` | Expose candidate-bound missing, failed, stale, scope, and risk evidence before Sol review without ever accepting work |
+| `handoff_review.py` / `handoff_review_cli.py` | Compile frozen handoff portfolios and compare snapshots to identify review-affected packages; replay-only |
+
+For example, compile a frozen portfolio and compare two compiled snapshots:
+
+```powershell
+python .agents/skills/sol-luna/scripts/handoff_review_cli.py compile --input portfolio.json > before.json
+python .agents/skills/sol-luna/scripts/handoff_review_cli.py compare --before before.json --after after.json
+```
+
+This tool is replay-only: it does not dispatch work, accept candidates, execute checks, or write files.
 
 ### Production ownership and phase schemas
 
