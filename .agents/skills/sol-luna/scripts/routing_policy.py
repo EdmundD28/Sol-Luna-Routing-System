@@ -1340,25 +1340,48 @@ def review_depth(source: Mapping[str, Any]) -> dict[str, Any]:
     }
     repairs = integer(source.get("repair_rounds", 0), "repair_rounds")
     complete_luna = strict_bool(source.get("complete_luna"), "complete_luna", False)
+    causal_review_complete = strict_bool(source.get("causal_review_complete"), "causal_review_complete", False)
     luna_full_suite = strict_bool(source.get("luna_full_suite_passed"), "luna_full_suite_passed", False)
+    luna_final_suite_failed = strict_bool(source.get("luna_final_suite_failed"), "luna_final_suite_failed", False)
     authoritative_environment = strict_bool(source.get("authoritative_environment_available"), "authoritative_environment_available", True)
     final_suite_evidence = strict_bool(source.get("luna_final_suite_evidence"), "luna_final_suite_evidence", luna_full_suite)
     if final_suite_evidence and not luna_full_suite:
         raise PolicyError("luna_final_suite_evidence requires luna_full_suite_passed")
+    if luna_final_suite_failed and luna_full_suite:
+        raise PolicyError("luna_final_suite_failed conflicts with luna_full_suite_passed")
+    if causal_review_complete and not complete_luna:
+        raise PolicyError("causal_review_complete requires complete_luna")
     actions: list[str] = []
     deep_reasons = [name for name, enabled in flags.items() if enabled]
     if risk in {"high", "critical"}:
         deep_reasons.append("high_risk_level")
-    if repairs:
+    if repairs and not (complete_luna and causal_review_complete):
         deep_reasons.append("package_was_repaired")
     if complete_luna and not authoritative_environment:
         depth = "STANDARD"
         actions = ["inspect Luna targeted and causal checks", "run authoritative full suite once"]
         reasons = ["authoritative_environment_unavailable"]
-    elif complete_luna and not final_suite_evidence:
+    elif complete_luna and luna_final_suite_failed:
         depth = "STANDARD"
-        actions = ["return missing final-suite evidence to the same Luna"]
-        reasons = ["missing_luna_final_suite_evidence"]
+        actions = ["return exact new final-suite failures to the same Luna", "review only changed boundaries before the next final-suite attempt"]
+        reasons = ["luna_final_suite_failed"]
+    elif complete_luna and causal_review_complete and not final_suite_evidence:
+        depth = "STANDARD"
+        actions = ["require one Luna final authoritative suite on the causally reviewed candidate"]
+        reasons = ["pre_final_causal_review_complete"]
+    elif complete_luna and not final_suite_evidence:
+        if risk == "low" and not deep_reasons:
+            depth = "STANDARD"
+            actions = ["return missing final-suite evidence to the same Luna"]
+            reasons = ["missing_luna_final_suite_evidence"]
+        else:
+            depth = "DEEP" if deep_reasons else "STANDARD"
+            actions = [
+                "inspect targeted candidate evidence and causal mapping before the final suite",
+                "return only new failures and changed boundaries to the same Luna",
+                "after causal closure, require one Luna final authoritative suite",
+            ]
+            reasons = ["pre_final_causal_review", *deep_reasons]
     elif complete_luna and not deep_reasons and luna_full_suite:
         depth = "TARGETED"
         actions = ["inspect changed paths and compact diff", "verify Luna final-suite receipt and causal coverage"]
@@ -1381,7 +1404,16 @@ def review_depth(source: Mapping[str, Any]) -> dict[str, Any]:
             "STANDARD": ["inspect full package diff", "rerun integration-relevant checks"],
             "DEEP": ["inspect full diff and affected call paths", "run adversarial and regression checks"],
         }[depth],
-        "validation_mode": ("FALLBACK" if not authoritative_environment and complete_luna else "RETURN_TO_LUNA" if complete_luna and not final_suite_evidence else "CAUSAL" if complete_luna and luna_full_suite and not deep_reasons else "RISK_TRIGGERED" if complete_luna and deep_reasons else "STANDARD"),
+        "validation_mode": (
+            "FALLBACK" if not authoritative_environment and complete_luna
+            else "RETURN_TO_LUNA" if complete_luna and luna_final_suite_failed
+            else "RETURN_TO_LUNA" if complete_luna and causal_review_complete and not final_suite_evidence
+            else "RETURN_TO_LUNA" if complete_luna and not final_suite_evidence and risk == "low" and not deep_reasons
+            else "PRE_FINAL_CAUSAL" if complete_luna and not final_suite_evidence
+            else "CAUSAL" if complete_luna and luna_full_suite and not deep_reasons
+            else "RISK_TRIGGERED" if complete_luna and deep_reasons
+            else "STANDARD"
+        ),
     }
 
 

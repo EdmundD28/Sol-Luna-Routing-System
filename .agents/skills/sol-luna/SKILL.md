@@ -50,7 +50,7 @@ Freeze a route-independent repair cap by acceptance claim or baseline weight. Re
 
 Before completion, Sol verifies the final candidate, identities, fresh acceptance, ownership, and dispositions. A common independent referee runs outside both route intervals; Luna-specific review, integration, replay, and rework remain inside `SOL_LUNA`. Report quality, included-plan readings, elapsed time, Sol rewrites/reclaims, and uncertainty; keep legacy journals read-only.
 
-For a complete-Luna package, the same Luna runs targeted checks during implementation and one full authoritative suite on the final candidate; Sol verifies the candidate snapshot and causal coverage instead of repeating the full suite by default.
+For low-risk complete-Luna work, the same Luna runs targeted checks and one final authoritative suite before Sol's causal receipt review. For standard/deep, shared-interface, repaired, or causally uncertain work, Sol first performs focused causal review of Luna's targeted candidate; the same Luna closes any focused repair, then runs the authoritative suite once on the final candidate. Sol verifies the bound receipt instead of repeating the suite.
 Sol reruns only the smallest triggered check for candidate drift, incomplete evidence, nondeterminism, failure, repair, or material security/platform risk; if Luna cannot access the authoritative environment, Luna performs causal/targeted checks and Sol runs that environment once.
 The compact protocol freezes the full manifest once, then normal communication carries its `MAN|<package_ref>` reference followed by `RUN`/`OK`; only `BLOCK` expands, and this projection is not a second ownership or acceptance authority.
 

@@ -1287,9 +1287,37 @@ class RoutingPolicyTests(unittest.TestCase):
         self.assertEqual(causal["review_depth"], "TARGETED")
         self.assertEqual(causal["validation_mode"], "CAUSAL")
         self.assertNotIn("rerun", " ".join(causal["minimum_actions"]))
-        missing = ROUTING.review_depth({"complete_luna": True, "luna_full_suite_passed": False})
+        missing = ROUTING.review_depth({"risk_level": "low", "complete_luna": True, "luna_full_suite_passed": False})
         self.assertEqual(missing["review_depth"], "STANDARD")
         self.assertEqual(missing["validation_mode"], "RETURN_TO_LUNA")
+
+    def test_standard_and_deep_complete_luna_review_precedes_final_suite(self) -> None:
+        standard = ROUTING.review_depth({"risk_level": "medium", "complete_luna": True, "luna_full_suite_passed": False})
+        self.assertEqual(standard["review_depth"], "STANDARD")
+        self.assertEqual(standard["validation_mode"], "PRE_FINAL_CAUSAL")
+        self.assertIn("before the final suite", " ".join(standard["minimum_actions"]))
+        self.assertIn("one Luna final authoritative suite", standard["minimum_actions"][-1])
+        closed = ROUTING.review_depth({"risk_level": "medium", "complete_luna": True, "causal_review_complete": True, "luna_full_suite_passed": False})
+        self.assertEqual(closed["validation_mode"], "RETURN_TO_LUNA")
+        self.assertEqual(closed["minimum_actions"], ["require one Luna final authoritative suite on the causally reviewed candidate"])
+        final = ROUTING.review_depth({"risk_level": "medium", "complete_luna": True, "causal_review_complete": True, "repair_rounds": 1, "luna_full_suite_passed": True})
+        self.assertEqual(final["review_depth"], "TARGETED")
+        self.assertEqual(final["validation_mode"], "CAUSAL")
+        self.assertNotIn("run smallest check", " ".join(final["minimum_actions"]))
+        deep = ROUTING.review_depth({"risk_level": "medium", "complete_luna": True, "luna_full_suite_passed": False, "shared_interface": True})
+        self.assertEqual(deep["review_depth"], "DEEP")
+        self.assertEqual(deep["validation_mode"], "PRE_FINAL_CAUSAL")
+        self.assertIn("shared_interface", deep["reasons"])
+
+    def test_luna_final_suite_failure_returns_exact_failure_to_same_luna(self) -> None:
+        failed = ROUTING.review_depth({"complete_luna": True, "luna_final_suite_failed": True})
+        self.assertEqual(failed["validation_mode"], "RETURN_TO_LUNA")
+        self.assertIn("exact new final-suite failures", failed["minimum_actions"][0])
+        self.assertNotIn("run authoritative full suite", " ".join(failed["minimum_actions"]))
+        with self.assertRaises(ROUTING.PolicyError):
+            ROUTING.review_depth({"complete_luna": True, "luna_full_suite_passed": True, "luna_final_suite_failed": True})
+        with self.assertRaises(ROUTING.PolicyError):
+            ROUTING.review_depth({"causal_review_complete": True})
 
     def test_complete_luna_fallback_and_smallest_trigger(self) -> None:
         fallback = ROUTING.review_depth({"complete_luna": True, "authoritative_environment_available": False, "luna_full_suite_passed": False})
