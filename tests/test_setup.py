@@ -25,7 +25,7 @@ class SetupTests(unittest.TestCase):
 
     def test_default_skills_root_follows_codex_home(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
-            codex = Path(temp) / "custom-codex"
+            codex = (Path(temp) / "custom-codex").resolve()
             output = io.StringIO()
             with mock.patch.object(sys, "argv", ["setup.py", "--codex-home", str(codex), "preview"]):
                 with redirect_stdout(output):
@@ -33,7 +33,7 @@ class SetupTests(unittest.TestCase):
             plan = json.loads(output.getvalue())
             skill_targets = [item["target"] for item in plan["operations"] if item["kind"] == "skill"]
             self.assertTrue(skill_targets)
-            self.assertTrue(all(str(codex / "skills") in target for target in skill_targets))
+            self.assertTrue(all(str((codex / "skills").resolve()) in target for target in skill_targets))
 
     def test_install_doctor_update_and_rollback(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -46,8 +46,8 @@ class SetupTests(unittest.TestCase):
 
     def test_migration_preview_migrate_doctor_update_and_rollback(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp)
-            codex, old_skills = self.roots(root)
+            root = Path(temp).resolve()
+            codex, old_skills = (path.resolve() for path in self.roots(root))
             new_skills = codex / "skills"
             SETUP.apply(codex, old_skills)
             plan = SETUP.migration_plan(codex, new_skills)
@@ -314,10 +314,15 @@ class SetupTests(unittest.TestCase):
             new_skills = codex / "skills"
             SETUP.apply(codex, old_skills)
             omitted = codex / "agents" / "luna-reviewer.toml"
+            omitted_key = str(omitted.resolve())
+            omitted_alias_key = str(omitted) + "\\."
+            self.assertNotEqual(omitted_alias_key, omitted_key)
             state_file = SETUP.state_path(codex)
             state = json.loads(state_file.read_text(encoding="utf-8"))
-            state["installed"].pop(str(omitted), None)
-            state["previous"].pop(str(omitted), None)
+            self.assertIn(omitted_key, state["installed"])
+            self.assertNotIn(omitted_alias_key, state["installed"])
+            state["installed"].pop(omitted_key, None)
+            state["previous"].pop(omitted_key, None)
             state["source_fingerprint"] = SETUP.source_fingerprint_for_state(
                 SETUP.managed_assets(codex, old_skills), state["installed"]
             )
@@ -334,15 +339,20 @@ class SetupTests(unittest.TestCase):
 
     def test_migration_accepts_trusted_old_hashes_when_current_source_changed(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp)
-            codex, old_skills = self.roots(root)
+            root = Path(temp).resolve()
+            codex, old_skills = (path.resolve() for path in self.roots(root))
             new_skills = codex / "skills"
             SETUP.apply(codex, old_skills)
             old_file = old_skills / "sol-luna" / "SKILL.md"
             old_file.write_text("trusted old source\n", encoding="utf-8")
+            old_file_key = str(old_file.resolve())
+            old_file_alias_key = str(old_file) + "\\."
+            self.assertNotEqual(old_file_alias_key, old_file_key)
             state_file = SETUP.state_path(codex)
             state = json.loads(state_file.read_text(encoding="utf-8"))
-            state["installed"][str(old_file)] = SETUP.digest(old_file)
+            state["installed"][old_file_key] = SETUP.digest(old_file)
+            self.assertIn(old_file_key, state["installed"])
+            self.assertNotIn(old_file_alias_key, state["installed"])
             state["source_fingerprint"] = SETUP.installed_fingerprint_for_state(
                 SETUP.managed_assets(codex, old_skills), state["installed"]
             )
