@@ -130,6 +130,19 @@ class PackageContractTests(unittest.TestCase):
         self.assertIn("net substitution of expensive Sol work", skill)
         self.assertIn("schema-2 candidate-bound handoff", skill)
 
+    def test_complete_luna_candidate_is_not_displaced_by_busywork(self) -> None:
+        skill = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
+        policy = (SKILL_ROOT / "references" / "orchestration-policy.md").read_text(encoding="utf-8")
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        self.assertIn("Always evaluate one complete-Luna envelope", skill)
+        self.assertIn("do not retain Sol implementation merely to keep Sol busy", skill)
+        self.assertIn("Sol has a read-only acceptance lane", skill)
+        self.assertIn("candidate set must include one complete-Luna envelope", policy)
+        self.assertIn("Do not reserve a Sol implementation unit merely to keep the controller busy", policy)
+        self.assertIn("bounded waiting is economically preferable", policy)
+        self.assertIn("compare a complete-Luna envelope", readme)
+        self.assertIn("does not keep an implementation package merely to stay busy", readme)
+
 
 if __name__ == "__main__":
     unittest.main()
