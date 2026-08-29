@@ -1197,6 +1197,7 @@ def evaluate_route(
             }
         )
 
+    effort_rank = {effort: index for index, effort in enumerate(policy["effort_order"])}
     if v5_mode and policy["high_effort_critical_path_requires_lower_effort_quality_evidence"]:
         quality_reasons = {
             "first_pass_probability_below_floor",
@@ -1213,10 +1214,11 @@ def evaluate_route(
                 continue
             if candidate["luna_critical_path_package_count"] == 0:
                 continue
+            candidate_rank = effort_rank[candidate["effort"]]
             lower_comparators = [
                 other for other in evaluated
                 if other is not candidate
-                and other["effort"] in {"low", "medium"}
+                and effort_rank[other["effort"]] < candidate_rank
                 and other["allocation_shape_fingerprint"] == candidate["allocation_shape_fingerprint"]
             ]
             lower_quality_failed = bool(lower_comparators) and all(
@@ -1229,7 +1231,6 @@ def evaluate_route(
                 )
                 candidate["eligible"] = False
 
-    effort_rank = {effort: index for index, effort in enumerate(policy["effort_order"])}
     eligible = [candidate for candidate in evaluated if candidate["eligible"]]
     selected = min(
         eligible,

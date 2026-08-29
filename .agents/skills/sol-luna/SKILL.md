@@ -26,7 +26,7 @@ For multi-package work, `net_substitution.py` enumerates bounded allocations, co
 
 Choose the lowest expected accepted-delivery cost among efforts passing every quality, defect, savings, and latency gate; a failed cheap attempt is not required first.
 
-Start with the lowest evidence-supported effort. High+ Luna critical-path work needs a same-allocation Low/Medium candidate rejected by a quality or defect gate; prose is insufficient.
+Start with the lowest evidence-supported effort. High+ Luna critical-path work needs a same-allocation lower-effort candidate rejected by a quality or defect gate; prose is insufficient.
 
 - `luna_worker_low`: mechanical work with cheap authoritative verification (`light` maps to `low`).
 - `luna_worker_medium`: bounded implementation with settled architecture.

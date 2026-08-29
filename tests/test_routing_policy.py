@@ -475,6 +475,164 @@ class RoutingPolicyTests(unittest.TestCase):
             result["candidates"][1]["rejection_reasons"],
         )
 
+    def test_v5_xhigh_critical_path_accepts_same_shape_high_quality_failure(self) -> None:
+        source = v5_request()
+        high = source["luna_candidates"][0]
+        high.update(
+            {
+                "allocation_id": "allocation-high",
+                "effort": "high",
+                "effort_basis": "high is a deliberate quality-failure comparator",
+            }
+        )
+        high["packages"][1].update(
+            {"critical_path": True, "first_pass_probability": 0.65, "repair_probability": 0.35}
+        )
+
+        xhigh = json.loads(json.dumps(high))
+        xhigh.update(
+            {
+                "allocation_id": "allocation-xhigh",
+                "effort": "xhigh",
+                "effort_basis": "xhigh is required after the high comparator fails quality",
+            }
+        )
+        xhigh["packages"][1].update({"first_pass_probability": 0.92, "repair_probability": 0.08})
+        source["luna_candidates"] = [high, xhigh]
+
+        result = ROUTING.evaluate_route(source, POLICY)
+        self.assertEqual(result["route"], "SOL_LUNA")
+        self.assertEqual(result["selected_luna_effort"], "xhigh")
+        self.assertEqual(
+            result["candidates"][0]["allocation_shape_fingerprint"],
+            result["candidates"][1]["allocation_shape_fingerprint"],
+        )
+        self.assertIn("first_pass_probability_below_floor", result["candidates"][0]["rejection_reasons"])
+        self.assertNotIn(
+            "high_effort_critical_path_requires_lower_effort_quality_evidence",
+            result["candidates"][1]["rejection_reasons"],
+        )
+
+    def test_v5_max_critical_path_accepts_same_shape_xhigh_quality_failure(self) -> None:
+        source = v5_request()
+        xhigh = source["luna_candidates"][0]
+        xhigh.update(
+            {
+                "allocation_id": "allocation-xhigh",
+                "effort": "xhigh",
+                "effort_basis": "xhigh is a deliberate quality-failure comparator",
+            }
+        )
+        xhigh["packages"][1].update(
+            {"critical_path": True, "first_pass_probability": 0.65, "repair_probability": 0.35}
+        )
+
+        maximum = json.loads(json.dumps(xhigh))
+        maximum.update(
+            {
+                "allocation_id": "allocation-max",
+                "effort": "max",
+                "effort_basis": "max is required after the xhigh comparator fails quality",
+            }
+        )
+        maximum["packages"][1].update({"first_pass_probability": 0.92, "repair_probability": 0.08})
+        source["luna_candidates"] = [xhigh, maximum]
+
+        result = ROUTING.evaluate_route(source, POLICY)
+        self.assertEqual(result["route"], "SOL_LUNA")
+        self.assertEqual(result["selected_luna_effort"], "max")
+        self.assertEqual(
+            result["candidates"][0]["allocation_shape_fingerprint"],
+            result["candidates"][1]["allocation_shape_fingerprint"],
+        )
+        self.assertIn("first_pass_probability_below_floor", result["candidates"][0]["rejection_reasons"])
+        self.assertNotIn(
+            "high_effort_critical_path_requires_lower_effort_quality_evidence",
+            result["candidates"][1]["rejection_reasons"],
+        )
+
+    def test_v5_same_or_higher_effort_cannot_masquerade_as_lower_comparator(self) -> None:
+        source = v5_request()
+        high = source["luna_candidates"][0]
+        high.update(
+            {
+                "allocation_id": "allocation-high",
+                "effort": "high",
+                "effort_basis": "high critical-path candidate",
+            }
+        )
+        high["packages"][1].update(
+            {"critical_path": True, "first_pass_probability": 0.92, "repair_probability": 0.08}
+        )
+
+        xhigh = json.loads(json.dumps(high))
+        xhigh.update(
+            {
+                "allocation_id": "allocation-xhigh",
+                "effort": "xhigh",
+                "effort_basis": "higher effort must not satisfy high comparator requirement",
+            }
+        )
+        source["luna_candidates"] = [high, xhigh]
+
+        result = ROUTING.evaluate_route(source, POLICY)
+        self.assertEqual(result["route"], "SOL_ONLY")
+        self.assertIn(
+            "high_effort_critical_path_requires_lower_effort_quality_evidence",
+            result["candidates"][0]["rejection_reasons"],
+        )
+        self.assertIn(
+            "high_effort_critical_path_requires_lower_effort_quality_evidence",
+            result["candidates"][1]["rejection_reasons"],
+        )
+
+    def test_v5_high_effort_requires_every_same_shape_lower_candidate_to_fail_quality(self) -> None:
+        source = v5_request()
+        high = source["luna_candidates"][0]
+        high.update(
+            {
+                "allocation_id": "allocation-high",
+                "effort": "high",
+                "effort_basis": "high remains an actual lower-effort comparator",
+            }
+        )
+        high["packages"][1].update(
+            {"critical_path": True, "first_pass_probability": 0.92, "repair_probability": 0.08}
+        )
+
+        xhigh = json.loads(json.dumps(high))
+        xhigh.update(
+            {
+                "allocation_id": "allocation-xhigh",
+                "effort": "xhigh",
+                "effort_basis": "xhigh is a quality-failure comparator",
+            }
+        )
+        xhigh["packages"][1].update({"first_pass_probability": 0.65, "repair_probability": 0.35})
+
+        maximum = json.loads(json.dumps(xhigh))
+        maximum.update(
+            {
+                "allocation_id": "allocation-max",
+                "effort": "max",
+                "effort_basis": "max cannot bypass the passing high comparator",
+            }
+        )
+        maximum["packages"][1].update({"first_pass_probability": 0.92, "repair_probability": 0.08})
+        source["luna_candidates"] = [high, xhigh, maximum]
+
+        result = ROUTING.evaluate_route(source, POLICY)
+        self.assertEqual(result["route"], "SOL_ONLY")
+        self.assertIn(
+            "high_effort_critical_path_requires_lower_effort_quality_evidence",
+            result["candidates"][2]["rejection_reasons"],
+        )
+        self.assertNotIn(
+            "first_pass_probability_below_floor",
+            result["candidates"][0]["rejection_reasons"],
+        )
+        self.assertIn("first_pass_probability_below_floor", result["candidates"][1]["rejection_reasons"])
+
     def test_v5_reports_overlap_and_no_duplicate_cost(self) -> None:
         result = ROUTING.evaluate_route(v5_request(), POLICY)
         candidate = result["candidates"][0]
