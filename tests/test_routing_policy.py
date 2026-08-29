@@ -1282,6 +1282,29 @@ class RoutingPolicyTests(unittest.TestCase):
         )
         self.assertEqual(deep["review_depth"], "DEEP")
 
+    def test_complete_luna_owns_final_suite_and_missing_returns_to_same_luna(self) -> None:
+        causal = ROUTING.review_depth({"risk_level": "medium", "complete_luna": True, "authoritative_checks_passed": True, "luna_full_suite_passed": True})
+        self.assertEqual(causal["review_depth"], "TARGETED")
+        self.assertEqual(causal["validation_mode"], "CAUSAL")
+        self.assertNotIn("rerun", " ".join(causal["minimum_actions"]))
+        missing = ROUTING.review_depth({"complete_luna": True, "luna_full_suite_passed": False})
+        self.assertEqual(missing["review_depth"], "STANDARD")
+        self.assertEqual(missing["validation_mode"], "RETURN_TO_LUNA")
+
+    def test_complete_luna_fallback_and_smallest_trigger(self) -> None:
+        fallback = ROUTING.review_depth({"complete_luna": True, "authoritative_environment_available": False, "luna_full_suite_passed": False})
+        self.assertEqual(fallback["review_depth"], "STANDARD")
+        self.assertEqual(fallback["validation_mode"], "FALLBACK")
+        self.assertEqual(fallback["minimum_actions"][-1], "run authoritative full suite once")
+        triggered = ROUTING.review_depth({"complete_luna": True, "luna_full_suite_passed": True, "verification_failed": True})
+        self.assertEqual(triggered["review_depth"], "DEEP")
+        self.assertEqual(triggered["minimum_actions"], ["inspect affected diff and candidate evidence for causal impact", "run smallest check triggered by verification_failed"])
+        both = ROUTING.review_depth({"complete_luna": True, "luna_full_suite_passed": True, "verification_failed": True, "risk_level": "high"})
+        self.assertEqual(both["minimum_actions"], ["inspect affected diff and candidate evidence for causal impact", "run smallest check triggered by verification_failed"])
+        with self.assertRaises(ROUTING.PolicyError): ROUTING.review_depth({"complete_luna": True, "luna_full_suite_passed": False, "luna_final_suite_evidence": True})
+        with self.assertRaises(ROUTING.PolicyError): ROUTING.review_depth({"complete_luna": "false"})
+        with self.assertRaises(ROUTING.PolicyError): ROUTING.review_depth({"luna_full_suite_passed": 1})
+
     def test_policy_fingerprint_is_stable_and_route_never_executes(self) -> None:
         self.assertEqual(ROUTING.policy_fingerprint(POLICY), ROUTING.policy_fingerprint(POLICY))
         self.assertFalse(ROUTING.evaluate_route(request(), POLICY)["automatic_execution_allowed"])

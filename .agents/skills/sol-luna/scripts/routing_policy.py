@@ -1307,6 +1307,12 @@ def evaluate_route(
 
 
 def review_depth(source: Mapping[str, Any]) -> dict[str, Any]:
+    def strict_bool(value: Any, field: str, default: bool) -> bool:
+        if field not in source:
+            return default
+        if not isinstance(value, bool):
+            raise PolicyError(f"{field} must be boolean")
+        return value
     risk = require_string(source.get("risk_level", "medium"), "risk_level").lower()
     if risk not in {"low", "medium", "high", "critical"}:
         raise PolicyError("risk_level must be low, medium, high, or critical")
@@ -1321,25 +1327,49 @@ def review_depth(source: Mapping[str, Any]) -> dict[str, Any]:
         )
     }
     repairs = integer(source.get("repair_rounds", 0), "repair_rounds")
+    complete_luna = strict_bool(source.get("complete_luna"), "complete_luna", False)
+    luna_full_suite = strict_bool(source.get("luna_full_suite_passed"), "luna_full_suite_passed", False)
+    authoritative_environment = strict_bool(source.get("authoritative_environment_available"), "authoritative_environment_available", True)
+    final_suite_evidence = strict_bool(source.get("luna_final_suite_evidence"), "luna_final_suite_evidence", luna_full_suite)
+    if final_suite_evidence and not luna_full_suite:
+        raise PolicyError("luna_final_suite_evidence requires luna_full_suite_passed")
+    actions: list[str] = []
     deep_reasons = [name for name, enabled in flags.items() if enabled]
     if risk in {"high", "critical"}:
         deep_reasons.append("high_risk_level")
     if repairs:
         deep_reasons.append("package_was_repaired")
-    if deep_reasons:
+    if complete_luna and not authoritative_environment:
+        depth = "STANDARD"
+        actions = ["inspect Luna targeted and causal checks", "run authoritative full suite once"]
+        reasons = ["authoritative_environment_unavailable"]
+    elif complete_luna and not final_suite_evidence:
+        depth = "STANDARD"
+        actions = ["return missing final-suite evidence to the same Luna"]
+        reasons = ["missing_luna_final_suite_evidence"]
+    elif complete_luna and not deep_reasons and luna_full_suite:
+        depth = "TARGETED"
+        actions = ["inspect changed paths and compact diff", "verify Luna final-suite receipt and causal coverage"]
+        reasons = ["complete_luna_validation_owned_by_luna"]
+    elif deep_reasons:
         depth = "DEEP"
+        if complete_luna:
+            priority = ("verification_failed", "scope_discrepancy", "acceptance_nondeterministic", "security_or_safety_sensitive", "shared_interface", "package_was_repaired", "high_risk_level")
+            trigger = next(name for name in priority if name in deep_reasons)
+            actions = ["inspect affected diff and candidate evidence for causal impact", f"run smallest check triggered by {trigger}"]
     elif risk == "low" and bool(source.get("authoritative_checks_passed", False)):
         depth = "TARGETED"
     else:
         depth = "STANDARD"
     return {
         "review_depth": depth,
-        "reasons": sorted(set(deep_reasons)) or ["risk-proportional default"],
-        "minimum_actions": {
+        "reasons": sorted(set(reasons if 'reasons' in locals() else deep_reasons)) or ["risk-proportional default"],
+        "minimum_actions": actions if actions else {
             "TARGETED": ["inspect changed paths and compact diff", "verify authoritative targeted checks"],
             "STANDARD": ["inspect full package diff", "rerun integration-relevant checks"],
             "DEEP": ["inspect full diff and affected call paths", "run adversarial and regression checks"],
         }[depth],
+        "validation_mode": ("FALLBACK" if not authoritative_environment and complete_luna else "RETURN_TO_LUNA" if complete_luna and not final_suite_evidence else "CAUSAL" if complete_luna and luna_full_suite and not deep_reasons else "RISK_TRIGGERED" if complete_luna and deep_reasons else "STANDARD"),
     }
 
 
