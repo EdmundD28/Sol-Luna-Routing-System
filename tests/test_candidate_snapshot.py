@@ -111,7 +111,9 @@ class CandidateSnapshotTests(unittest.TestCase):
             self.skipTest("symlinks are unavailable")
         result = SNAPSHOT.build_snapshot(self.repo)
         by_path = {entry["path"]: entry for entry in result["entries"]}
-        self.assertEqual(by_path["renamed-again.txt"]["state"], "deleted")
+        self.assertEqual(by_path["renamed.txt"]["state"], "deleted")
+        self.assertEqual(by_path["renamed.txt"]["kind"], "file")
+        self.assertEqual(by_path["renamed-again.txt"]["state"], "added")
         self.assertEqual(by_path["renamed-again.txt"]["kind"], "file")
         self.assertEqual(by_path["kind.txt"]["state"], "type_changed")
         self.assertEqual(by_path["kind.txt"]["kind"], "symlink")
@@ -166,6 +168,7 @@ class CandidateSnapshotTests(unittest.TestCase):
     def test_symlink_is_hashed_without_following_target_when_supported(self) -> None:
         target = self.repo / "target.txt"
         self.write("target.txt", b"target")
+        self.commit("symlink base")
         try:
             os.symlink("target.txt", self.repo / "link.txt")
         except (OSError, NotImplementedError):
@@ -175,7 +178,7 @@ class CandidateSnapshotTests(unittest.TestCase):
         self.assertEqual(link["kind"], "symlink")
         self.assertEqual(link["content_digest"], "sha256:" + hashlib.sha256(os.fsencode("target.txt")).hexdigest())
         target.write_bytes(b"changed")
-        self.assertEqual(SNAPSHOT.build_snapshot(self.repo)["entries"][-1]["path"], "target.txt")
+        self.assertEqual(next(entry for entry in SNAPSHOT.build_snapshot(self.repo)["entries"] if entry["path"] == "link.txt")["content_digest"], link["content_digest"])
 
     def test_malformed_inputs_and_safe_path_helpers(self) -> None:
         with self.assertRaises(SNAPSHOT.SnapshotError):
