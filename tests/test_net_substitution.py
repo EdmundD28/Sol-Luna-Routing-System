@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 import subprocess
 import sys
@@ -166,6 +167,43 @@ class NetSubstitutionTests(unittest.TestCase):
         candidate = next(item for item in result["candidates"] if item["luna_package_ids"] == ["bad"])
         self.assertFalse(candidate["eligible"])
         self.assertIn("first_pass_probability_below_floor", candidate["ineligible_reasons"])
+
+    def test_incremental_delegation_burden_ceiling_is_independent_gate(self) -> None:
+        # One package has 4 credits of Sol overhead and 2 credits of context
+        # against a 100-credit delegated Sol baseline: burden is exactly 0.06.
+        package = self.package("burden", execution=1.0)
+        at_ceiling = self.evaluate(self.source([package], maximum_incremental_delegation_burden_fraction=0.06))
+        candidate = next(item for item in at_ceiling["candidates"] if item["luna_package_ids"] == ["burden"])
+        self.assertEqual(candidate["incremental_delegation_burden_fraction"], 0.06)
+        self.assertEqual(candidate["maximum_incremental_delegation_burden_fraction"], 0.06)
+        self.assertTrue(candidate["eligible"])
+        self.assertNotIn("incremental_delegation_burden_above_ceiling", candidate["ineligible_reasons"])
+
+        below = self.evaluate(self.source([package], maximum_incremental_delegation_burden_fraction=0.07))
+        below_candidate = next(item for item in below["candidates"] if item["luna_package_ids"] == ["burden"])
+        self.assertTrue(below_candidate["eligible"])
+
+        above = self.evaluate(self.source([package], maximum_incremental_delegation_burden_fraction=0.059))
+        above_candidate = next(item for item in above["candidates"] if item["luna_package_ids"] == ["burden"])
+        self.assertFalse(above_candidate["eligible"])
+        self.assertIn("incremental_delegation_burden_above_ceiling", above_candidate["ineligible_reasons"])
+
+    def test_incremental_delegation_burden_limit_is_strict_finite_fraction(self) -> None:
+        for value in (True, -0.01, 1.01, float("nan"), float("inf")):
+            with self.subTest(value=value):
+                with self.assertRaises(ValueError):
+                    self.evaluate(self.source(maximum_incremental_delegation_burden_fraction=value))
+
+    def test_legacy_template_and_input_immutability(self) -> None:
+        spec = __import__("importlib.util").util.spec_from_file_location("net_substitution", SCRIPT)
+        assert spec and spec.loader
+        module = __import__("importlib.util").util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        source = module.template()
+        original = copy.deepcopy(source)
+        evaluated = module.evaluate(source)
+        self.assertEqual(source, original)
+        self.assertEqual(evaluated["schema_version"], 1)
 
     def test_input_order_does_not_change_selection(self) -> None:
         packages = [self.package("a", baseline=100, execution=10), self.package("b", baseline=80, execution=10)]

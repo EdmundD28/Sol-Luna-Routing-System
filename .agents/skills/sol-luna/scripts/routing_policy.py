@@ -146,6 +146,10 @@ def validate_policy_mapping(source: Mapping[str, Any]) -> dict[str, Any]:
     finite_number(policy.get("maximum_duplicate_work_fraction"), "maximum_duplicate_work_fraction", maximum=1.0)
     if policy.get("repair_precedes_new_luna_dispatch") is not True:
         raise PolicyError("repair_precedes_new_luna_dispatch must be true")
+    if policy.get("high_effort_critical_path_requires_lower_effort_quality_evidence") is not True:
+        raise PolicyError(
+            "high_effort_critical_path_requires_lower_effort_quality_evidence must be true"
+        )
     integer(policy.get("parallel_review_minimum_pairs"), "parallel_review_minimum_pairs", minimum=1)
     budget = require_object(policy.get("rework_budget"), "rework_budget")
     focused_repairs = integer(budget.get("focused_repairs"), "rework_budget.focused_repairs", minimum=1)
@@ -583,6 +587,30 @@ def package_schedule_v5(
         )
     expected_recovery_credits = sum(item["repair_probability"] * item["repair_credits"] + item["terminal_failure_probability"] * item["terminal_recovery_credits"] for item in packages.values())
     expected_recovery_seconds = sum(item["repair_probability"] * item["repair_seconds"] + item["terminal_failure_probability"] * item["terminal_recovery_seconds"] for item in packages.values())
+    depended_on = {dependency for item in packages.values() for dependency in item["depends_on"]}
+    luna_package_ids = sorted(item["package_id"] for item in packages.values() if item["executor"] == "LUNA")
+    luna_leaf_package_ids = sorted(package_id for package_id in luna_package_ids if package_id not in depended_on)
+    luna_critical_path_package_ids = sorted(
+        item["package_id"] for item in packages.values()
+        if item["executor"] == "LUNA" and item["critical_path"]
+    )
+    allocation_shape_fingerprint = "sha256:" + hashlib.sha256(
+        canonical_json(
+            {
+                "packages": [
+                    {
+                        "package_id": item["package_id"],
+                        "executor": item["executor"],
+                        "depends_on": sorted(item["depends_on"]),
+                        "critical_path": item["critical_path"],
+                        "writable_paths": sorted(baseline[item["package_id"]]["writable_paths"]),
+                        "acceptance_ids": sorted(item["acceptance_ids"]),
+                    }
+                    for item in sorted(packages.values(), key=lambda package: package["package_id"])
+                ]
+            }
+        )
+    ).hexdigest()
     return {
         "package_count": len(packages), "effective_writers": min(requested_writers, sum(item["executor"] == "LUNA" for item in packages.values())),
         "scheduled_package_seconds": max(finish.values(), default=0.0),
@@ -596,6 +624,12 @@ def package_schedule_v5(
         "sol_controller_queue": normalized_queue,
         "sol_luna_overlap_seconds": overlap,
         "sol_critical_path_overlap_seconds": sum(max(0.0, min(s1, l1) - max(s0, l0)) for pid, (s0, s1) in intervals.items() if packages[pid]["executor"] == "SOL" and packages[pid]["critical_path"] for l0, l1 in luna_union),
+        "luna_package_ids": luna_package_ids,
+        "luna_leaf_package_ids": luna_leaf_package_ids,
+        "luna_leaf_package_count": len(luna_leaf_package_ids),
+        "luna_critical_path_package_ids": luna_critical_path_package_ids,
+        "luna_critical_path_package_count": len(luna_critical_path_package_ids),
+        "allocation_shape_fingerprint": allocation_shape_fingerprint,
     }
 
 
@@ -917,10 +951,43 @@ def evaluate_route(
                 "controller_mode": controller_mode,
                 "sol_luna_overlap_seconds": sol_luna_overlap_seconds,
                 "sol_critical_path_overlap_seconds": sol_critical_path_overlap_seconds,
+                "luna_package_ids": schedule.get("luna_package_ids", []) if v5_mode else None,
+                "luna_leaf_package_ids": schedule.get("luna_leaf_package_ids", []) if v5_mode else None,
+                "luna_leaf_package_count": schedule.get("luna_leaf_package_count", 0) if v5_mode else None,
+                "luna_critical_path_package_ids": schedule.get("luna_critical_path_package_ids", []) if v5_mode else None,
+                "luna_critical_path_package_count": schedule.get("luna_critical_path_package_count", 0) if v5_mode else None,
+                "allocation_shape_fingerprint": schedule.get("allocation_shape_fingerprint") if v5_mode else None,
                 "duplicate_work_fraction": 0.0,
                 "rejection_reasons": rejection_reasons,
             }
         )
+
+    if v5_mode and policy["high_effort_critical_path_requires_lower_effort_quality_evidence"]:
+        quality_reasons = {
+            "first_pass_probability_below_floor",
+            "predicted_defect_rate_regresses",
+            "high_failure_impact_requires_0.9_first_pass_probability",
+        }
+        for candidate in evaluated:
+            if candidate["effort"] not in {"high", "xhigh", "max"}:
+                continue
+            if candidate["luna_critical_path_package_count"] == 0:
+                continue
+            lower_comparators = [
+                other for other in evaluated
+                if other is not candidate
+                and other["effort"] in {"low", "medium"}
+                and other["allocation_shape_fingerprint"] == candidate["allocation_shape_fingerprint"]
+            ]
+            lower_quality_failed = bool(lower_comparators) and all(
+                quality_reasons.intersection(other["rejection_reasons"])
+                for other in lower_comparators
+            )
+            if not lower_quality_failed:
+                candidate["rejection_reasons"].append(
+                    "high_effort_critical_path_requires_lower_effort_quality_evidence"
+                )
+                candidate["eligible"] = False
 
     effort_rank = {effort: index for index, effort in enumerate(policy["effort_order"])}
     eligible = [candidate for candidate in evaluated if candidate["eligible"]]
@@ -980,6 +1047,11 @@ def evaluate_route(
                     "controller_mode",
                     "sol_luna_overlap_seconds",
                     "sol_critical_path_overlap_seconds",
+                    "luna_leaf_package_ids",
+                    "luna_leaf_package_count",
+                    "luna_critical_path_package_ids",
+                    "luna_critical_path_package_count",
+                    "allocation_shape_fingerprint",
                     "duplicate_work_fraction",
                 )
             }

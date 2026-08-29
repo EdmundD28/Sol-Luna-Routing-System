@@ -194,6 +194,8 @@ class RoutingPolicyTests(unittest.TestCase):
             ("maximum_duplicate_work_fraction", True),
             ("repair_precedes_new_luna_dispatch", None),
             ("repair_precedes_new_luna_dispatch", False),
+            ("high_effort_critical_path_requires_lower_effort_quality_evidence", None),
+            ("high_effort_critical_path_requires_lower_effort_quality_evidence", False),
         ):
             malformed = dict(POLICY)
             malformed.pop(field, None)
@@ -227,8 +229,12 @@ class RoutingPolicyTests(unittest.TestCase):
         source["luna_candidates"][0]["packages"].append(v5_package("luna-docs", "LUNA", 100, 0, credits=1, depends_on=["luna-tests"]))
         source["acceptance_contract_ids"].append("accept-luna-docs")
         result = ROUTING.evaluate_route(source, POLICY)
-        self.assertEqual(result["candidates"][0]["delegated_package_count"], 2)
-        self.assertEqual(result["candidates"][0]["effective_writers"], 1)
+        candidate = result["candidates"][0]
+        self.assertEqual(candidate["delegated_package_count"], 2)
+        self.assertEqual(candidate["effective_writers"], 1)
+        self.assertEqual(candidate["luna_leaf_package_ids"], ["luna-docs"])
+        self.assertEqual(candidate["luna_leaf_package_count"], 1)
+        self.assertEqual(candidate["luna_critical_path_package_ids"], [])
 
     def test_v5_active_cap_is_independent_of_delegated_coverage(self) -> None:
         source = v5_request()
@@ -347,6 +353,53 @@ class RoutingPolicyTests(unittest.TestCase):
         result = ROUTING.evaluate_route(source, POLICY)
         self.assertEqual(result["selected_luna_effort"], "medium")
         self.assertEqual(result["candidates"][1]["allocation_id"], "allocation-b")
+
+    def test_v5_high_critical_path_requires_lower_effort_quality_evidence(self) -> None:
+        source = v5_request()
+        high = source["luna_candidates"][0]
+        high.update(
+            {
+                "allocation_id": "allocation-high",
+                "effort": "high",
+                "effort_basis": "critical-path logic needs stronger reasoning",
+            }
+        )
+        high["packages"][1]["critical_path"] = True
+        result = ROUTING.evaluate_route(source, POLICY)
+        self.assertEqual(result["route"], "SOL_ONLY")
+        self.assertIn(
+            "high_effort_critical_path_requires_lower_effort_quality_evidence",
+            result["candidates"][0]["rejection_reasons"],
+        )
+
+        medium = json.loads(json.dumps(high))
+        medium.update({"allocation_id": "allocation-medium", "effort": "medium"})
+        medium.pop("effort_basis")
+        medium["packages"][1].update(
+            {"first_pass_probability": 0.5, "repair_probability": 0.5}
+        )
+        source["luna_candidates"] = [medium, high]
+        result = ROUTING.evaluate_route(source, POLICY)
+        self.assertEqual(result["route"], "SOL_LUNA")
+        self.assertEqual(result["selected_luna_effort"], "high")
+        self.assertIn(
+            "first_pass_probability_below_floor",
+            result["candidates"][0]["rejection_reasons"],
+        )
+        self.assertNotIn(
+            "high_effort_critical_path_requires_lower_effort_quality_evidence",
+            result["candidates"][1]["rejection_reasons"],
+        )
+
+        mismatched_medium = json.loads(json.dumps(medium))
+        mismatched_medium["packages"][0]["executor"] = "LUNA"
+        mismatched_medium["packages"][1]["executor"] = "SOL"
+        source["luna_candidates"] = [mismatched_medium, high]
+        result = ROUTING.evaluate_route(source, POLICY)
+        self.assertIn(
+            "high_effort_critical_path_requires_lower_effort_quality_evidence",
+            result["candidates"][1]["rejection_reasons"],
+        )
 
     def test_v5_reports_overlap_and_no_duplicate_cost(self) -> None:
         result = ROUTING.evaluate_route(v5_request(), POLICY)

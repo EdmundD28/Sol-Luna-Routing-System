@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "policy_version": "1.8.0",
+  "policy_version": "1.9.0",
   "minimum_expected_credit_savings_fraction": 0.50,
   "minimum_expected_elapsed_savings_fraction": 0.0,
   "maximum_coordination_credit_share": 0.5,
@@ -9,6 +9,7 @@
   "maximum_active_luna_writers": 1,
   "maximum_duplicate_work_fraction": 0.0,
   "repair_precedes_new_luna_dispatch": true,
+  "high_effort_critical_path_requires_lower_effort_quality_evidence": true,
   "parallel_review_minimum_pairs": 5,
   "effort_order": [
     "low",

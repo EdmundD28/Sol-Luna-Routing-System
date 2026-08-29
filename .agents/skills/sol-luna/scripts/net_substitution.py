@@ -27,7 +27,9 @@ TOP_FIELDS = {
     "schema_version", "packages", "minimum_first_pass_probability",
     "maximum_final_defect_probability", "minimum_credit_savings_fraction",
     "minimum_sol_labor_reduction", "maximum_active_luna_writers",
+    "maximum_incremental_delegation_burden_fraction",
 }
+DEFAULT_MAX_INCREMENTAL_DELEGATION_BURDEN_FRACTION = 0.5
 PACKAGE_FIELDS = {
     "package_id", "depends_on", "domain_id", "baseline_sol_credits", "baseline_sol_seconds",
     "execution_credits", "execution_seconds", "first_pass_probability",
@@ -172,7 +174,7 @@ def _package(raw: Any, index: int) -> dict[str, Any]:
 
 
 def _validate(source: Mapping[str, Any]) -> dict[str, Any]:
-    _fields(source, TOP_FIELDS, TOP_FIELDS, "input")
+    _fields(source, TOP_FIELDS, TOP_FIELDS - {"maximum_incremental_delegation_burden_fraction"}, "input")
     if type(source["schema_version"]) is not int or source["schema_version"] != SCHEMA_VERSION:
         raise NetSubstitutionError("schema_version must be integer 1")
     packages_source = source["packages"]
@@ -212,6 +214,13 @@ def _validate(source: Mapping[str, Any]) -> dict[str, Any]:
         "maximum_final_defect_probability": _probability(source["maximum_final_defect_probability"], "maximum_final_defect_probability"),
         "minimum_credit_savings_fraction": _probability(source["minimum_credit_savings_fraction"], "minimum_credit_savings_fraction"),
         "minimum_sol_labor_reduction": _probability(source["minimum_sol_labor_reduction"], "minimum_sol_labor_reduction"),
+        "maximum_incremental_delegation_burden_fraction": _probability(
+            source.get(
+                "maximum_incremental_delegation_burden_fraction",
+                DEFAULT_MAX_INCREMENTAL_DELEGATION_BURDEN_FRACTION,
+            ),
+            "maximum_incremental_delegation_burden_fraction",
+        ),
         "maximum_active_luna_writers": None,
     }
     writers = source["maximum_active_luna_writers"]
@@ -357,6 +366,15 @@ def _candidate(config: Mapping[str, Any], luna_ids: set[str], requested_writers:
     net_savings = baseline_credits - expected_total
     labor_reduction = _fraction(baseline_credits - sol_labor, baseline_credits, "Sol labor reduction")
     credit_savings = _fraction(net_savings, baseline_credits, "credit savings")
+    incremental_delegation_burden = (
+        _fraction(
+            _finite_sum([overhead_credits, schedule["context_credits"]], "incremental delegation burden numerator"),
+            selected_baseline,
+            "incremental delegation burden",
+        )
+        if selected
+        else 0.0
+    )
     net_substitution = min(labor_reduction, credit_savings)
     selected_count = len(selected)
     reasons: list[str] = []
@@ -368,6 +386,8 @@ def _candidate(config: Mapping[str, Any], luna_ids: set[str], requested_writers:
         reasons.append("credit_savings_below_floor")
     if labor_reduction < config["minimum_sol_labor_reduction"]:
         reasons.append("sol_labor_reduction_below_floor")
+    if incremental_delegation_burden > config["maximum_incremental_delegation_burden_fraction"]:
+        reasons.append("incremental_delegation_burden_above_ceiling")
     elapsed = _finite_sum([schedule["elapsed_seconds"], overhead_seconds], "expected elapsed seconds")
     if elapsed > baseline_seconds and not math.isclose(elapsed, baseline_seconds, rel_tol=1e-12, abs_tol=1e-12):
         reasons.append("elapsed_time_regresses")
@@ -383,6 +403,8 @@ def _candidate(config: Mapping[str, Any], luna_ids: set[str], requested_writers:
         "expected_sol_replay": replay,
         "incremental_sol_overhead": overhead_credits,
         "expected_context_credits": schedule["context_credits"],
+        "incremental_delegation_burden_fraction": incremental_delegation_burden,
+        "maximum_incremental_delegation_burden_fraction": config["maximum_incremental_delegation_burden_fraction"],
         "expected_context_seconds": schedule["context_seconds"],
         "expected_total_credits": expected_total,
         "net_route_savings": net_savings,
@@ -461,6 +483,7 @@ def template() -> dict[str, Any]:
         "minimum_credit_savings_fraction": 0.2,
         "minimum_sol_labor_reduction": 0.2,
         "maximum_active_luna_writers": 2,
+        "maximum_incremental_delegation_burden_fraction": DEFAULT_MAX_INCREMENTAL_DELEGATION_BURDEN_FRACTION,
     }
 
 

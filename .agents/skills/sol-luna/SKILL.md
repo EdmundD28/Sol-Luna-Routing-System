@@ -26,7 +26,7 @@ For multi-package work, `net_substitution.py` enumerates bounded allocations, co
 
 Choose the lowest expected accepted-delivery cost among efforts passing every quality, defect, savings, and latency gate; a failed cheap attempt is not required first.
 
-Start from the lowest evidence-supported effort. High or above needs a reason Low or Medium cannot meet the same acceptance contract.
+Start with the lowest evidence-supported effort. High+ Luna critical-path work needs a same-allocation Low/Medium candidate rejected by a quality or defect gate; prose is insufficient.
 
 - `luna_worker_low`: mechanical work with cheap authoritative verification (`light` maps to `low`).
 - `luna_worker_medium`: bounded implementation with settled architecture.
@@ -38,12 +38,12 @@ Use `luna_reviewer` for read-only review and `luna_scout` for feasibility. Never
 
 ## Bound packages and concurrency
 
-Every package binds root, deliverable, dependencies, exclusive relative paths, Sol-reserved files, acceptance, forbidden actions, and compact handoff. A stable-domain envelope freezes these while one Luna decomposes and closes out; Sol does not pre-script Luna's internal units. Writers never overlap.
+Packages bind root, dependencies, exclusive paths, Sol-reserved files, acceptance, forbidden actions, and handoff. Prefer ready Luna leaves with deterministic checks; keep coupled cores in Sol. One stable-domain envelope freezes boundaries while Luna closes out; Sol does not pre-script Luna's internal units. Writers never overlap.
 For material work, freeze a few acceptance-bound Luna responsibility units. They are accounting boundaries inside one retained context, not extra workers or handoffs. Use one only when indivisible; replay shadows only the affected unit.
 
 Before dispatch, run `scripts/ownership_guard.py check-plan`; schema 2 binds executors, units, acceptances, partitions, and digest, while schema 1 is compatibility-only. Before acceptance, compare changed paths with `check-changes`. Violations block acceptance. This is not a filesystem security boundary.
 
-Calls, packages, actions, and writer count never enter the benefit numerator. Default to **one active Luna writer**; reuse it while the domain is stable and switch when the domain, assumptions, or independence need changes. Add a writer only when its marginal net substitution is positive. Freeze one executor per unit. Reserve a disjoint Sol lane for acceptance or integration preparation while Luna runs. Sol never shadow-implements Luna work; wait only when controller queues are empty.
+Calls, packages, actions, and writer count never enter the benefit numerator. Default to **one active Luna writer**; reuse it until the domain, assumptions, or independence need changes. Add a writer only when its marginal net substitution is positive. Freeze one executor per unit. Reserve a disjoint Sol acceptance/integration lane. Sol never shadow-implements Luna work; wait only when controller queues are empty.
 
 Give Luna only the context required for its objective, contracts, evidence, and constraints. Luna must not spawn agents. Before the first material handoff, Luna runs acceptance and relevant schema, boundary, capacity, derived-value, immutability, and error probes bound to the candidate; structured handoffs use `scripts/handoff_preflight.py`. `HOLD` is incomplete, not permission for Sol replay. Sol reviews from this evidence and returns only exact new failures to the same Luna. Shared entry points, lock/status files, and common outputs stay with Sol or one integrator.
 
