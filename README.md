@@ -84,6 +84,7 @@ The Skill uses standard-library Python tools:
 | `benchmark_attestation.py` | Deterministically bind a completed allowance campaign, verified identity index, and frozen benchmark contract into one redacted attestation |
 | `credit_model.py` | Estimate purchased credits from classified phase usage and a fingerprinted rate card; never convert included plan percentages |
 | `frontier_planner.py` / `frontier_cli.py` | Project deterministic queues and a repair-first retained-domain Luna envelope without ever dispatching work |
+| `handoff_preflight.py` / `handoff_preflight_cli.py` | Expose candidate-bound missing, failed, stale, scope, and risk evidence before Sol review without ever accepting work |
 
 ### Production ownership and phase schemas
 
