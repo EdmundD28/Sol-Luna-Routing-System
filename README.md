@@ -48,6 +48,17 @@ python .agents/skills/sol-luna/scripts/net_substitution.py template
 
 The policy is advisory and never launches a worker automatically. Missing estimates stay unknown; Sol can retain the task or run a short read-only scout probe.
 
+### Candidate-bound handoff review
+
+Compile a frozen portfolio, then compare two compiled snapshots to identify the exact changed packages and their transitive dependents:
+
+```powershell
+python -B .agents/skills/sol-luna/scripts/handoff_review_cli.py compile --input portfolio.json
+python -B .agents/skills/sol-luna/scripts/handoff_review_cli.py compare --before before.json --after after.json
+```
+
+This tool is replay-only: it does not dispatch work, accept handoffs, execute checks, or write files.
+
 ## Profiles
 
 The project ships two roles rather than a large role hierarchy:
