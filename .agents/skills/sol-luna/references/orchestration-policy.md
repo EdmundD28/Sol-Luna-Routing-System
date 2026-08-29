@@ -21,7 +21,7 @@ Route lower when requirements are explicit, scope is isolated, acceptance is det
 
 Task size and reasoning difficulty are separate. Large repetitive work can suit Low or Medium; a small ambiguous defect can justify XHigh. When uncertainty is material, first repartition, route upward, retain the work in Sol, or run a read-only scout probe that returns `READY`, `NEEDS_REPARTITION`, or `INSUFFICIENT_CONTEXT` without editing.
 
-For a new production route, schema 6 binds every candidate's claimed first-pass and final-defect probabilities to an externally loaded evidence record with the same task family, actual Luna effort, allocation-shape fingerprint, and acceptance-suite digest. A candidate cannot claim a better rate than that record observed. Missing or mismatched evidence retains the work in Sol; schema 5 remains readable for compatibility but is not current production evidence.
+For a new production route, schema 7 binds every candidate's claimed first-pass and final-defect probabilities to an externally loaded evidence record with the same task family, actual Luna effort, allocation-shape fingerprint, and acceptance-suite digest. It also derives a minimum effort from settled architecture, deterministic acceptance, semantic coupling, cross-module invariants, interface count, adversarial edges, platform-sensitive I/O, and strict serialization. Leaf ownership does not imply easy reasoning: a candidate below this floor is rejected, while High or XHigh still needs its own matching quality evidence and the lower-effort comparator required above. Schema 6 keeps external quality binding without the executable effort floor; schema 5 remains readable for compatibility.
 
 ## Package contract
 

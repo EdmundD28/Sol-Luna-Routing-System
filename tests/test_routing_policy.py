@@ -214,6 +214,35 @@ def schema6_request(*, first_pass_accepted: int = 1, observations: int = 1) -> t
     return source, evidence
 
 
+def schema7_profile(**overrides: object) -> dict:
+    profile = {
+        "architecture_settled": True,
+        "deterministic_acceptance": True,
+        "semantic_coupling": "low",
+        "cross_module_invariants": False,
+        "multi_interface_contract": False,
+        "adversarial_edge_cases": False,
+        "platform_sensitive_io": False,
+        "strict_serialization": False,
+    }
+    profile.update(overrides)
+    return profile
+
+
+def schema7_request(profile: dict | None = None, *, effort: str = "medium") -> tuple[dict, dict]:
+    source, evidence = schema6_request()
+    source["schema_version"] = 7
+    source["reasoning_profile"] = schema7_profile() if profile is None else profile
+    candidate = source["luna_candidates"][0]
+    candidate["effort"] = effort
+    candidate["effort_basis"] = "profile-derived reasoning floor test"
+    evidence["effort"] = effort
+    evidence["evidence_digest"] = _sha256_json(
+        {key: value for key, value in evidence.items() if key != "evidence_digest"}
+    )
+    return source, evidence
+
+
 def bound_quality(source: dict, *evidence: dict) -> dict:
     return ROUTING._ExternallyBoundQualityEvidence(
         ROUTING.quality_evidence_index(
@@ -244,10 +273,11 @@ class RoutingPolicyTests(unittest.TestCase):
         ROUTING.evaluate_route(v5_request(), unchanged)
         self.assertEqual(unchanged, POLICY)
 
-    def test_template_is_evaluable_v6_complete_allocation(self) -> None:
+    def test_template_is_evaluable_v7_complete_allocation(self) -> None:
         source = ROUTING.template()
         evidence_document = ROUTING.quality_evidence_template()
-        self.assertEqual(source["schema_version"], 6)
+        self.assertEqual(source["schema_version"], 7)
+        self.assertEqual(source["reasoning_profile"]["semantic_coupling"], "low")
         self.assertRegex(source["acceptance_suite_digest"], r"^sha256:[0-9a-f]{64}$")
         self.assertNotIn("quality_evidence", source)
         self.assertEqual(len(evidence_document["evidence"]), 1)
@@ -1283,6 +1313,98 @@ class RoutingPolicyTests(unittest.TestCase):
             ), mock.patch("sys.stdout", io.StringIO()), mock.patch("sys.stderr", stderr := io.StringIO()):
                 self.assertEqual(ROUTING.main(), 2)
             self.assertIn("externally loaded quality evidence index", stderr.getvalue())
+
+    def test_schema7_reasoning_profile_has_strict_shape_and_types(self) -> None:
+        source, evidence = schema7_request()
+        before = json.loads(json.dumps(source))
+        floor = ROUTING.reasoning_effort_floor(source["reasoning_profile"], POLICY)
+        self.assertEqual(set(floor), {"minimum_effort", "complexity_signal_count", "reasons"})
+        self.assertEqual(source, before)
+        for field, value in (
+            ("architecture_settled", 1),
+            ("deterministic_acceptance", 0),
+            ("cross_module_invariants", "true"),
+            ("semantic_coupling", "critical"),
+        ):
+            malformed = dict(source["reasoning_profile"])
+            malformed[field] = value
+            with self.subTest(field=field), self.assertRaises(ROUTING.PolicyError):
+                ROUTING.reasoning_effort_floor(malformed, POLICY)
+        malformed = dict(source["reasoning_profile"], unexpected=False)
+        with self.assertRaises(ROUTING.PolicyError):
+            ROUTING.reasoning_effort_floor(malformed, POLICY)
+        for invalid in (
+            dict(source, reasoning_profile=None),
+            dict(source, reasoning_profile=dict(source["reasoning_profile"], unexpected=False)),
+        ):
+            with self.subTest(invalid_profile=invalid["reasoning_profile"]), self.assertRaises(ROUTING.PolicyError):
+                ROUTING.evaluate_route(
+                    invalid,
+                    POLICY,
+                    verified_quality_evidence=bound_quality(source, evidence),
+                )
+
+    def test_schema7_reasoning_floor_four_boundaries_and_no_max_autopromotion(self) -> None:
+        cases = (
+            (schema7_profile(), "low", 0),
+            (schema7_profile(cross_module_invariants=True), "medium", 1),
+            (schema7_profile(semantic_coupling="high"), "high", 1),
+            (schema7_profile(architecture_settled=False, cross_module_invariants=True,
+                             multi_interface_contract=True, adversarial_edge_cases=True,
+                             platform_sensitive_io=True), "xhigh", 4),
+        )
+        for profile, minimum, count in cases:
+            with self.subTest(profile=profile):
+                result = ROUTING.reasoning_effort_floor(profile, POLICY)
+                self.assertEqual(result["minimum_effort"], minimum)
+                self.assertEqual(result["complexity_signal_count"], count)
+                self.assertIsInstance(result["reasons"], list)
+                self.assertNotEqual(result["minimum_effort"], "max")
+
+    def test_schema7_p010_medium_is_below_floor_but_evidenced_high_is_selectable(self) -> None:
+        profile = schema7_profile(
+            semantic_coupling="medium", cross_module_invariants=True,
+            multi_interface_contract=True, adversarial_edge_cases=True,
+            platform_sensitive_io=True, strict_serialization=True,
+        )
+        source, medium_evidence = schema7_request(profile, effort="medium")
+        high = json.loads(json.dumps(source["luna_candidates"][0]))
+        high["allocation_id"] = "allocation-high"
+        high["effort"] = "high"
+        high["quality_evidence_id"] = "evidence-high-a"
+        source["luna_candidates"].append(high)
+        high_evidence = dict(medium_evidence, evidence_id="evidence-high-a", effort="high")
+        high_evidence["evidence_digest"] = _sha256_json(
+            {key: value for key, value in high_evidence.items() if key != "evidence_digest"}
+        )
+        evidence = bound_quality(source, medium_evidence, high_evidence)
+        result = ROUTING.evaluate_route(source, POLICY, verified_quality_evidence=evidence)
+        self.assertEqual(result["route"], "SOL_LUNA")
+        self.assertEqual(result["selected_luna_effort"], "high")
+        self.assertIn("effort_below_reasoning_floor", result["candidates"][0]["rejection_reasons"])
+        self.assertNotIn("effort_below_reasoning_floor", result["candidates"][1]["rejection_reasons"])
+        self.assertNotIn("reasoning_profile", result)
+        self.assertNotIn("reasoning_profile", result["candidates"][0])
+        self.assertNotIn("complexity_signals", result["candidates"][0])
+
+    def test_schema7_high_without_external_quality_evidence_fails_closed(self) -> None:
+        source, _ = schema7_request(schema7_profile(semantic_coupling="high"), effort="high")
+        with self.assertRaises(ROUTING.PolicyError):
+            ROUTING.evaluate_route(source, POLICY)
+
+    def test_schema7_input_is_unchanged_and_schema6_remains_compatible(self) -> None:
+        source, evidence = schema7_request()
+        before = json.loads(json.dumps(source))
+        try:
+            ROUTING.evaluate_route(source, POLICY, verified_quality_evidence=bound_quality(source, evidence))
+        except ROUTING.PolicyError:
+            pass
+        self.assertEqual(source, before)
+        schema6, evidence6 = schema6_request()
+        self.assertEqual(
+            ROUTING.evaluate_route(schema6, POLICY, verified_quality_evidence=bound_quality(schema6, evidence6))["route"],
+            "SOL_LUNA",
+        )
 
 
 if __name__ == "__main__":

@@ -27,6 +27,7 @@ SINGLE_REQUEST_SCHEMAS = {LEGACY_SINGLE_SCHEMA_VERSION, SCHEMA_VERSION}
 PACKAGE_REQUEST_SCHEMAS = {LEGACY_PACKAGES_SCHEMA_VERSION, PACKAGES_SCHEMA_VERSION}
 V5_REQUEST_SCHEMA_VERSION = 5
 V6_REQUEST_SCHEMA_VERSION = 6
+V7_REQUEST_SCHEMA_VERSION = 7
 PACKAGE_ID = re.compile(r"[a-z0-9][a-z0-9-]{0,63}")
 WINDOWS_RESERVED_NAMES = {
     "con",
@@ -122,6 +123,71 @@ QUALITY_EVIDENCE_SOURCES = {
     "independent-evaluation",
     "matched-history",
 }
+REASONING_PROFILE_FIELDS = {
+    "architecture_settled",
+    "deterministic_acceptance",
+    "semantic_coupling",
+    "cross_module_invariants",
+    "multi_interface_contract",
+    "adversarial_edge_cases",
+    "platform_sensitive_io",
+    "strict_serialization",
+}
+COMPLEXITY_SIGNAL_FIELDS = (
+    "cross_module_invariants",
+    "multi_interface_contract",
+    "adversarial_edge_cases",
+    "platform_sensitive_io",
+    "strict_serialization",
+)
+
+
+def reasoning_effort_floor(
+    value: Any,
+    policy: Mapping[str, Any],
+) -> dict[str, Any]:
+    profile = require_object(value, "reasoning_profile")
+    reject_unknown_fields(profile, REASONING_PROFILE_FIELDS, "reasoning_profile")
+    missing = REASONING_PROFILE_FIELDS - set(profile)
+    if missing:
+        raise PolicyError(f"reasoning_profile missing fields: {sorted(missing)}")
+    normalized: dict[str, bool | str] = {}
+    for field in REASONING_PROFILE_FIELDS - {"semantic_coupling"}:
+        item = profile[field]
+        if type(item) is not bool:
+            raise PolicyError(f"reasoning_profile.{field} must be a boolean")
+        normalized[field] = item
+    semantic = require_string(
+        profile["semantic_coupling"],
+        "reasoning_profile.semantic_coupling",
+    ).lower()
+    if semantic not in {"low", "medium", "high"}:
+        raise PolicyError("reasoning_profile.semantic_coupling must be low, medium, or high")
+    normalized["semantic_coupling"] = semantic
+    signal_reasons = [field for field in COMPLEXITY_SIGNAL_FIELDS if normalized[field]]
+    signal_count = len(signal_reasons) + (1 if semantic == "high" else 0)
+    reasons = list(signal_reasons)
+    if semantic != "low":
+        reasons.append(f"semantic_coupling_{semantic}")
+    if not normalized["architecture_settled"]:
+        reasons.append("architecture_unsettled")
+    if not normalized["deterministic_acceptance"]:
+        reasons.append("acceptance_nondeterministic")
+    if not normalized["architecture_settled"] and signal_count >= 4:
+        minimum = "xhigh"
+    elif semantic == "high" or signal_count >= 2:
+        minimum = "high"
+    elif semantic == "medium" or signal_count == 1 or not normalized["architecture_settled"] or not normalized["deterministic_acceptance"]:
+        minimum = "medium"
+    else:
+        minimum = "low"
+    if minimum not in policy["effort_order"]:
+        raise PolicyError("reasoning effort floor is unsupported by policy")
+    return {
+        "minimum_effort": minimum,
+        "complexity_signal_count": signal_count,
+        "reasons": sorted(reasons),
+    }
 
 
 def _quality_evidence_digest(source: Mapping[str, Any]) -> str:
@@ -806,7 +872,7 @@ def evaluate_route(
 ) -> dict[str, Any]:
     policy = validate_policy_mapping(require_object(policy, "policy"))
     schema_version = request.get("schema_version")
-    if type(schema_version) is not int or schema_version not in SINGLE_REQUEST_SCHEMAS | PACKAGE_REQUEST_SCHEMAS | {V5_REQUEST_SCHEMA_VERSION, V6_REQUEST_SCHEMA_VERSION}:
+    if type(schema_version) is not int or schema_version not in SINGLE_REQUEST_SCHEMAS | PACKAGE_REQUEST_SCHEMAS | {V5_REQUEST_SCHEMA_VERSION, V6_REQUEST_SCHEMA_VERSION, V7_REQUEST_SCHEMA_VERSION}:
         raise PolicyError("unsupported routing request schema_version")
     reject_unknown_fields(
         request,
@@ -822,6 +888,7 @@ def evaluate_route(
             "luna_candidates",
             "acceptance_contract_ids",
             "acceptance_suite_digest",
+            "reasoning_profile",
         },
         "request",
     )
@@ -856,8 +923,9 @@ def evaluate_route(
     sol_expected_seconds = sol["execution_seconds"] + (1 - sol["first_pass_probability"]) * sol_recovery_seconds
 
     requested_writers = integer(request.get("requested_writers", 1), "requested_writers", minimum=1)
-    quality_evidence_mode = schema_version == V6_REQUEST_SCHEMA_VERSION
-    v5_mode = schema_version in {V5_REQUEST_SCHEMA_VERSION, V6_REQUEST_SCHEMA_VERSION}
+    quality_evidence_mode = schema_version in {V6_REQUEST_SCHEMA_VERSION, V7_REQUEST_SCHEMA_VERSION}
+    reasoning_floor_mode = schema_version == V7_REQUEST_SCHEMA_VERSION
+    v5_mode = schema_version in {V5_REQUEST_SCHEMA_VERSION, V6_REQUEST_SCHEMA_VERSION, V7_REQUEST_SCHEMA_VERSION}
     package_mode = schema_version in PACKAGE_REQUEST_SCHEMAS or v5_mode
     legacy_schema = schema_version in LEGACY_REQUEST_SCHEMAS
     if schema_version in SINGLE_REQUEST_SCHEMAS and requested_writers > 1:
@@ -876,13 +944,20 @@ def evaluate_route(
             request.get("acceptance_suite_digest"), "acceptance_suite_digest"
         )
         if not isinstance(verified_quality_evidence, _ExternallyBoundQualityEvidence):
-            raise PolicyError("routing schema 6 requires an externally loaded quality evidence index")
+            raise PolicyError("quality-evidence routing requires an externally loaded quality evidence index")
         evidence_index = require_object(
             verified_quality_evidence,
             "verified_quality_evidence",
         )
     elif "acceptance_suite_digest" in request or verified_quality_evidence is not None:
-        raise PolicyError("quality evidence requires routing schema 6")
+        raise PolicyError("quality evidence requires routing schema 6 or 7")
+    reasoning_floor = (
+        reasoning_effort_floor(request.get("reasoning_profile"), policy)
+        if reasoning_floor_mode
+        else None
+    )
+    if not reasoning_floor_mode and "reasoning_profile" in request:
+        raise PolicyError("reasoning_profile requires routing schema 7")
     writer_limit = allowed_writers(request, policy, verified_parallel_evidence)
     effective_writers = int(writer_limit["allowed"])
     coordination_source = require_object(request.get("coordination"), "coordination")
@@ -1036,6 +1111,10 @@ def evaluate_route(
             if sol_expected_credits else 0.0
         )
         rejection_reasons: list[str] = []
+        if reasoning_floor is not None:
+            effort_rank = {item: position for position, item in enumerate(policy["effort_order"])}
+            if effort_rank[effort] < effort_rank[reasoning_floor["minimum_effort"]]:
+                rejection_reasons.append("effort_below_reasoning_floor")
         if quality_evidence_mode:
             assert quality_evidence is not None
             if quality_evidence["effort"] != effort:
@@ -1127,6 +1206,7 @@ def evaluate_route(
             "quality_evidence_allocation_shape_mismatch",
             "quality_evidence_first_pass_overstated",
             "quality_evidence_final_defect_understated",
+            "effort_below_reasoning_floor",
         }
         for candidate in evaluated:
             if candidate["effort"] not in {"high", "xhigh", "max"}:
@@ -1176,6 +1256,7 @@ def evaluate_route(
             else "no Luna candidate satisfied every delivery gate"
         ),
         "quality_floor": quality_floor,
+        "reasoning_effort_floor": reasoning_floor,
         "minimum_credit_savings_fraction": savings_floor,
         "sol_only": {
             "expected_accepted_credits": sol_expected_credits,
@@ -1333,13 +1414,23 @@ def rework_decision(source: Mapping[str, Any], policy: Mapping[str, Any]) -> dic
 
 def template() -> dict[str, Any]:
     source = {
-        "schema_version": V6_REQUEST_SCHEMA_VERSION,
+        "schema_version": V7_REQUEST_SCHEMA_VERSION,
         "task_family": "bounded-feature",
         "quality_floor": 0.8,
         "minimum_credit_savings_fraction": 0.50,
         "latency_limit_seconds": None,
         "requested_writers": 1,
         "acceptance_contract_ids": ["accept-core", "accept-analysis", "accept-tests"],
+        "reasoning_profile": {
+            "architecture_settled": True,
+            "deterministic_acceptance": True,
+            "semantic_coupling": "low",
+            "cross_module_invariants": False,
+            "multi_interface_contract": False,
+            "adversarial_edge_cases": False,
+            "platform_sensitive_io": False,
+            "strict_serialization": False,
+        },
         "sol_only": {
             "first_pass_probability": 1.0,
             "final_defect_probability": 0.02,

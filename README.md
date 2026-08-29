@@ -34,7 +34,7 @@ Invoke explicitly:
 $sol-luna <substantial task>
 ```
 
-Sol estimates each eligible route before dispatch. Policy `1.10.0` requires at least 80% predicted first-pass acceptance, no predicted final-defect regression, at least 50% expected accepted-cost reduction by default, and no expected elapsed regression. It prefers independently verifiable Luna leaf work, requires same-allocation lower-effort quality evidence before putting High+ Luna on the critical path, caps incremental Sol-plus-context burden against delegated baseline, and still rejects shadow ownership. Evidence-backed repair can continue with the same Luna for at most three attempts only while a frozen cost budget and positive marginal net substitution remain; a candidate-bound preflight moves boundary evidence into Luna's first handoff before Sol review. It is a route guard; only matched account-meter readings prove subscription-allowance savings.
+Sol estimates each eligible route before dispatch. Policy `1.11.0` requires at least 80% predicted first-pass acceptance, no predicted final-defect regression, at least 50% expected accepted-cost reduction by default, and no expected elapsed regression. Schema 7 derives an auditable Luna effort floor from coupling and failure surfaces, then requires matching external quality evidence; leaf ownership alone cannot justify Low or Medium. The policy still requires same-allocation lower-effort rejection before putting High+ Luna on the critical path, caps incremental Sol-plus-context burden, and rejects shadow ownership. Evidence-backed repair can continue with the same Luna for at most three attempts only while a frozen cost budget and positive marginal net substitution remain. It is a route guard; only matched account-meter readings prove subscription-allowance savings.
 
 ```powershell
 python .agents/skills/sol-luna/scripts/routing_policy.py template
@@ -48,7 +48,7 @@ python .agents/skills/sol-luna/scripts/net_substitution.py template
 ```
 
 The policy is advisory and never launches a worker automatically. Missing estimates stay unknown; Sol can retain the task or run a short read-only scout probe.
-The default schema-6 template keeps quality records in a separate strict index and binds each candidate by content to the same task family, Luna effort, allocation shape, and acceptance-suite digest. Its placeholder evidence intentionally routes to Sol-only until replaced with observations. A plain request mapping cannot impersonate that external index. Schema 5 remains readable for compatibility, but is not current production evidence.
+The default schema-7 template keeps quality records in a separate strict index and binds each candidate by content to the same task family, Luna effort, allocation shape, and acceptance-suite digest. Its reasoning profile produces a minimum effort but never auto-selects Max. Placeholder or missing evidence routes to Sol-only. Schema 6 remains compatible without the effort floor; schema 5 is legacy compatibility.
 
 ## Profiles
 
