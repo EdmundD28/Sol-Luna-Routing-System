@@ -64,6 +64,18 @@ class CompactProtocolTests(unittest.TestCase):
         with self.assertRaises(PROTO.ProtocolError):
             PROTO.parse_line(line.replace("OWN=own-01", "OWN=other"), frozen)
 
+    def test_manifest_reference_exact_binding_and_shape(self) -> None:
+        frozen = PROTO.freeze_manifest(manifest())
+        line = PROTO.manifest_line(frozen)
+        self.assertEqual(line, "MAN|" + PROTO.package_ref(frozen))
+        self.assertEqual(PROTO.parse_line(line, frozen), {"record_type": "MAN", "package_ref": PROTO.package_ref(frozen)})
+        self.assertEqual(PROTO.parse_line(line), {"record_type": "MAN", "package_ref": PROTO.package_ref(frozen)})
+        with self.assertRaises(PROTO.ProtocolError): PROTO.parse_line("MAN|" + PROTO.package_ref(manifest()) + "|extra")
+        altered = dict(frozen); altered["objective"] = "tampered"
+        with self.assertRaises(PROTO.ProtocolError): PROTO.parse_line(line, altered)
+        wrong = line.replace("candidate-snapshot", "other-package")
+        with self.assertRaises(PROTO.ProtocolError): PROTO.parse_line(wrong, frozen)
+
     def test_ok_and_block_round_trip(self) -> None:
         frozen = PROTO.freeze_manifest(manifest())
         ok = PROTO.ok_line(frozen, D1, D2, 4, 4, 2, 0)
@@ -106,6 +118,9 @@ class CompactProtocolTests(unittest.TestCase):
         self.assertEqual(invalid.stdout, b"")
         self.assertEqual(invalid.stderr.count(b"\n"), 1)
         self.assertNotIn(str(ROOT).encode(), invalid.stderr)
+        manifest_cli = subprocess.run([sys.executable, "-B", str(SCRIPT), "manifest", "--input", "-"], input=payload.encode(), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self.assertEqual(manifest_cli.returncode, 0, manifest_cli.stderr)
+        self.assertEqual(manifest_cli.stdout.decode("ascii").strip(), PROTO.manifest_line(manifest()))
 
 
 if __name__ == "__main__":

@@ -192,6 +192,10 @@ def package_ref(manifest: Mapping[str, Any]) -> str:
     frozen = freeze_manifest(manifest)
     return f"{frozen['package_id']}@{frozen['manifest_digest'][7:19]}"
 
+def manifest_line(manifest: Mapping[str, Any]) -> str:
+    """Return the printable reference to the one authoritative frozen manifest."""
+    return "MAN|" + package_ref(manifest)
+
 
 def _validate_package_ref(value: str) -> str:
     if not isinstance(value, str) or not PACKAGE_REF_RE.fullmatch(value):
@@ -264,6 +268,11 @@ def _parse_run(parts: list[str], manifest: Mapping[str, Any] | None) -> dict[str
             raise ProtocolError("RUN line does not match manifest")
     return {"record_type": "RUN", "package_ref": package, "effort": _CODE_EFFORTS[effort_code], "ownership_id": ownership, "acceptance_ids": acceptance, "stop_conditions": stops}
 
+def _parse_man(parts: list[str], manifest: Mapping[str, Any] | None) -> dict[str, Any]:
+    package = parts[1]
+    _bind_package(package, manifest)
+    return {"record_type": "MAN", "package_ref": package}
+
 
 def _count(value: str, field: str) -> int:
     if not COUNT_RE.fullmatch(value):
@@ -317,6 +326,8 @@ def parse_line(line: str, manifest: Mapping[str, Any] | None = None) -> dict[str
     record = line.split("|", 1)[0] if line else ""
     if record == "RUN":
         return _parse_run(_fields(line, "RUN", 6), manifest)
+    if record == "MAN":
+        return _parse_man(_fields(line, "MAN", 2), manifest)
     if record == "OK":
         return _parse_ok(_fields(line, "OK", 8), manifest)
     if record == "BLOCK":
@@ -357,7 +368,11 @@ def validate_binding(line: str, manifest: Mapping[str, Any]) -> dict[str, Any]:
 
 def _read_json(path: str) -> Any:
     try:
-        text = (sys.stdin.buffer.read().decode("utf-8") if path == "-" else open(path, encoding="utf-8", newline="").read())
+        if path == "-":
+            text = sys.stdin.buffer.read().decode("utf-8")
+        else:
+            with open(path, encoding="utf-8", newline="") as handle:
+                text = handle.read()
         return load_json_strict(text)
     except (OSError, ProtocolError) as exc:
         if isinstance(exc, ProtocolError):
@@ -370,6 +385,8 @@ def _parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
     freeze = sub.add_parser("freeze")
     freeze.add_argument("--input", default="-")
+    manifest = sub.add_parser("manifest")
+    manifest.add_argument("--input", default="-")
     run = sub.add_parser("run")
     run.add_argument("--manifest", required=True)
     parse = sub.add_parser("parse")
@@ -384,6 +401,8 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "freeze":
             result = freeze_manifest(_read_json(args.input))
             print(json.dumps(result, ensure_ascii=True, sort_keys=True, separators=(",", ":")))
+        elif args.command == "manifest":
+            print(manifest_line(_read_json(args.input)))
         elif args.command == "run":
             print(run_line(freeze_manifest(_read_json(args.manifest))))
         else:

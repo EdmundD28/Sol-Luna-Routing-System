@@ -93,7 +93,8 @@ The Skill uses standard-library Python tools:
 | `frontier_planner.py` / `frontier_cli.py` | Project deterministic queues and a repair-first retained-domain Luna envelope without ever dispatching work |
 | `handoff_preflight.py` / `handoff_preflight_cli.py` | Expose candidate-bound missing, failed, stale, scope, and risk evidence before Sol review without ever accepting work |
 | `candidate_snapshot.py` | Read-only content-addressed snapshot and verification of the exact Git candidate |
-| `compact_protocol.py` | One-time manifest freeze with strict `RUN`/`OK`/`BLOCK` handoff lines |
+| `compact_protocol.py` | One-time manifest freeze with strict `MAN` reference and `RUN`/`OK`/`BLOCK` handoff lines |
+| `communication_audit.py` | Optional offline communication diagnostic; transcripts and provider counters are captured outside normal messages and measured route intervals, and never authorize routing or included-plan conclusions |
 
 Snapshot a candidate relative to `HEAD` (or an explicit commit), then verify its `candidate_digest` without staging or writing:
 
@@ -114,7 +115,7 @@ The matched harness binds each pair to the same starting candidate, task digest,
 
 Complete-Luna validation uses one Luna implementation loop with targeted checks and one final authoritative full suite; Sol verifies the candidate snapshot and causal coverage, rerunning only the smallest check triggered by drift, incomplete evidence, nondeterminism, failure, repair, or material security/platform risk. If Luna cannot access the authoritative environment, Luna performs causal/targeted checks and Sol runs that environment once; the common external referee remains outside route intervals.
 
-The compact handoff protocol writes and reads one frozen manifest; normal messages use `RUN`/`OK`, only `BLOCK` expands, and it remains a projection rather than a second ownership or acceptance authority.
+The compact handoff protocol writes and reads one frozen manifest reference (`MAN|<package_ref>`); normal messages carry that reference followed by `RUN`/`OK`, only `BLOCK` expands, and it remains a projection rather than a second ownership or acceptance authority.
 
 ## Installation lifecycle
 
