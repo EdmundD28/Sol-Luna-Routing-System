@@ -100,6 +100,17 @@ Execution metrics use half-open intervals `[start, end)`: `executor_execution_un
 
 The matched harness binds each pair to the same starting candidate, task digest, independent acceptance-suite digest, policy fingerprint, and observed runtime identity. It does not launch paid model work. See [runtime and evidence details](.agents/skills/sol-luna/references/evidence-and-runtime.md) and [the orchestration policy](.agents/skills/sol-luna/references/orchestration-policy.md).
 
+### Handoff review replay
+
+Compile a frozen handoff portfolio, then compare it with a later compiled snapshot:
+
+```powershell
+python -B .agents/skills/sol-luna/scripts/handoff_review_cli.py compile --input portfolio.json
+python -B .agents/skills/sol-luna/scripts/handoff_review_cli.py compare --before before.json --after after.json
+```
+
+The handoff review tool is replay-only: it does not dispatch work, accept handoffs, execute checks, or write files.
+
 ## Installation lifecycle
 
 Preview is non-mutating:
