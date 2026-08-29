@@ -172,6 +172,18 @@ class FrontierPlannerTests(unittest.TestCase):
         self.assertEqual(result["review_package_ids"], ["handoff"])
         self.assertEqual(result["repair_package_ids"], ["eligible"])
 
+    def test_eligible_repair_precedes_new_luna_envelope(self) -> None:
+        result = PLANNER.plan(
+            source(
+                [
+                    package("new-work"),
+                    package("repair-first", status="FAILED", repair=repair()),
+                ]
+            )
+        )
+        self.assertEqual(result["repair_package_ids"], ["repair-first"])
+        self.assertIsNone(result["luna_envelope"])
+
     def test_full_writer_pool_suppresses_envelope_and_permits_true_tail_wait(self) -> None:
         result = PLANNER.plan(
             source(
@@ -344,7 +356,9 @@ class FrontierPlannerTests(unittest.TestCase):
             "src/../escape",
             "src//double",
             "src/CON.txt",
+            "src/con .txt",
             "src/control\x00",
+            "src/control\x85",
         ]
         for path in invalid_paths:
             with self.subTest(path=path):
@@ -361,6 +375,10 @@ class FrontierPlannerTests(unittest.TestCase):
         overlap["packages"][1]["path_scopes"] = ["source/core/child"]
         with self.assertRaises(PLANNER.FrontierError):
             PLANNER.plan(overlap)
+
+        valid = source()
+        valid["packages"][0]["path_scopes"] = ["src/foo:bar", "src/parent", "src/parent/child"]
+        PLANNER.plan(valid)
 
 
 if __name__ == "__main__":

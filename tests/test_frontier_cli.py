@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -70,6 +71,27 @@ class FrontierCliTests(unittest.TestCase):
         for arguments in ((), ("evaluate",), ("unknown",), ("evaluate", "--input"), ("template", "extra")):
             with self.subTest(arguments=arguments):
                 self.assert_cli_error(run_cli(*arguments))
+
+    def test_argument_errors_do_not_import_planner_and_broken_import_is_clean(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            copied_cli = root / "frontier_cli.py"
+            shutil.copy2(SCRIPT, copied_cli)
+            invalid = subprocess.run(
+                [sys.executable, "-B", str(copied_cli), "unknown"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assert_cli_error(invalid)
+            (root / "frontier_planner.py").write_text("this is not python", encoding="utf-8")
+            broken = subprocess.run(
+                [sys.executable, "-B", str(copied_cli), "template"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assert_cli_error(broken)
 
     def test_missing_and_non_utf8_files_are_one_line_errors(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

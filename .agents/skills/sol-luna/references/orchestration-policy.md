@@ -45,7 +45,7 @@ Do not infer that the child's default current directory equals the target reposi
 
 ## Rolling execution
 
-Maintain `ready`, `awaiting review`, and `approved repair` queues. Dispatch ready non-conflicting work within the writer cap. While Luna runs, Sol performs only Sol-owned critical-path work: architecture, acceptance design, integration preparation, or review of another frozen candidate. Reuse retained worker context only when it saves more than it biases review.
+Maintain `ready`, `awaiting review`, and `approved repair` queues. An approved same-Luna repair occupies the Luna writer frontier before new Luna dispatch; Sol-owned ready work and review may still advance. Dispatch other ready non-conflicting work within the writer cap. While Luna runs, Sol performs only Sol-owned critical-path work: architecture, acceptance design, integration preparation, or review of another frozen candidate. Reuse retained worker context only when it saves more than it biases review.
 
 The normal production shape is one Sol controller plus one active Luna writer. Reuse that Luna across adjacent packages when the domain, interfaces, and assumptions stay stable so retained context amortizes reload cost; switch when the domain, assumptions, or need for independence changes. Add a writer only when the policy cap permits it and the writer's marginal net substitution remains positive after added coordination, review, integration, and recovery. Sol concurrently advances disjoint valuable work, then drains ready-package, review, integration, dispatch, and acceptance queues; it never builds a shadow implementation of Luna-owned work. Every unit is costed once. An all-Luna allocation may record `WAIT_ALLOWED` only when all five controller queue counts are zero.
 

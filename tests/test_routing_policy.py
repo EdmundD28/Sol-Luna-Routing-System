@@ -189,7 +189,12 @@ def v5_request() -> dict:
 
 class RoutingPolicyTests(unittest.TestCase):
     def test_direct_policy_mapping_is_strictly_validated_without_mutation(self) -> None:
-        for field, value in (("maximum_active_luna_writers", None), ("maximum_duplicate_work_fraction", True)):
+        for field, value in (
+            ("maximum_active_luna_writers", None),
+            ("maximum_duplicate_work_fraction", True),
+            ("repair_precedes_new_luna_dispatch", None),
+            ("repair_precedes_new_luna_dispatch", False),
+        ):
             malformed = dict(POLICY)
             malformed.pop(field, None)
             if value is not None:

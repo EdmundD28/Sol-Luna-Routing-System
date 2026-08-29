@@ -144,6 +144,8 @@ def validate_policy_mapping(source: Mapping[str, Any]) -> dict[str, Any]:
     integer(policy.get("maximum_initial_writers"), "maximum_initial_writers", minimum=1)
     integer(policy.get("maximum_active_luna_writers"), "maximum_active_luna_writers", minimum=1)
     finite_number(policy.get("maximum_duplicate_work_fraction"), "maximum_duplicate_work_fraction", maximum=1.0)
+    if policy.get("repair_precedes_new_luna_dispatch") is not True:
+        raise PolicyError("repair_precedes_new_luna_dispatch must be true")
     integer(policy.get("parallel_review_minimum_pairs"), "parallel_review_minimum_pairs", minimum=1)
     budget = require_object(policy.get("rework_budget"), "rework_budget")
     focused_repairs = integer(budget.get("focused_repairs"), "rework_budget.focused_repairs", minimum=1)

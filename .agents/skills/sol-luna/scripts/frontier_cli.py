@@ -9,36 +9,49 @@ import importlib.util
 import json
 import sys
 from pathlib import Path
+from types import ModuleType
 from typing import Any
 
 
-PLANNER_PATH = Path(__file__).with_name("frontier_planner.py")
-SPEC = importlib.util.spec_from_file_location("sol_luna_frontier_planner", PLANNER_PATH)
-if SPEC is None or SPEC.loader is None:  # pragma: no cover - import machinery invariant
-    raise RuntimeError("cannot load sibling frontier planner")
-PLANNER = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(PLANNER)
-FrontierError = PLANNER.FrontierError
+class FrontierCliError(ValueError):
+    """The command line or serialized input cannot be processed safely."""
+
+
+def _load_planner() -> ModuleType:
+    path = Path(__file__).with_name("frontier_planner.py")
+    try:
+        spec = importlib.util.spec_from_file_location("sol_luna_frontier_planner", path)
+        if spec is None or spec.loader is None:
+            raise ImportError("no module loader")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        if not callable(getattr(module, "template", None)) or not callable(
+            getattr(module, "plan", None)
+        ):
+            raise ImportError("planner interface is incomplete")
+        return module
+    except Exception as exc:
+        raise FrontierCliError(f"cannot load sibling frontier planner: {exc}") from exc
 
 
 def _unique_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     result: dict[str, Any] = {}
     for key, value in pairs:
         if key in result:
-            raise FrontierError(f"duplicate JSON key: {key}")
+            raise FrontierCliError(f"duplicate JSON key: {key}")
         result[key] = value
     return result
 
 
 def _reject_constant(value: str) -> None:
-    raise FrontierError(f"non-finite JSON constant is not allowed: {value}")
+    raise FrontierCliError(f"non-finite JSON constant is not allowed: {value}")
 
 
 def _load_json(path: str) -> Any:
     try:
         text = Path(path).read_text(encoding="utf-8")
     except (OSError, UnicodeError) as exc:
-        raise FrontierError(f"cannot read input file: {exc}") from exc
+        raise FrontierCliError(f"cannot read input file: {exc}") from exc
     try:
         return json.loads(
             text,
@@ -46,7 +59,7 @@ def _load_json(path: str) -> Any:
             parse_constant=_reject_constant,
         )
     except json.JSONDecodeError as exc:
-        raise FrontierError(f"invalid JSON: {exc}") from exc
+        raise FrontierCliError(f"invalid JSON: {exc}") from exc
 
 
 def _emit(value: Any) -> None:
@@ -81,19 +94,22 @@ def main(argv=None) -> int:
 
     arguments = list(sys.argv[1:] if argv is None else argv)
     try:
+        planner = None
         if arguments == ["template"]:
-            output = PLANNER.template()
+            planner = _load_planner()
+            output = planner.template()
         elif len(arguments) == 3 and arguments[:2] == ["evaluate", "--input"]:
             if not isinstance(arguments[2], str) or not arguments[2]:
-                raise FrontierError("input file path must be non-empty")
-            output = PLANNER.plan(_load_json(arguments[2]))
+                raise FrontierCliError("input file path must be non-empty")
+            planner = _load_planner()
+            output = planner.plan(_load_json(arguments[2]))
         else:
-            raise FrontierError(
+            raise FrontierCliError(
                 "invalid arguments; expected 'template' or 'evaluate --input FILE'"
             )
         _emit(output)
         return 0
-    except (FrontierError, OSError, UnicodeError, TypeError, ValueError) as exc:
+    except (FrontierCliError, OSError, UnicodeError, TypeError, ValueError) as exc:
         _emit_error(exc)
         return 2
 

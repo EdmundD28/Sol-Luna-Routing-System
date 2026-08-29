@@ -413,7 +413,12 @@ def _repair_is_eligible(package: Mapping[str, Any]) -> bool:
 
 
 def plan(source: Mapping[str, Any]) -> dict:
-    """Validate *source* and return its deterministic replay-only frontier."""
+    """Validate *source* and return its deterministic replay-only frontier.
+
+    Identifier and path arrays are canonical sets: duplicate members are
+    rejected. An eligible same-Luna repair occupies the Luna writer frontier
+    before any new retained-domain envelope is offered.
+    """
 
     normalized, fingerprint = _validate(source)
     packages = normalized["packages"]
@@ -457,7 +462,7 @@ def plan(source: Mapping[str, Any]) -> dict:
     repair = sorted(package["package_id"] for package in packages if _repair_is_eligible(package))
 
     luna_envelope = None
-    if len(running_luna) < normalized["writer_cap"] and eligible_luna:
+    if not repair and len(running_luna) < normalized["writer_cap"] and eligible_luna:
         domains: dict[str, list[dict[str, Any]]] = {}
         for package in eligible_luna:
             domains.setdefault(package["domain_id"], []).append(package)
