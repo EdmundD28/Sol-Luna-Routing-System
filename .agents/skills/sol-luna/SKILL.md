@@ -1,61 +1,41 @@
 ---
 name: sol-luna
-description: "Run an explicit, evidence-driven Sol-Luna delivery workflow that predicts whether bounded Luna execution will reduce accepted-result credits and elapsed time without lowering quality. Use only when the user invokes $sol-luna; SOL_ONLY remains valid."
+description: "Run a cost-aware Sol-led workflow that uses bounded GPT-5.6 Luna work only when equal-quality accepted delivery is expected to consume less included-plan allowance and no more elapsed time than Sol-only."
 ---
 
-# Sol-Luna Delivery System
+# Sol-Luna Delivery
 
-Sol is accountable; Luna executes bounded work. Optimize Luna's **net substitution of expensive Sol work**, not activity, calls, workers, or raw tokens. Quality and safety are hard gates; among accepted routes, minimize included-plan allowance before elapsed time. Purchased-credit estimates never replace matched five-hour readings.
+Sol remains accountable; Luna substitutes expensive Sol implementation. Quality and safety are hard gates. Among accepted routes, minimize included-plan allowance before elapsed time. Diagnostic credits, prices, bytes, and tokens never replace matched five-hour readings.
 
-## Route before dispatch
+## Route economically
 
-Record `SOL_ONLY` or `SOL_LUNA` before the first worker. For material work, read [references/orchestration-policy.md](references/orchestration-policy.md), estimate the complete task, and run:
+Record `SOL_ONLY` or `SOL_LUNA` before dispatch. For material work, freeze one complete-task estimate and run the commands below. Resolve the interpreter once; if `python` is absent, use the bundled Python path returned by the workspace dependency loader instead of claiming Python is missing.
 
 ```text
 python .agents/skills/sol-luna/scripts/net_substitution.py evaluate --input ALLOCATION.json
 python .agents/skills/sol-luna/scripts/routing_policy.py evaluate --input ROUTE.json
 ```
 
-The versioned [routing policy](references/routing-policy.v1.json) checks effort, quality, cost, and time but never dispatches automatically. Unknowns retain work in Sol or justify a bounded read-only scout.
+Compare `SOL_ONLY`, one complete-Luna envelope, and any useful mixed allocation. Include complete Luna only when authority, sandbox, exclusive ownership, and deterministic acceptance allow it; otherwise retain work in Sol or use one bounded read-only scout. Calls, packages, actions, and writer count are not savings.
 
-Always evaluate one complete-Luna envelope when ownership, authority, and deterministic acceptance allow it. Compare that candidate with mixed allocations and `SOL_ONLY`; do not retain Sol implementation merely to keep Sol busy or manufacture overlap. Sol implementation is justified only when the complete-Luna candidate fails a concrete quality, defect, authority, cost, or time gate. Calibrate Sol planning, coordination, review, integration, and replay from observed controller evidence when available, not optimistic prose.
+Do not read [references/orchestration-policy.md](references/orchestration-policy.md) on the normal path. Load it when either command errors or lacks required evidence, a high-risk/High+ critical-path/ownership/rework/reclaim decision activates, or a formal evidence report needs the detailed contract. A result with no eligible Luna candidate remains `SOL_ONLY`. Shared-interface, high-risk, or High+ critical-path work without external quality evidence bound to the task family, actual Luna effort, allocation shape, and acceptance suite must remain `SOL_ONLY`/`HOLD_SOL_ONLY`; schema-5 compatibility output, self-reported probabilities, diagnostic metrics, and policy defaults cannot replace that evidence.
 
-## Select Luna effort
+Choose the lowest evidence-supported effort expected to pass: `luna_worker_low` for mechanical work, `luna_worker_medium` for settled bounded implementation, `luna_worker_high` for complex logic, `luna_worker_xhigh` for difficult debugging/shared interfaces, and `luna_worker_max` only for exceptional uncertainty that decomposition cannot remove. Use `luna_scout` for feasibility and `luna_reviewer` for independent review. High+ critical-path work requires the same-allocation lower effort to be rejected by a quality or defect gate. Never silently substitute another model family; disclose any exact-effort `gpt-5.6-luna` fallback.
 
-Choose the lowest expected accepted-delivery cost among efforts passing every gate; a failed cheap attempt is not required first. Start at the lowest evidence-supported effort. High+ critical-path work needs a same-allocation lower-effort candidate rejected by a quality or defect gate.
+## Freeze one complete envelope
 
-- `luna_worker_low`: mechanical work with cheap authoritative verification (`light` maps to `low`).
-- `luna_worker_medium`: bounded implementation with settled architecture.
-- `luna_worker_high`: complex logic or substantial edge cases.
-- `luna_worker_xhigh`: difficult debugging, shared interfaces, or costly failure.
-- `luna_worker_max`: exceptional reasoning that decomposition cannot simplify.
+Default to one retained Luna writer. Add another only when its marginal substitution stays positive after coordination, review, integration, and recovery. Writers never overlap, Luna never spawns agents, and Sol does not pre-script Luna's internal units.
 
-Use `luna_reviewer` for independent review and `luna_scout` for feasibility. Never silently substitute another model family; disclose an exact-effort `gpt-5.6-luna` fallback.
+For material work, bind the canonical repository root in the envelope, then freeze a schema-2 ownership plan using exact normalized repository-relative paths, interfaces, acceptance IDs, forbidden actions, stop conditions, effort, and repair cap. Assign every responsibility unit and acceptance to exactly one executor; reserve shared/integration files to Sol. Validate before dispatch with `python .agents/skills/sol-luna/scripts/ownership_guard.py check-plan --input OWNERSHIP.json`, then compare the final changed paths with the plan's exact frozen unions; `check-changes` is compatibility-only until it accepts schema 2. Prefer complete-Luna ownership of implementation, integration edits, tests, documentation, and repair. Sol keeps a path-disjoint read-only acceptance lane and never shadow-implements Luna work.
 
-## Freeze one economical envelope
+Reference frozen task and manifest material instead of repeating it. Normal dispatch uses `MAN|<package_ref>` then `RUN`; normal success returns a candidate-digest-bound `OK`. Missing, failed, stale, out-of-scope, or open-risk evidence remains `HOLD`. Only blockers, acceptance failures, ownership conflicts, or material semantic uncertainty expand into prose.
 
-Bind repository root, dependencies, exclusive paths, acceptance IDs, forbidden actions, stop conditions, and one executor per responsibility unit. Production ownership is schema 2; schema 1 is compatibility-only. Validate material plans and changed paths with `scripts/ownership_guard.py`. Writers never overlap.
+## Accept without replay
 
-Default to one active Luna writer and reuse it until the domain, assumptions, or independence need changes. Add a writer only when its marginal net substitution is positive. Calls, packages, actions, and writer count never enter the benefit numerator. Sol does not pre-script Luna's internal units and never shadow-implements Luna work.
+The same Luna runs targeted checks during implementation and one final authoritative suite. If Luna cannot access the authoritative environment, Luna runs causal/targeted checks and Sol runs that environment once. Sol verifies ownership, exact changed paths, candidate digest, causal coverage, reported tests, and diff risk. Use targeted review for clean low-risk work, standard review for ordinary bounded work, and deep review only for high risk, shared interfaces, repair, discrepancy, nondeterminism, security/safety, or failed verification. Sol reruns only the smallest triggered check.
 
-For a complete-Luna envelope, Luna owns implementation, integration edits, tests, documentation, and its repair loop. Sol has a read-only acceptance lane: prepare the smallest risk checklist while Luna works, then check ownership, exact changed paths, specified acceptance, and focused diff risk. Waiting is cheaper than inventing Sol implementation when no useful acceptance work remains.
+Return exact new failures and changed boundaries to the same Luna for at most three focused repairs while positive substitution remains. Each retry needs new failure evidence; never repeat an unchanged correction. Permit at most one evidence-backed effort escalation, then reclaim only the affected responsibility unit. Any Sol edit in Luna scope is a declared replay or reclaim. A common independent referee runs outside both route intervals; Luna-specific planning, review, repair, integration, and rework remain inside `SOL_LUNA`.
 
-Give Luna only the objective, required interfaces, ownership, acceptance, forbidden actions, and evidence it actually needs. Reference frozen material instead of repeating it. Luna must not spawn agents. A structured first handoff may use `scripts/handoff_preflight.py`; `HOLD` remains incomplete. Normal success returns a compact receipt, while failures, conflicts, or material semantic uncertainty may expand.
+Report accepted quality, five-hour and weekly percentage-point changes, elapsed time, Sol rewrites/reclaims, ownership exceptions, and uncertainty. Optional diagnostics in `scripts/` answer specific evidence questions only; they never authorize routing or included-plan conclusions.
 
-## Review, repair, and finish
-
-Use targeted review for clean low-risk work, standard review for ordinary bounded work, and deep review only for shared interfaces, high risk, discrepancy, nondeterminism, failure, or repair. Run the smallest authoritative checks; do not reread or rederive the whole task by default.
-
-Freeze a route-independent repair cap by acceptance claim or baseline weight. Return only exact new failures and changed boundaries to the same Luna while the cap and positive net substitution remain. Sol acceptance is read-only; its Luna-scope edit is a declared replay or reclaim. Repeated implementation shadows the affected responsibility unit. Otherwise repartition, escalate once, or reclaim only the affected unit.
-
-Before completion, Sol verifies the final candidate, identities, fresh acceptance, ownership, and dispositions. A common independent referee runs outside both route intervals; Luna-specific review, integration, replay, and rework remain inside `SOL_LUNA`. Report quality, included-plan readings, elapsed time, Sol rewrites/reclaims, and uncertainty; keep legacy journals read-only.
-
-For a complete-Luna package, the same Luna runs targeted checks during implementation and one full authoritative suite on the final candidate; Sol verifies the candidate snapshot and causal coverage instead of repeating the full suite by default.
-Sol reruns only the smallest triggered check for candidate drift, incomplete evidence, nondeterminism, failure, repair, or material security/platform risk; if Luna cannot access the authoritative environment, Luna performs causal/targeted checks and Sol runs that environment once.
-The compact protocol freezes the full manifest once, then normal communication carries its `MAN|<package_ref>` reference followed by `RUN`/`OK`; only `BLOCK` expands, and this projection is not a second ownership or acceptance authority.
-
-## Optional diagnostics
-
-Use these only when their evidence question exists, not on every successful dispatch. Runtime and billing trust boundaries: [references/evidence-and-runtime.md](references/evidence-and-runtime.md), `scripts/runtime_receipt.py`, `scripts/evidence_ledger.py`, `scripts/phase_tracker.py`. Envelope and lifecycle diagnostics: `scripts/delegation_contract.py` for a schema-2 candidate-bound handoff, `scripts/closure_contract.py`, `scripts/lifecycle_contract.py`, `scripts/native_lifecycle_receipt.py`. Matched experiments: `scripts/matched_eval.py`. A persistent ledger needs an independently supplied claim index bound to each record and receipt; diagnostic credits or tokens cannot convert included-plan percentages. The optional `scripts/communication_audit.py` is an offline descriptive metric only: preparation/reporting transcripts and provider counters stay outside normal messages and measured route intervals, and never dispatch or authorize routing.
-
-Do not commit, push, deploy, install dependencies, delete data, or contact external systems unless the underlying user request separately authorizes that action.
+Do not commit, push, deploy, install, delete data, or contact external systems unless the underlying user request separately authorizes it.
