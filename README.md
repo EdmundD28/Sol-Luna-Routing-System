@@ -37,12 +37,14 @@ Invoke explicitly:
 $sol-luna <substantial task>
 ```
 
-Sol estimates each eligible route before dispatch. Policy `1.12.0` requires at least 80% predicted first-pass acceptance, no predicted final-defect regression, at least 50% expected accepted-cost reduction by default, and no expected elapsed regression. Schema 7 derives an auditable Luna effort floor from coupling and failure surfaces, then requires matching external quality evidence; leaf ownership alone cannot justify Low or Medium. High+ critical-path candidates require a same-allocation lower-effort quality failure in policy order, so XHigh can learn from High and Max can learn from XHigh. The policy still caps incremental Sol-plus-context burden and rejects shadow ownership. It is a route guard; only matched account-meter readings prove subscription-allowance savings.
+Sol estimates each eligible route before dispatch. Policy `1.13.0` requires at least 80% predicted first-pass acceptance, no predicted final-defect regression, at least 50% expected accepted-cost reduction by default, and no expected elapsed regression. Schema 7 derives an auditable Luna effort floor from coupling and failure surfaces, then requires matching external quality evidence. Schema 8 is a narrow cold-start path for one complete-Luna, Low/Medium, low-impact allocation with settled architecture, deterministic acceptance, exclusive ownership, and an empty Sol controller queue. It ignores self-reported quality probabilities and prices every package at execution plus one repair, one terminal Sol recovery, and dependency-closure re-execution. High+ and shared-risk work remains on schema 7 evidence or Sol-only. The policy still caps incremental Sol-plus-context burden and rejects shadow ownership. It is a route guard; only matched account-meter readings prove subscription-allowance savings.
 
 ```powershell
 python .agents/skills/sol-luna/scripts/routing_policy.py template
+python .agents/skills/sol-luna/scripts/routing_policy.py cold-start-template --acceptance-manifest acceptance.json
 python .agents/skills/sol-luna/scripts/routing_policy.py quality-evidence-template
 python .agents/skills/sol-luna/scripts/routing_policy.py evaluate --input route.json --quality-evidence-index quality.json
+python .agents/skills/sol-luna/scripts/routing_policy.py evaluate --input cold-route.json --cold-start-acceptance acceptance.json
 python .agents/skills/sol-luna/scripts/routing_policy.py evaluate --ledger runtime/sol-luna/ledger.jsonl --verified-credit-receipts runtime/sol-luna/verified-credit-receipts.json --input route.json
 python .agents/skills/sol-luna/scripts/routing_policy.py review --input review.json
 python .agents/skills/sol-luna/scripts/routing_policy.py rework --input rework.json
@@ -51,7 +53,7 @@ python .agents/skills/sol-luna/scripts/net_substitution.py template
 ```
 
 The policy is advisory and never launches a worker automatically. Missing estimates stay unknown; Sol can retain the task or run a short read-only scout probe.
-The default schema-7 template keeps quality records in a separate strict index and binds each candidate by content to the same task family, Luna effort, allocation shape, and acceptance-suite digest. Its reasoning profile produces a minimum effort but never auto-selects Max. Placeholder or missing evidence routes to Sol-only. Schema 6 remains compatible without the effort floor; schema 5 is legacy compatibility.
+The default schema-7 template keeps quality records in a separate strict index and binds each candidate by content to the same task family, Luna effort, allocation shape, and acceptance-suite digest. Its reasoning profile produces a minimum effort but never auto-selects Max. Use `cold-start-template` only for the schema-8 bounded path above; the strict external manifest supplies the task family, executable acceptance commands, expected signals, and complete acceptance-ID set, then binds the full route request. Risk classification and cost estimates remain Sol-approved judgments, not tool-proven facts. Schema 6 remains compatible without the effort floor; schema 5 is legacy compatibility.
 
 ## Profiles
 

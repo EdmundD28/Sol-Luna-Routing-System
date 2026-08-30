@@ -28,6 +28,7 @@ PACKAGE_REQUEST_SCHEMAS = {LEGACY_PACKAGES_SCHEMA_VERSION, PACKAGES_SCHEMA_VERSI
 V5_REQUEST_SCHEMA_VERSION = 5
 V6_REQUEST_SCHEMA_VERSION = 6
 V7_REQUEST_SCHEMA_VERSION = 7
+V8_REQUEST_SCHEMA_VERSION = 8
 PACKAGE_ID = re.compile(r"[a-z0-9][a-z0-9-]{0,63}")
 WINDOWS_RESERVED_NAMES = {
     "con",
@@ -69,6 +70,14 @@ class _ExternallyBoundEvidence(dict[str, Any]):
 
 class _ExternallyBoundQualityEvidence(dict[str, dict[str, Any]]):
     """Private marker for quality evidence loaded outside the route request."""
+
+
+class _ExternallyBoundColdStartEvidence(dict[str, Any]):
+    """Private marker for a schema-8 route bound to a frozen acceptance manifest."""
+
+    def __init__(self, source: Mapping[str, Any], *, manifest_path: Path):
+        super().__init__(source)
+        self.manifest_path = manifest_path
 
 
 def finite_number(value: Any, field: str, *, minimum: float = 0.0, maximum: float | None = None) -> float:
@@ -274,6 +283,81 @@ def load_quality_evidence_index(
 
 def canonical_json(document: Mapping[str, Any]) -> bytes:
     return json.dumps(document, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+
+def request_digest(source: Mapping[str, Any]) -> str:
+    return "sha256:" + hashlib.sha256(canonical_json(source)).hexdigest()
+
+
+def cold_start_acceptance_manifest(value: Any) -> dict[str, Any]:
+    source = require_object(value, "cold-start acceptance manifest")
+    reject_unknown_fields(
+        source,
+        {"schema_version", "task_family", "acceptance_contracts"},
+        "cold-start acceptance manifest",
+    )
+    if type(source.get("schema_version")) is not int or source["schema_version"] != 1:
+        raise PolicyError("unsupported cold-start acceptance manifest schema_version")
+    task_family = require_string(source.get("task_family"), "cold-start acceptance manifest.task_family")
+    raw_contracts = source.get("acceptance_contracts")
+    if not isinstance(raw_contracts, list) or not raw_contracts:
+        raise PolicyError("cold-start acceptance manifest.acceptance_contracts must be non-empty")
+    contracts: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for index, raw in enumerate(raw_contracts):
+        prefix = f"cold-start acceptance manifest.acceptance_contracts[{index}]"
+        item = require_object(raw, prefix)
+        reject_unknown_fields(item, {"acceptance_id", "command", "expected_signal"}, prefix)
+        if set(item) != {"acceptance_id", "command", "expected_signal"}:
+            raise PolicyError(f"{prefix} must contain acceptance_id, command, and expected_signal")
+        acceptance_id = require_string(item["acceptance_id"], f"{prefix}.acceptance_id")
+        if not PACKAGE_ID.fullmatch(acceptance_id) or acceptance_id in seen:
+            raise PolicyError(f"{prefix}.acceptance_id must be unique stable hyphen-case")
+        command = item["command"]
+        if not isinstance(command, list) or not command:
+            raise PolicyError(f"{prefix}.command must be a non-empty string array")
+        normalized_command = [
+            require_string(argument, f"{prefix}.command[{position}]")
+            for position, argument in enumerate(command)
+        ]
+        expected_signal = require_string(item["expected_signal"], f"{prefix}.expected_signal")
+        seen.add(acceptance_id)
+        contracts.append({
+            "acceptance_id": acceptance_id,
+            "command": normalized_command,
+            "expected_signal": expected_signal,
+        })
+    return {
+        "schema_version": 1,
+        "task_family": task_family,
+        "acceptance_contracts": sorted(contracts, key=lambda item: item["acceptance_id"]),
+    }
+
+
+def load_cold_start_evidence(
+    path: Path,
+    *,
+    request: Mapping[str, Any],
+) -> _ExternallyBoundColdStartEvidence:
+    try:
+        manifest_bytes = path.read_bytes()
+        document = strict_json_loads(manifest_bytes.decode("utf-8"))
+    except (OSError, UnicodeDecodeError) as exc:
+        raise PolicyError(f"cannot load cold-start acceptance manifest: {exc}") from exc
+    manifest = cold_start_acceptance_manifest(document)
+    task_family = require_string(request.get("task_family"), "task_family")
+    if manifest["task_family"] != task_family:
+        raise PolicyError("cold-start acceptance manifest task_family does not match request")
+    acceptance_contract_ids = [
+        item["acceptance_id"] for item in manifest["acceptance_contracts"]
+    ]
+    return _ExternallyBoundColdStartEvidence({
+        "task_family": task_family,
+        "acceptance_contract_ids": acceptance_contract_ids,
+        "acceptance_suite_digest": "sha256:" + hashlib.sha256(canonical_json(manifest)).hexdigest(),
+        "manifest_source_digest": "sha256:" + hashlib.sha256(manifest_bytes).hexdigest(),
+        "request_digest": request_digest(request),
+    }, manifest_path=path.resolve())
 
 
 def display_round(value: Any) -> Any:
@@ -761,6 +845,30 @@ def package_schedule_v5(
     expected_recovery_credits = sum(item["repair_probability"] * item["repair_credits"] + item["terminal_failure_probability"] * item["terminal_recovery_credits"] for item in packages.values())
     expected_recovery_seconds = sum(item["repair_probability"] * item["repair_seconds"] + item["terminal_failure_probability"] * item["terminal_recovery_seconds"] for item in packages.values())
     depended_on = {dependency for item in packages.values() for dependency in item["depends_on"]}
+    direct_dependents: dict[str, set[str]] = {package_id: set() for package_id in packages}
+    for package_id, item in packages.items():
+        for dependency in item["depends_on"]:
+            direct_dependents[dependency].add(package_id)
+
+    def downstream_closure(package_id: str) -> set[str]:
+        pending = list(direct_dependents[package_id])
+        affected: set[str] = set()
+        while pending:
+            dependent = pending.pop()
+            if dependent in affected:
+                continue
+            affected.add(dependent)
+            pending.extend(direct_dependents[dependent])
+        return affected
+
+    downstream_reexecution_credits = {
+        package_id: sum(packages[dependent]["execution_credits"] for dependent in downstream_closure(package_id))
+        for package_id in packages
+    }
+    downstream_reexecution_seconds = {
+        package_id: sum(packages[dependent]["execution_seconds"] for dependent in downstream_closure(package_id))
+        for package_id in packages
+    }
     luna_package_ids = sorted(item["package_id"] for item in packages.values() if item["executor"] == "LUNA")
     luna_leaf_package_ids = sorted(package_id for package_id in luna_package_ids if package_id not in depended_on)
     luna_critical_path_package_ids = sorted(
@@ -788,8 +896,26 @@ def package_schedule_v5(
         "package_count": len(packages), "effective_writers": min(requested_writers, sum(item["executor"] == "LUNA" for item in packages.values())),
         "scheduled_package_seconds": max(finish.values(), default=0.0),
         "serial_package_seconds": sum(item["execution_seconds"] for item in packages.values()),
+        "execution_package_credits": sum(item["execution_credits"] for item in packages.values()),
         "expected_package_credits": sum(item["execution_credits"] + item["repair_probability"] * item["repair_credits"] + item["terminal_failure_probability"] * item["terminal_recovery_credits"] for item in packages.values()),
         "expected_recovery_credits": expected_recovery_credits, "expected_recovery_seconds": expected_recovery_seconds,
+        # A repair or terminal recovery of an upstream package can stale every
+        # dependent result.  The cold-start bound therefore includes a serial
+        # re-execution of the full downstream closure after each recovery path.
+        # This deliberately sacrifices optimistic overlap until matched
+        # evidence can justify the schema 6/7 probability model.
+        "maximum_recovery_credits": sum(
+            item["repair_credits"]
+            + item["terminal_recovery_credits"]
+            + 2 * downstream_reexecution_credits[package_id]
+            for package_id, item in packages.items()
+        ),
+        "maximum_recovery_seconds": sum(
+            item["repair_seconds"]
+            + item["terminal_recovery_seconds"]
+            + 2 * downstream_reexecution_seconds[package_id]
+            for package_id, item in packages.items()
+        ),
         "first_pass_probability": max(0.0, 1.0 - sum(1.0 - item["first_pass_probability"] for item in packages.values())),
         "final_defect_probability": min(1.0, sum(item["final_defect_probability"] + item["terminal_failure_probability"] for item in packages.values())),
         "baseline_map": baseline, "baseline_sol_credits": sol_baseline_credits, "baseline_sol_seconds": sol_baseline_seconds,
@@ -869,10 +995,11 @@ def evaluate_route(
     *,
     verified_parallel_evidence: Mapping[str, Any] | None = None,
     verified_quality_evidence: Mapping[str, Any] | None = None,
+    verified_cold_start_evidence: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     policy = validate_policy_mapping(require_object(policy, "policy"))
     schema_version = request.get("schema_version")
-    if type(schema_version) is not int or schema_version not in SINGLE_REQUEST_SCHEMAS | PACKAGE_REQUEST_SCHEMAS | {V5_REQUEST_SCHEMA_VERSION, V6_REQUEST_SCHEMA_VERSION, V7_REQUEST_SCHEMA_VERSION}:
+    if type(schema_version) is not int or schema_version not in SINGLE_REQUEST_SCHEMAS | PACKAGE_REQUEST_SCHEMAS | {V5_REQUEST_SCHEMA_VERSION, V6_REQUEST_SCHEMA_VERSION, V7_REQUEST_SCHEMA_VERSION, V8_REQUEST_SCHEMA_VERSION}:
         raise PolicyError("unsupported routing request schema_version")
     reject_unknown_fields(
         request,
@@ -924,8 +1051,10 @@ def evaluate_route(
 
     requested_writers = integer(request.get("requested_writers", 1), "requested_writers", minimum=1)
     quality_evidence_mode = schema_version in {V6_REQUEST_SCHEMA_VERSION, V7_REQUEST_SCHEMA_VERSION}
-    reasoning_floor_mode = schema_version == V7_REQUEST_SCHEMA_VERSION
-    v5_mode = schema_version in {V5_REQUEST_SCHEMA_VERSION, V6_REQUEST_SCHEMA_VERSION, V7_REQUEST_SCHEMA_VERSION}
+    cold_start_mode = schema_version == V8_REQUEST_SCHEMA_VERSION
+    acceptance_bound_mode = quality_evidence_mode or cold_start_mode
+    reasoning_floor_mode = schema_version in {V7_REQUEST_SCHEMA_VERSION, V8_REQUEST_SCHEMA_VERSION}
+    v5_mode = schema_version in {V5_REQUEST_SCHEMA_VERSION, V6_REQUEST_SCHEMA_VERSION, V7_REQUEST_SCHEMA_VERSION, V8_REQUEST_SCHEMA_VERSION}
     package_mode = schema_version in PACKAGE_REQUEST_SCHEMAS or v5_mode
     legacy_schema = schema_version in LEGACY_REQUEST_SCHEMAS
     if schema_version in SINGLE_REQUEST_SCHEMAS and requested_writers > 1:
@@ -939,23 +1068,72 @@ def evaluate_route(
         if not isinstance(contract_ids, list) or not contract_ids or any(type(value) is not str or not value.strip() for value in contract_ids) or len(contract_ids) != len(set(contract_ids)):
             raise PolicyError("acceptance_contract_ids must be a non-empty unique string array")
     evidence_index: Mapping[str, Any] = {}
-    if quality_evidence_mode:
+    if acceptance_bound_mode:
         acceptance_suite_digest = require_digest(
             request.get("acceptance_suite_digest"), "acceptance_suite_digest"
         )
+    if quality_evidence_mode:
         if not isinstance(verified_quality_evidence, _ExternallyBoundQualityEvidence):
             raise PolicyError("quality-evidence routing requires an externally loaded quality evidence index")
         evidence_index = require_object(
             verified_quality_evidence,
             "verified_quality_evidence",
         )
-    elif "acceptance_suite_digest" in request or verified_quality_evidence is not None:
+    elif verified_quality_evidence is not None:
+        raise PolicyError("verified quality evidence requires routing schema 6 or 7")
+    elif not cold_start_mode and "acceptance_suite_digest" in request:
         raise PolicyError("quality evidence requires routing schema 6 or 7")
     reasoning_floor = (
         reasoning_effort_floor(request.get("reasoning_profile"), policy)
         if reasoning_floor_mode
         else None
     )
+    if cold_start_mode:
+        if not isinstance(verified_cold_start_evidence, _ExternallyBoundColdStartEvidence):
+            raise PolicyError("schema 8 requires an externally loaded frozen acceptance manifest")
+        cold_start_evidence = require_object(
+            verified_cold_start_evidence,
+            "verified_cold_start_evidence",
+        )
+        if set(cold_start_evidence) != {
+            "task_family", "acceptance_contract_ids", "acceptance_suite_digest",
+            "manifest_source_digest", "request_digest",
+        }:
+            raise PolicyError("verified_cold_start_evidence has an invalid shape")
+        manifest_path = getattr(verified_cold_start_evidence, "manifest_path", None)
+        if not isinstance(manifest_path, Path):
+            raise PolicyError("verified_cold_start_evidence lacks a re-readable manifest path")
+        try:
+            current_manifest_bytes = manifest_path.read_bytes()
+            current_manifest = cold_start_acceptance_manifest(
+                strict_json_loads(current_manifest_bytes.decode("utf-8"))
+            )
+        except (OSError, UnicodeDecodeError) as exc:
+            raise PolicyError(f"cannot revalidate cold-start acceptance manifest: {exc}") from exc
+        current_source_digest = "sha256:" + hashlib.sha256(current_manifest_bytes).hexdigest()
+        current_content_digest = "sha256:" + hashlib.sha256(canonical_json(current_manifest)).hexdigest()
+        current_contract_ids = [
+            item["acceptance_id"] for item in current_manifest["acceptance_contracts"]
+        ]
+        if current_source_digest != cold_start_evidence.get("manifest_source_digest"):
+            raise PolicyError("cold-start acceptance manifest changed after binding")
+        if current_content_digest != cold_start_evidence.get("acceptance_suite_digest"):
+            raise PolicyError("cold-start acceptance manifest content changed after binding")
+        if current_manifest["task_family"] != task_family:
+            raise PolicyError("cold-start acceptance manifest task_family does not match request")
+        if sorted(current_contract_ids) != sorted(contract_ids):
+            raise PolicyError("cold-start acceptance contract IDs do not match request")
+        if cold_start_evidence.get("task_family") != task_family:
+            raise PolicyError("cold-start manifest task_family does not match request")
+        if sorted(cold_start_evidence.get("acceptance_contract_ids", [])) != sorted(contract_ids):
+            raise PolicyError("cold-start acceptance contract IDs do not match request")
+        if cold_start_evidence.get("acceptance_suite_digest") != acceptance_suite_digest:
+            raise PolicyError("cold-start acceptance_suite_digest does not match manifest content")
+        require_digest(cold_start_evidence.get("manifest_source_digest"), "cold-start manifest source digest")
+        if cold_start_evidence.get("request_digest") != request_digest(request):
+            raise PolicyError("cold-start route request changed after manifest binding")
+    elif verified_cold_start_evidence is not None:
+        raise PolicyError("cold-start evidence requires routing schema 8")
     if not reasoning_floor_mode and "reasoning_profile" in request:
         raise PolicyError("reasoning_profile requires routing schema 7")
     writer_limit = allowed_writers(request, policy, verified_parallel_evidence)
@@ -1059,6 +1237,19 @@ def evaluate_route(
             if v5_mode:
                 active_cap = int(policy.get("maximum_active_luna_writers", 1))
                 schedule = package_schedule_v5(candidate, requested_writers=min(requested_writers, active_cap), prefix=f"luna_candidates[{index}]", baseline_reference=baseline_reference, acceptance_contract_ids=contract_ids)
+                if cold_start_mode:
+                    strictly_positive_fields = (
+                        "execution_credits", "execution_seconds", "repair_credits",
+                        "repair_seconds", "terminal_recovery_credits",
+                        "terminal_recovery_seconds",
+                    )
+                    for package_index, package_item in enumerate(packages_source):
+                        for field in strictly_positive_fields:
+                            if package_item[field] <= 0:
+                                raise PolicyError(
+                                    f"luna_candidates[{index}].packages[{package_index}].{field} "
+                                    "must be positive for schema 8"
+                                )
                 baseline_reference = schedule["baseline_map"] if baseline_reference is None else baseline_reference
                 if not math.isclose(schedule["baseline_sol_credits"], sol["execution_credits"], abs_tol=1e-9) or not math.isclose(schedule["baseline_sol_seconds"], sol["execution_seconds"], abs_tol=1e-9):
                     raise PolicyError("v5 baseline map must exactly match sol_only execution credits and seconds")
@@ -1068,9 +1259,14 @@ def evaluate_route(
             final_defect_probability = schedule["final_defect_probability"]
             package_seconds = schedule["scheduled_package_seconds"]
             serial_package_seconds = schedule["serial_package_seconds"]
-            package_credits = schedule["expected_package_credits"]
-            expected_recovery_seconds = schedule["expected_recovery_seconds"]
-            expected_recovery_credits = schedule["expected_recovery_credits"]
+            if cold_start_mode:
+                package_credits = schedule["execution_package_credits"] + schedule["maximum_recovery_credits"]
+                expected_recovery_seconds = schedule["maximum_recovery_seconds"]
+                expected_recovery_credits = schedule["maximum_recovery_credits"]
+            else:
+                package_credits = schedule["expected_package_credits"]
+                expected_recovery_seconds = schedule["expected_recovery_seconds"]
+                expected_recovery_credits = schedule["expected_recovery_credits"]
             candidate_effective_writers = schedule["effective_writers"]
             sol_luna_overlap_seconds = schedule.get("sol_luna_overlap_seconds", 0.0)
             sol_critical_path_overlap_seconds = schedule.get("sol_critical_path_overlap_seconds", 0.0)
@@ -1129,9 +1325,9 @@ def evaluate_route(
             rejection_reasons.append("legacy_routing_schema_requires_refresh")
         if package_mode and requested_writers > effective_writers:
             rejection_reasons.append("requested_parallelism_exceeds_executable_cap")
-        if first_pass_probability < quality_floor:
+        if not cold_start_mode and first_pass_probability < quality_floor:
             rejection_reasons.append("first_pass_probability_below_floor")
-        if final_defect_probability > sol["final_defect_probability"]:
+        if not cold_start_mode and final_defect_probability > sol["final_defect_probability"]:
             rejection_reasons.append("predicted_defect_rate_regresses")
         if credit_savings < savings_floor:
             rejection_reasons.append("expected_credit_savings_below_floor")
@@ -1156,14 +1352,33 @@ def evaluate_route(
         impact = require_string(candidate.get("failure_impact", "low"), f"luna_candidates[{index}].failure_impact")
         if impact not in {"low", "medium", "high", "critical"}:
             raise PolicyError("failure_impact must be low, medium, high, or critical")
-        if impact in {"high", "critical"} and first_pass_probability < max(quality_floor, 0.9):
+        if cold_start_mode:
+            if len(candidates_source) != 1:
+                rejection_reasons.append("cold_start_requires_single_candidate")
+            if requested_writers != 1:
+                rejection_reasons.append("cold_start_requires_single_writer")
+            if reasoning_floor is None or reasoning_floor["minimum_effort"] != "low" or reasoning_floor["reasons"]:
+                rejection_reasons.append("cold_start_requires_low_risk_reasoning_profile")
+            if effort not in {"low", "medium"}:
+                rejection_reasons.append("cold_start_effort_above_medium")
+            if impact != "low":
+                rejection_reasons.append("cold_start_requires_low_failure_impact")
+            if any(item.get("executor") != "LUNA" for item in candidate.get("packages", [])):
+                rejection_reasons.append("cold_start_requires_complete_luna_allocation")
+            if controller_mode != "WAIT_ALLOWED":
+                rejection_reasons.append("cold_start_requires_empty_controller_queue")
+        elif impact in {"high", "critical"} and first_pass_probability < max(quality_floor, 0.9):
             rejection_reasons.append("high_failure_impact_requires_0.9_first_pass_probability")
         evaluated.append(
             {
                 "effort": effort,
                 "effort_basis": effort_basis,
                 "quality_evidence_id": quality_evidence_id,
-                "quality_evidence_source": quality_evidence["source_kind"] if quality_evidence else None,
+                "quality_evidence_source": (
+                    quality_evidence["source_kind"]
+                    if quality_evidence
+                    else "bounded-cold-start-worst-case" if cold_start_mode else None
+                ),
                 "eligible": not rejection_reasons,
                 "expected_accepted_credits": expected_credits,
                 "expected_accepted_seconds": expected_seconds,
@@ -1172,8 +1387,8 @@ def evaluate_route(
                 "coordination_credit_share": coordination_share,
                 "expected_recovery_credits": round(expected_recovery_credits, 6),
                 "expected_recovery_seconds": round(expected_recovery_seconds, 6),
-                "first_pass_probability": first_pass_probability,
-                "final_defect_probability": final_defect_probability,
+                "first_pass_probability": None if cold_start_mode else first_pass_probability,
+                "final_defect_probability": None if cold_start_mode else final_defect_probability,
                 "serial_package_seconds": serial_package_seconds,
                 "scheduled_package_seconds": package_seconds,
                 "effective_writers": candidate_effective_writers,
@@ -1252,9 +1467,21 @@ def evaluate_route(
         "route": route,
         "selected_luna_effort": selected["effort"] if selected else None,
         "selection_basis": (
-            "lowest expected accepted credits among candidates satisfying quality, defect, savings, and latency gates"
+            "lowest worst-case accepted credits after one repair and terminal Sol recovery"
+            if selected and cold_start_mode
+            else "lowest expected accepted credits among candidates satisfying quality, defect, savings, and latency gates"
             if selected
             else "no Luna candidate satisfied every delivery gate"
+        ),
+        "quality_gate_basis": (
+            "deterministic acceptance plus worst-case repair and terminal recovery"
+            if cold_start_mode
+            else "externally bound task-family evidence" if quality_evidence_mode
+            else "compatibility estimate"
+        ),
+        "cold_start_trust_boundary": (
+            "acceptance manifest content-bound; Sol must approve risk profile and estimates"
+            if cold_start_mode else None
         ),
         "quality_floor": quality_floor,
         "reasoning_effort_floor": reasoning_floor,
@@ -1525,6 +1752,52 @@ def template() -> dict[str, Any]:
     return source
 
 
+def cold_start_template(acceptance_manifest: Mapping[str, Any]) -> dict[str, Any]:
+    manifest = cold_start_acceptance_manifest(acceptance_manifest)
+    acceptance_contract_ids = [
+        item["acceptance_id"] for item in manifest["acceptance_contracts"]
+    ]
+    source = template()
+    source["schema_version"] = V8_REQUEST_SCHEMA_VERSION
+    source["task_family"] = manifest["task_family"]
+    source["acceptance_contract_ids"] = acceptance_contract_ids
+    source["acceptance_suite_digest"] = (
+        "sha256:" + hashlib.sha256(canonical_json(manifest)).hexdigest()
+    )
+    candidate = source["luna_candidates"][0]
+    candidate.pop("quality_evidence_id")
+    candidate["effort"] = "medium"
+    candidate["effort_basis"] = "settled low-risk work with deterministic acceptance"
+    candidate["sol_controller_queue"] = {
+        "ready_packages": 0,
+        "review_items": 0,
+        "integration_items": 0,
+        "dispatch_items": 0,
+        "acceptance_items": 0,
+    }
+    candidate["packages"] = [{
+        "executor": "LUNA",
+        "package_id": "luna-complete",
+        "depends_on": [],
+        "writable_paths": ["src"],
+        "critical_path": True,
+        "acceptance_ids": acceptance_contract_ids,
+        "baseline_sol_credits": 100,
+        "baseline_sol_seconds": 900,
+        "execution_credits": 15,
+        "execution_seconds": 400,
+        "first_pass_probability": 1.0,
+        "repair_probability": 0.0,
+        "repair_credits": 2,
+        "repair_seconds": 30,
+        "terminal_failure_probability": 0.0,
+        "terminal_recovery_credits": 5,
+        "terminal_recovery_seconds": 60,
+        "final_defect_probability": 0.0,
+    }]
+    return source
+
+
 def quality_evidence_template() -> dict[str, Any]:
     source = template()
     candidate = source["luna_candidates"][0]
@@ -1615,6 +1888,8 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--policy", type=Path, default=DEFAULT_POLICY)
     sub = result.add_subparsers(dest="command", required=True)
     sub.add_parser("template")
+    cold_start = sub.add_parser("cold-start-template")
+    cold_start.add_argument("--acceptance-manifest", required=True, type=Path)
     sub.add_parser("quality-evidence-template")
     sub.add_parser("fingerprint")
     evaluate = sub.add_parser("evaluate")
@@ -1622,6 +1897,7 @@ def parser() -> argparse.ArgumentParser:
     evaluate.add_argument("--ledger", type=Path)
     evaluate.add_argument("--verified-credit-receipts", type=Path)
     evaluate.add_argument("--quality-evidence-index", type=Path)
+    evaluate.add_argument("--cold-start-acceptance", type=Path)
     for name in ("review", "rework"):
         command = sub.add_parser(name)
         command.add_argument("--input", required=True, type=Path)
@@ -1636,6 +1912,10 @@ def main() -> int:
         policy = load_policy(args.policy)
         if args.command == "template":
             output = template()
+        elif args.command == "cold-start-template":
+            output = cold_start_template(
+                strict_json_loads(args.acceptance_manifest.read_text(encoding="utf-8"))
+            )
         elif args.command == "quality-evidence-template":
             output = quality_evidence_template()
         elif args.command == "fingerprint":
@@ -1659,6 +1939,14 @@ def main() -> int:
                     if args.quality_evidence_index
                     else None
                 )
+                verified_cold_start = (
+                    load_cold_start_evidence(
+                        args.cold_start_acceptance,
+                        request=source,
+                    )
+                    if args.cold_start_acceptance
+                    else None
+                )
                 verified_evidence = (
                     verified_parallel_evidence_from_ledger(
                         args.ledger,
@@ -1674,6 +1962,7 @@ def main() -> int:
                     policy,
                     verified_parallel_evidence=verified_evidence,
                     verified_quality_evidence=verified_quality,
+                    verified_cold_start_evidence=verified_cold_start,
                 )
             elif args.command == "review":
                 output = review_depth(source)

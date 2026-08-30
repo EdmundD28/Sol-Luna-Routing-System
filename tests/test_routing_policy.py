@@ -28,6 +28,7 @@ assert FIXTURE_SPEC and FIXTURE_SPEC.loader
 FIXTURES = importlib.util.module_from_spec(FIXTURE_SPEC)
 FIXTURE_SPEC.loader.exec_module(FIXTURES)
 LEDGER = FIXTURES.LEDGER
+COLD_START_TEMP = tempfile.TemporaryDirectory()
 
 
 def request() -> dict:
@@ -241,6 +242,72 @@ def schema7_request(profile: dict | None = None, *, effort: str = "medium") -> t
         {key: value for key, value in evidence.items() if key != "evidence_digest"}
     )
     return source, evidence
+
+
+def schema8_request() -> dict:
+    source = v5_request()
+    source["schema_version"] = 8
+    manifest = schema8_manifest(source["acceptance_contract_ids"])
+    source["acceptance_suite_digest"] = _sha256_json(
+        ROUTING.cold_start_acceptance_manifest(manifest)
+    )
+    source["reasoning_profile"] = schema7_profile()
+    candidate = source["luna_candidates"][0]
+    candidate["effort"] = "medium"
+    candidate["effort_basis"] = "settled low-risk work with deterministic acceptance"
+    candidate["sol_controller_queue"] = {
+        "ready_packages": 0,
+        "review_items": 0,
+        "integration_items": 0,
+        "dispatch_items": 0,
+        "acceptance_items": 0,
+    }
+    for package_item in candidate["packages"]:
+        package_item["executor"] = "LUNA"
+        package_item["first_pass_probability"] = 1.0
+        package_item["repair_probability"] = 0.0
+        package_item["repair_credits"] = 1
+        package_item["repair_seconds"] = 5
+        package_item["terminal_failure_probability"] = 0.0
+        package_item["terminal_recovery_credits"] = 1
+        package_item["terminal_recovery_seconds"] = 5
+        package_item["final_defect_probability"] = 0.0
+    return source
+
+
+def schema8_manifest(acceptance_ids: list[str] | None = None) -> dict:
+    ids = acceptance_ids or ["accept-core", "accept-tests"]
+    return {
+        "schema_version": 1,
+        "task_family": "bounded-feature",
+        "acceptance_contracts": [
+            {
+                "acceptance_id": acceptance_id,
+                "command": ["python", "-m", "unittest", acceptance_id],
+                "expected_signal": "exit 0",
+            }
+            for acceptance_id in ids
+        ],
+    }
+
+
+def bound_cold_start(source: dict, manifest: dict | None = None) -> dict:
+    normalized = ROUTING.cold_start_acceptance_manifest(
+        manifest or schema8_manifest(source["acceptance_contract_ids"])
+    )
+    manifest_bytes = ROUTING.canonical_json(normalized)
+    manifest_name = hashlib.sha256(manifest_bytes).hexdigest() + ".json"
+    manifest_path = Path(COLD_START_TEMP.name) / manifest_name
+    manifest_path.write_bytes(manifest_bytes)
+    return ROUTING.load_cold_start_evidence(manifest_path, request=source)
+
+
+def evaluate_schema8(source: dict, manifest: dict | None = None) -> dict:
+    return ROUTING.evaluate_route(
+        source,
+        POLICY,
+        verified_cold_start_evidence=bound_cold_start(source, manifest),
+    )
 
 
 def bound_quality(source: dict, *evidence: dict) -> dict:
@@ -1563,6 +1630,215 @@ class RoutingPolicyTests(unittest.TestCase):
             ROUTING.evaluate_route(schema6, POLICY, verified_quality_evidence=bound_quality(schema6, evidence6))["route"],
             "SOL_LUNA",
         )
+
+    def test_schema8_bounded_cold_start_uses_worst_case_without_quality_index(self) -> None:
+        source = schema8_request()
+        before = json.loads(json.dumps(source))
+        result = evaluate_schema8(source)
+        self.assertEqual(source, before)
+        self.assertEqual(result["route"], "SOL_LUNA")
+        self.assertEqual(result["selected_luna_effort"], "medium")
+        self.assertEqual(
+            result["quality_gate_basis"],
+            "deterministic acceptance plus worst-case repair and terminal recovery",
+        )
+        selected = result["candidates"][0]
+        self.assertEqual(selected["quality_evidence_source"], "bounded-cold-start-worst-case")
+        self.assertIsNone(selected["first_pass_probability"])
+        self.assertIsNone(selected["final_defect_probability"])
+        self.assertEqual(selected["expected_accepted_credits"], 48.0)
+        self.assertEqual(selected["expected_accepted_seconds"], 947.0)
+        self.assertFalse(result["automatic_execution_allowed"])
+
+    def test_schema8_cli_template_is_evaluable_without_quality_index(self) -> None:
+        manifest = schema8_manifest()
+        source = ROUTING.cold_start_template(manifest)
+        self.assertEqual(source["schema_version"], 8)
+        self.assertNotIn("quality_evidence_id", source["luna_candidates"][0])
+        result = evaluate_schema8(source, manifest)
+        self.assertIn(result["route"], {"SOL_ONLY", "SOL_LUNA"})
+        self.assertEqual(result["quality_gate_basis"], "deterministic acceptance plus worst-case repair and terminal recovery")
+        self.assertIn("Sol must approve", result["cold_start_trust_boundary"])
+
+    def test_schema8_loader_binds_manifest_ids_content_and_request(self) -> None:
+        source = schema8_request()
+        manifest = schema8_manifest(source["acceptance_contract_ids"])
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "acceptance.json"
+            path.write_text(json.dumps(manifest), encoding="utf-8")
+            evidence = ROUTING.load_cold_start_evidence(path, request=source)
+            result = ROUTING.evaluate_route(
+                source,
+                POLICY,
+                verified_cold_start_evidence=evidence,
+            )
+            self.assertEqual(result["route"], "SOL_LUNA")
+
+            changed = json.loads(json.dumps(source))
+            changed["coordination"]["sol_review"]["credits"] += 1
+            with self.assertRaisesRegex(ROUTING.PolicyError, "route request changed after manifest binding"):
+                ROUTING.evaluate_route(
+                    changed,
+                    POLICY,
+                    verified_cold_start_evidence=evidence,
+                )
+
+            manifest["acceptance_contracts"][0]["command"].append("--changed")
+            path.write_text(json.dumps(manifest), encoding="utf-8")
+            with self.assertRaisesRegex(ROUTING.PolicyError, "manifest changed after binding"):
+                ROUTING.evaluate_route(
+                    source,
+                    POLICY,
+                    verified_cold_start_evidence=evidence,
+                )
+
+    def test_schema8_rejects_missing_plain_malformed_or_mismatched_manifest(self) -> None:
+        source = schema8_request()
+        with self.assertRaisesRegex(ROUTING.PolicyError, "externally loaded frozen acceptance manifest"):
+            ROUTING.evaluate_route(source, POLICY)
+        with self.assertRaisesRegex(ROUTING.PolicyError, "externally loaded frozen acceptance manifest"):
+            ROUTING.evaluate_route(
+                source,
+                POLICY,
+                verified_cold_start_evidence=dict(bound_cold_start(source)),
+            )
+
+        malformed = schema8_manifest(source["acceptance_contract_ids"])
+        malformed["acceptance_contracts"][0].pop("expected_signal")
+        mismatched = schema8_manifest([source["acceptance_contract_ids"][0]])
+        with tempfile.TemporaryDirectory() as directory:
+            malformed_path = Path(directory) / "malformed.json"
+            malformed_path.write_text(json.dumps(malformed), encoding="utf-8")
+            with self.assertRaisesRegex(ROUTING.PolicyError, "must contain acceptance_id"):
+                ROUTING.load_cold_start_evidence(malformed_path, request=source)
+
+            mismatch_path = Path(directory) / "mismatch.json"
+            mismatch_path.write_text(json.dumps(mismatched), encoding="utf-8")
+            evidence = ROUTING.load_cold_start_evidence(mismatch_path, request=source)
+            with self.assertRaisesRegex(ROUTING.PolicyError, "contract IDs do not match request"):
+                ROUTING.evaluate_route(
+                    source,
+                    POLICY,
+                    verified_cold_start_evidence=evidence,
+                )
+
+    def test_schema8_rejects_zero_costs_and_multiple_candidates(self) -> None:
+        for field in (
+            "execution_credits", "execution_seconds", "repair_credits",
+            "repair_seconds", "terminal_recovery_credits", "terminal_recovery_seconds",
+        ):
+            source = schema8_request()
+            source["luna_candidates"][0]["packages"][0][field] = 0
+            with self.subTest(field=field), self.assertRaisesRegex(
+                ROUTING.PolicyError, "must be positive for schema 8"
+            ):
+                evaluate_schema8(source)
+
+        source = schema8_request()
+        second = json.loads(json.dumps(source["luna_candidates"][0]))
+        second["allocation_id"] = "allocation-second"
+        source["luna_candidates"].append(second)
+        result = evaluate_schema8(source)
+        self.assertEqual(result["route"], "SOL_ONLY")
+        self.assertTrue(all(
+            "cold_start_requires_single_candidate" in candidate["rejection_reasons"]
+            for candidate in result["candidates"]
+        ))
+
+    def test_schema8_worst_case_cost_and_time_are_hard_gates(self) -> None:
+        cost = schema8_request()
+        cost["luna_candidates"][0]["packages"][0]["repair_credits"] += 3
+        cost_result = evaluate_schema8(cost)
+        self.assertEqual(cost_result["route"], "SOL_ONLY")
+        self.assertIn(
+            "expected_credit_savings_below_floor",
+            cost_result["candidates"][0]["rejection_reasons"],
+        )
+
+        elapsed = schema8_request()
+        elapsed["luna_candidates"][0]["packages"][0]["terminal_recovery_seconds"] += 100
+        elapsed_result = evaluate_schema8(elapsed)
+        self.assertEqual(elapsed_result["route"], "SOL_ONLY")
+        self.assertIn(
+            "expected_elapsed_time_regresses",
+            elapsed_result["candidates"][0]["rejection_reasons"],
+        )
+
+    def test_schema8_upstream_recovery_reexecutes_downstream_closure(self) -> None:
+        source = schema8_request()
+        packages = source["luna_candidates"][0]["packages"]
+        upstream, downstream = packages
+        downstream["depends_on"] = [upstream["package_id"]]
+        base = evaluate_schema8(source)["candidates"][0]
+        downstream_execution_credits = downstream["execution_credits"]
+        downstream_execution_seconds = downstream["execution_seconds"]
+        self.assertEqual(
+            base["expected_recovery_credits"],
+            4 + 2 * downstream_execution_credits,
+        )
+        self.assertEqual(
+            base["expected_recovery_seconds"],
+            20 + 2 * downstream_execution_seconds,
+        )
+        self.assertIn(
+            "expected_credit_savings_below_floor",
+            base["rejection_reasons"],
+        )
+
+    def test_schema8_optimistic_probabilities_cannot_reduce_worst_case(self) -> None:
+        optimistic = schema8_request()
+        pessimistic = schema8_request()
+        for package_item in pessimistic["luna_candidates"][0]["packages"]:
+            package_item["first_pass_probability"] = 0.0
+            package_item["repair_probability"] = 1.0
+            package_item["final_defect_probability"] = 1.0
+        optimistic_result = evaluate_schema8(optimistic)["candidates"][0]
+        pessimistic_result = evaluate_schema8(pessimistic)["candidates"][0]
+        self.assertEqual(
+            optimistic_result["expected_accepted_credits"],
+            pessimistic_result["expected_accepted_credits"],
+        )
+        self.assertEqual(
+            optimistic_result["expected_accepted_seconds"],
+            pessimistic_result["expected_accepted_seconds"],
+        )
+
+    def test_schema8_rejects_nonbounded_exploration_shapes(self) -> None:
+        cases = []
+        nondeterministic = schema8_request()
+        nondeterministic["reasoning_profile"]["deterministic_acceptance"] = False
+        cases.append((nondeterministic, "cold_start_requires_low_risk_reasoning_profile"))
+        high_effort = schema8_request()
+        high_effort["luna_candidates"][0]["effort"] = "high"
+        cases.append((high_effort, "cold_start_effort_above_medium"))
+        medium_impact = schema8_request()
+        medium_impact["luna_candidates"][0]["failure_impact"] = "medium"
+        cases.append((medium_impact, "cold_start_requires_low_failure_impact"))
+        mixed = schema8_request()
+        mixed["luna_candidates"][0]["packages"][0]["executor"] = "SOL"
+        cases.append((mixed, "cold_start_requires_complete_luna_allocation"))
+        multiwriter = schema8_request()
+        multiwriter["requested_writers"] = 2
+        cases.append((multiwriter, "cold_start_requires_single_writer"))
+        queued = schema8_request()
+        queued["luna_candidates"][0]["sol_controller_queue"]["acceptance_items"] = 1
+        cases.append((queued, "cold_start_requires_empty_controller_queue"))
+        for source, reason in cases:
+            with self.subTest(reason=reason):
+                result = evaluate_schema8(source)
+                self.assertEqual(result["route"], "SOL_ONLY")
+                self.assertIn(reason, result["candidates"][0]["rejection_reasons"])
+
+    def test_schema8_cannot_accept_external_quality_index(self) -> None:
+        source = schema8_request()
+        schema7, evidence = schema7_request()
+        with self.assertRaisesRegex(ROUTING.PolicyError, "requires routing schema 6 or 7"):
+            ROUTING.evaluate_route(
+                source,
+                POLICY,
+                verified_quality_evidence=bound_quality(schema7, evidence),
+                verified_cold_start_evidence=bound_cold_start(source),
+            )
 
 
 if __name__ == "__main__":
