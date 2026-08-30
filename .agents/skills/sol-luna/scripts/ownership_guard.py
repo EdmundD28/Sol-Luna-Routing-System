@@ -439,8 +439,80 @@ def check_plan(source: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def check_changes(source: Mapping[str, Any]) -> dict[str, Any]:
+def _check_changes_v2(source: Mapping[str, Any], plan_source: Mapping[str, Any]) -> dict[str, Any]:
+    allowed = {
+        "schema_version", "partition_digest", "partition_id", "changed_paths",
+        "handoff_frozen", "repair_authorized",
+    }
+    require_exact_fields(source, allowed, allowed, "changes")
+    if type(source.get("schema_version")) is not int or source["schema_version"] != SCHEMA_VERSION:
+        raise OwnershipError("unsupported changes schema_version")
+    declared_digest = source.get("partition_digest")
+    if not isinstance(declared_digest, str) or not DIGEST.fullmatch(declared_digest):
+        raise OwnershipError("partition_digest must be sha256 followed by 64 lowercase hex characters")
+    partition_id = require_identifier(source.get("partition_id"), "partition_id")
+    changed = path_list(source.get("changed_paths"), "changed_paths", allow_empty=True)
+    frozen = require_bool(source.get("handoff_frozen"), "handoff_frozen")
+    repair = require_bool(source.get("repair_authorized"), "repair_authorized")
+
+    plan_result = check_plan(plan_source)
+    if (
+        plan_result.get("plan", {}).get("schema_version") != SCHEMA_VERSION
+        or plan_result.get("status") != "PASS"
+        or plan_result.get("plan", {}).get("frozen") is not True
+    ):
+        raise OwnershipError("schema 2 changes require a frozen, passing schema 2 plan")
+    authoritative_digest = plan_result["partition_digest"]
+    normalized_plan = plan_result["plan"]
+    partitions = {item["partition_id"]: item for item in normalized_plan["partitions"]}
+    partition = partitions.get(partition_id)
+    digest_mismatch = declared_digest != authoritative_digest
+    violations: list[str] = []
+    if digest_mismatch:
+        violations.append("partition_digest_mismatch")
+    if partition is None:
+        violations.append("unknown_partition")
+    if partition is None:
+        scope_violations = changed
+    else:
+        scope_violations = [path for path in changed if not contains(partition["paths"], path)]
+    if scope_violations:
+        violations.append("scope_violation")
+    if frozen and changed and not repair:
+        scope_violations.extend(path for path in changed if path not in scope_violations)
+        violations.append("handoff_frozen_without_repair")
+    scope_violations = sorted(set(scope_violations))
+    violations = sorted(set(violations))
+    passed = partition is not None and not digest_mismatch and not scope_violations
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "partition_id": partition_id,
+        "partition_digest": authoritative_digest,
+        "status": "PASS" if passed else "FAIL",
+        "changed_paths": changed,
+        "scope_violations": scope_violations,
+        "violations": violations,
+        "handoff_frozen": frozen,
+        "repair_authorized": repair,
+        "acceptance_allowed": passed,
+    }
+
+
+def check_changes(
+    source: Mapping[str, Any], plan: Mapping[str, Any] | None = None
+) -> dict[str, Any]:
     source = require_object(source, "changes")
+    version = source.get("schema_version")
+    if type(version) is not int:
+        raise OwnershipError("schema_version must be an integer")
+    if version == SCHEMA_VERSION:
+        if plan is None:
+            raise OwnershipError("schema 2 changes require --plan")
+        return _check_changes_v2(source, require_object(plan, "plan"))
+    if version != LEGACY_SCHEMA_VERSION:
+        raise OwnershipError("unsupported changes schema_version")
+    if plan is not None:
+        raise OwnershipError("schema 1 changes cannot be used with a schema 2 plan")
     allowed = {
         "schema_version", "package_id", "owned_paths", "changed_paths",
         "handoff_frozen", "repair_authorized",
@@ -477,6 +549,8 @@ def parser() -> argparse.ArgumentParser:
     for name in ("check-plan", "check-changes"):
         command = sub.add_parser(name)
         command.add_argument("--input", required=True)
+        if name == "check-changes":
+            command.add_argument("--plan")
     return result
 
 
@@ -485,7 +559,14 @@ def main() -> int:
     try:
         with open(args.input, encoding="utf-8") as handle:
             source = strict_json_load(handle)
-        output = check_plan(source) if args.command == "check-plan" else check_changes(source)
+        if args.command == "check-plan":
+            output = check_plan(source)
+        else:
+            plan = None
+            if args.plan is not None:
+                with open(args.plan, encoding="utf-8") as handle:
+                    plan = strict_json_load(handle)
+            output = check_changes(source, plan)
     except (OSError, UnicodeError, OwnershipError) as exc:
         print(f"ownership guard error: {exc}", file=sys.stderr)
         return 2

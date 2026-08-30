@@ -299,6 +299,90 @@ class OwnershipGuardTests(unittest.TestCase):
         with self.assertRaisesRegex(GUARD.OwnershipError, "prefix-overlapping"):
             GUARD.check_plan(candidate)
 
+    def _changes_v2(self, plan: dict | None = None) -> tuple[dict, dict]:
+        plan = deepcopy(plan or self._plan_v2())
+        checked = GUARD.check_plan(plan)
+        changes = {
+            "schema_version": 2,
+            "partition_digest": checked["partition_digest"],
+            "partition_id": "sol-partition",
+            "changed_paths": ["src/core.py"],
+            "handoff_frozen": False,
+            "repair_authorized": False,
+        }
+        return changes, plan
+
+    def test_schema_two_changes_use_frozen_plan_ownership(self) -> None:
+        changes, plan = self._changes_v2()
+        result = GUARD.check_changes(changes, plan)
+        self.assertEqual(result["status"], "PASS")
+        self.assertEqual(result["partition_id"], "sol-partition")
+        self.assertTrue(result["acceptance_allowed"])
+        self.assertEqual(result["violations"], [])
+
+    def test_schema_two_changes_reject_scope_and_unknown_partition(self) -> None:
+        changes, plan = self._changes_v2()
+        changes["changed_paths"] = ["src/ui.py"]
+        result = GUARD.check_changes(changes, plan)
+        self.assertEqual(result["status"], "FAIL")
+        self.assertEqual(result["scope_violations"], ["src/ui.py"])
+        self.assertEqual(result["violations"], ["scope_violation"])
+        changes["partition_id"] = "missing-partition"
+        unknown = GUARD.check_changes(changes, plan)
+        self.assertEqual(unknown["status"], "FAIL")
+        self.assertEqual(unknown["violations"], ["scope_violation", "unknown_partition"])
+
+    def test_schema_two_changes_reject_digest_and_owned_paths(self) -> None:
+        changes, plan = self._changes_v2()
+        changes["partition_digest"] = "sha256:" + "0" * 64
+        mismatch = GUARD.check_changes(changes, plan)
+        self.assertEqual(mismatch["status"], "FAIL")
+        self.assertEqual(mismatch["violations"], ["partition_digest_mismatch"])
+        changes, plan = self._changes_v2()
+        changes["owned_paths"] = ["src"]
+        with self.assertRaises(GUARD.OwnershipError):
+            GUARD.check_changes(changes, plan)
+
+    def test_schema_two_changes_require_plan_and_strict_paths(self) -> None:
+        changes, plan = self._changes_v2()
+        with self.assertRaises(GUARD.OwnershipError):
+            GUARD.check_changes(changes)
+        invalid_plan = deepcopy(plan)
+        invalid_plan["frozen"] = False
+        with self.assertRaises(GUARD.OwnershipError):
+            GUARD.check_changes(changes, invalid_plan)
+        for unsafe in ("src\\core.py", "src//core.py", "src/../core.py"):
+            changes, plan = self._changes_v2()
+            changes["changed_paths"] = [unsafe]
+            with self.subTest(unsafe=unsafe), self.assertRaises(GUARD.OwnershipError):
+                GUARD.check_changes(changes, plan)
+
+    def test_schema_two_changes_handoff_repair_authorization(self) -> None:
+        changes, plan = self._changes_v2()
+        changes["handoff_frozen"] = True
+        frozen = GUARD.check_changes(changes, plan)
+        self.assertEqual(frozen["status"], "FAIL")
+        self.assertEqual(frozen["violations"], ["handoff_frozen_without_repair"])
+        changes["repair_authorized"] = True
+        self.assertEqual(GUARD.check_changes(changes, plan)["status"], "PASS")
+
+    def test_schema_two_changes_cli_success_and_failure_exit_codes(self) -> None:
+        changes, plan = self._changes_v2()
+        with tempfile.TemporaryDirectory() as temp:
+            changes_path = Path(temp) / "changes.json"
+            plan_path = Path(temp) / "plan.json"
+            changes_path.write_text(json.dumps(changes), encoding="utf-8")
+            plan_path.write_text(json.dumps(plan), encoding="utf-8")
+            command = [sys.executable, str(SCRIPT), "check-changes", "--input", str(changes_path), "--plan", str(plan_path)]
+            completed = subprocess.run(command, check=False, capture_output=True, text=True)
+            self.assertEqual(completed.returncode, 0)
+            self.assertNotIn("Traceback", completed.stderr)
+            changes["changed_paths"] = ["src/ui.py"]
+            changes_path.write_text(json.dumps(changes), encoding="utf-8")
+            completed = subprocess.run(command, check=False, capture_output=True, text=True)
+            self.assertEqual(completed.returncode, 3)
+            self.assertNotIn("Traceback", completed.stderr)
+
     def test_schema_two_route_actor_rules_do_not_fix_allocation_shape(self) -> None:
         plan = self._plan_v2()
         plan["executors"].append({"executor_id": "luna-two", "actor": "LUNA"})

@@ -78,7 +78,7 @@ The Skill uses standard-library Python tools:
 | `routing_policy.py` | Predict route, effort, concurrency, review depth, and rework action |
 | `net_substitution.py` | Predict structural substitution and expected Sol-labor reduction, using the lower value without enabling automatic execution |
 | `closure_contract.py` | Validate complete fine-grained closures, or project the next legal event and compact repair handoff from a frozen live prefix; projection is replay-only and never dispatches work |
-| `ownership_guard.py` | Validate frozen schema-2 executor/unit/acceptance partitions and their deterministic digest while preserving schema-1 plan checks |
+| `ownership_guard.py` | Validate frozen schema-2 partitions, bind final changed paths to their digest, and preserve schema-1 compatibility checks |
 | `lifecycle_contract.py` | Replay package transitions, stale evidence, timeout, repair, escalation, continuation, and acceptance |
 | `native_lifecycle_receipt.py` | Fail closed unless a native runner proves profile loading, requested/observed identity and boundaries, timeout, child continuity, stale rejection, repair, and ownership blocking |
 | `runtime_receipt.py` | Compare expected identity and boundaries with one explicit host session record |
