@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -68,6 +69,13 @@ class CandidateSnapshotTests(unittest.TestCase):
         self.assertEqual(by_path["modified.txt"]["state"], "modified")
         self.assertEqual(by_path["modified.txt"]["content_digest"], "sha256:" + hashlib.sha256(b"new\x00bytes").hexdigest())
         self.assertEqual(by_path["unicode 测试.txt"]["state"], "added")
+
+    def test_build_snapshot_rejects_different_consecutive_captures(self) -> None:
+        first = {"schema_version": 1, "base_commit": "a" * 40, "entries": []}
+        second = {"schema_version": 1, "base_commit": "a" * 40, "entries": [{"path": "new.txt"}]}
+        with patch.object(SNAPSHOT, "_capture_snapshot", side_effect=[first, second]):
+            with self.assertRaisesRegex(SNAPSHOT.SnapshotError, "candidate changed during snapshot"):
+                SNAPSHOT.build_snapshot(self.repo, "a" * 40)
 
     def test_windows_git_path_encoding_preserves_snow_character(self) -> None:
         committed = "space unicode \u96ea.txt"

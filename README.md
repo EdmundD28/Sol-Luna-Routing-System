@@ -78,7 +78,7 @@ The Skill uses standard-library Python tools:
 | `routing_policy.py` | Predict route, effort, concurrency, review depth, and rework action |
 | `net_substitution.py` | Predict structural substitution and expected Sol-labor reduction, using the lower value without enabling automatic execution |
 | `closure_contract.py` | Validate complete fine-grained closures, or project the next legal event and compact repair handoff from a frozen live prefix; projection is replay-only and never dispatches work |
-| `ownership_guard.py` | Validate frozen schema-2 partitions, bind final changed paths to their digest, and preserve schema-1 compatibility checks |
+| `ownership_guard.py` | Validate frozen schema-2 partitions, bind final changed paths to their digest (or fresh candidate snapshot actual paths with `--repo`/`--base`; verify again before accepting if drift is possible), and preserve schema-1 compatibility checks |
 | `lifecycle_contract.py` | Replay package transitions, stale evidence, timeout, repair, escalation, continuation, and acceptance |
 | `native_lifecycle_receipt.py` | Fail closed unless a native runner proves profile loading, requested/observed identity and boundaries, timeout, child continuity, stale rejection, repair, and ownership blocking |
 | `runtime_receipt.py` | Compare expected identity and boundaries with one explicit host session record |
@@ -92,7 +92,7 @@ The Skill uses standard-library Python tools:
 | `credit_model.py` | Estimate purchased credits from classified phase usage and a fingerprinted rate card; never convert included plan percentages |
 | `frontier_planner.py` / `frontier_cli.py` | Project deterministic queues and a repair-first retained-domain Luna envelope without ever dispatching work |
 | `handoff_preflight.py` / `handoff_preflight_cli.py` | Expose candidate-bound missing, failed, stale, scope, and risk evidence before Sol review without ever accepting work |
-| `candidate_snapshot.py` | Read-only content-addressed snapshot and verification of the exact Git candidate |
+| `candidate_snapshot.py` | Read-only content-addressed, double-captured point-in-time snapshot and verification; reverify before accepting if the candidate may drift |
 | `compact_protocol.py` | One-time manifest freeze with strict `MAN` reference and `RUN`/`OK`/`BLOCK` handoff lines |
 | `communication_audit.py` | Optional offline communication diagnostic; transcripts and provider counters are captured outside normal messages and measured route intervals, and never authorize routing or included-plan conclusions |
 

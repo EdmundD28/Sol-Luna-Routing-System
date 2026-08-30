@@ -7,10 +7,12 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import re
 import sys
 from copy import deepcopy
+from pathlib import Path
 from pathlib import PurePosixPath, PureWindowsPath
 from typing import Any, Mapping
 
@@ -99,6 +101,8 @@ def normalize_path(value: Any, field: str) -> str:
     parts = PurePosixPath(raw).parts
     if any(part in {"", ".", ".."} for part in parts):
         raise OwnershipError(f"{field} contains an unsafe path segment")
+    if any(any(0xD800 <= ord(char) <= 0xDFFF for char in part) for part in parts):
+        raise OwnershipError(f"{field} contains an invalid Unicode surrogate")
     if any(part.casefold() in PRIVATE_SEGMENTS for part in parts):
         raise OwnershipError(f"{field} contains a sensitive private path")
     return "/".join(parts)
@@ -439,7 +443,24 @@ def check_plan(source: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def _check_changes_v2(source: Mapping[str, Any], plan_source: Mapping[str, Any]) -> dict[str, Any]:
+def _fresh_candidate_snapshot(repo: str, base: str) -> dict[str, Any]:
+    """Load and invoke the sibling snapshot implementation safely."""
+    path = Path(__file__).with_name("candidate_snapshot.py")
+    try:
+        spec = importlib.util.spec_from_file_location("sol_luna_candidate_snapshot", path)
+        if spec is None or spec.loader is None:
+            raise ImportError("candidate snapshot module cannot be loaded")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module.build_snapshot(repo, base)
+    except Exception as exc:
+        raise OwnershipError(f"candidate snapshot build failed: {exc}") from exc
+
+
+def _check_changes_v2(
+    source: Mapping[str, Any], plan_source: Mapping[str, Any],
+    *, repo: str | None = None, base: str | None = None,
+) -> dict[str, Any]:
     allowed = {
         "schema_version", "partition_digest", "partition_id", "changed_paths",
         "handoff_frozen", "repair_authorized",
@@ -467,9 +488,33 @@ def _check_changes_v2(source: Mapping[str, Any], plan_source: Mapping[str, Any])
     partitions = {item["partition_id"]: item for item in normalized_plan["partitions"]}
     partition = partitions.get(partition_id)
     digest_mismatch = declared_digest != authoritative_digest
+    reported_changed = changed
+    path_source = "reported"
+    authoritative = False
+    snapshot_base = None
+    candidate_digest = None
+    if (repo is None) != (base is None):
+        raise OwnershipError("--repo and --base must be provided together")
+    if repo is not None and base is not None:
+        if not isinstance(base, str) or not re.fullmatch(r"[0-9a-fA-F]{40}|[0-9a-fA-F]{64}", base):
+            raise OwnershipError("--base must be a full Git commit id")
+        snapshot = _fresh_candidate_snapshot(repo, base)
+        snapshot_base = snapshot["base_commit"]
+        if snapshot_base != base.lower():
+            raise OwnershipError("candidate snapshot base does not match --base")
+        candidate_digest = snapshot["candidate_digest"]
+        changed = sorted({entry["path"] for entry in snapshot["entries"]})
+        path_source = "fresh_candidate_snapshot"
+        authoritative = True
+    if authoritative and reported_changed != changed:
+        mismatch = True
+    else:
+        mismatch = False
     violations: list[str] = []
     if digest_mismatch:
         violations.append("partition_digest_mismatch")
+    if mismatch:
+        violations.append("changed_paths_mismatch")
     if partition is None:
         violations.append("unknown_partition")
     if partition is None:
@@ -483,13 +528,18 @@ def _check_changes_v2(source: Mapping[str, Any], plan_source: Mapping[str, Any])
         violations.append("handoff_frozen_without_repair")
     scope_violations = sorted(set(scope_violations))
     violations = sorted(set(violations))
-    passed = partition is not None and not digest_mismatch and not scope_violations
+    passed = partition is not None and not digest_mismatch and not scope_violations and not mismatch
     return {
         "schema_version": SCHEMA_VERSION,
         "partition_id": partition_id,
         "partition_digest": authoritative_digest,
         "status": "PASS" if passed else "FAIL",
         "changed_paths": changed,
+        "reported_changed_paths": reported_changed,
+        "path_source": path_source,
+        "authoritative_paths_verified": authoritative,
+        "base_commit": snapshot_base,
+        "candidate_digest": candidate_digest,
         "scope_violations": scope_violations,
         "violations": violations,
         "handoff_frozen": frozen,
@@ -499,7 +549,8 @@ def _check_changes_v2(source: Mapping[str, Any], plan_source: Mapping[str, Any])
 
 
 def check_changes(
-    source: Mapping[str, Any], plan: Mapping[str, Any] | None = None
+    source: Mapping[str, Any], plan: Mapping[str, Any] | None = None,
+    *, repo: str | None = None, base: str | None = None
 ) -> dict[str, Any]:
     source = require_object(source, "changes")
     version = source.get("schema_version")
@@ -508,11 +559,13 @@ def check_changes(
     if version == SCHEMA_VERSION:
         if plan is None:
             raise OwnershipError("schema 2 changes require --plan")
-        return _check_changes_v2(source, require_object(plan, "plan"))
+        return _check_changes_v2(source, require_object(plan, "plan"), repo=repo, base=base)
     if version != LEGACY_SCHEMA_VERSION:
         raise OwnershipError("unsupported changes schema_version")
     if plan is not None:
         raise OwnershipError("schema 1 changes cannot be used with a schema 2 plan")
+    if repo is not None or base is not None:
+        raise OwnershipError("schema 1 changes cannot use authoritative paths")
     allowed = {
         "schema_version", "package_id", "owned_paths", "changed_paths",
         "handoff_frozen", "repair_authorized",
@@ -551,6 +604,8 @@ def parser() -> argparse.ArgumentParser:
         command.add_argument("--input", required=True)
         if name == "check-changes":
             command.add_argument("--plan")
+            command.add_argument("--repo")
+            command.add_argument("--base")
     return result
 
 
@@ -566,11 +621,12 @@ def main() -> int:
             if args.plan is not None:
                 with open(args.plan, encoding="utf-8") as handle:
                     plan = strict_json_load(handle)
-            output = check_changes(source, plan)
+            output = check_changes(source, plan, repo=args.repo, base=args.base)
     except (OSError, UnicodeError, OwnershipError) as exc:
-        print(f"ownership guard error: {exc}", file=sys.stderr)
+        message = f"ownership guard error: {exc}".encode("ascii", "backslashreplace").decode("ascii")
+        print(message, file=sys.stderr)
         return 2
-    print(json.dumps(output, ensure_ascii=False, indent=2, sort_keys=True, allow_nan=False))
+    print(json.dumps(output, ensure_ascii=True, indent=2, sort_keys=True, allow_nan=False))
     return 0 if output["status"] == "PASS" else 3
 
 

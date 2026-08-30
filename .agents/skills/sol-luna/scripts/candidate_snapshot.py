@@ -388,7 +388,7 @@ def _safe_candidate_path(root: Path, relative: str) -> Path:
     return path
 
 
-def build_snapshot(repo: str | os.PathLike[str], base: str | None = None) -> dict[str, Any]:
+def _capture_snapshot(repo: str | os.PathLike[str], base: str | None = None) -> dict[str, Any]:
     root = _repo_root(repo)
     resolved_base = _resolve_base(root, base)
     object_format = _git(root, ["rev-parse", "--show-object-format"]).decode("utf-8").strip()
@@ -449,6 +449,16 @@ def build_snapshot(repo: str | os.PathLike[str], base: str | None = None) -> dic
     result = {"schema_version": SCHEMA_VERSION, "base_commit": resolved_base, "entries": entries}
     result["candidate_digest"] = candidate_digest(result)
     return result
+
+
+def build_snapshot(repo: str | os.PathLike[str], base: str | None = None) -> dict[str, Any]:
+    """Capture twice so a changing candidate cannot produce a mixed snapshot."""
+    first = _capture_snapshot(repo, base)
+    second = _capture_snapshot(repo, base)
+    comparable = lambda value: {key: value[key] for key in ("schema_version", "base_commit", "entries")}
+    if comparable(first) != comparable(second):
+        raise SnapshotError("candidate changed during snapshot")
+    return second
 
 
 snapshot = build_snapshot

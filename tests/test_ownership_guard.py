@@ -366,6 +366,103 @@ class OwnershipGuardTests(unittest.TestCase):
         changes["repair_authorized"] = True
         self.assertEqual(GUARD.check_changes(changes, plan)["status"], "PASS")
 
+    def test_authoritative_snapshot_rejects_under_and_over_reporting(self) -> None:
+        changes, plan = self._changes_v2()
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / "repo"
+            repo.mkdir()
+            def git(*args: str) -> str:
+                return subprocess.run(
+                    ["git", "-C", str(repo), *args], check=True,
+                    capture_output=True, text=True,
+                ).stdout.strip()
+            git("init", "-q")
+            git("config", "user.email", "test@example.invalid")
+            git("config", "user.name", "Ownership Test")
+            (repo / "src").mkdir()
+            (repo / "src" / "core.py").write_text("old", encoding="utf-8")
+            (repo / "src" / "ui.py").write_text("old", encoding="utf-8")
+            git("add", "--all")
+            git("commit", "-qm", "base")
+            base = git("rev-parse", "HEAD")
+            (repo / "src" / "core.py").write_text("new", encoding="utf-8")
+            changes["changed_paths"] = ["src/core.py"]
+            passing = GUARD.check_changes(changes, plan, repo=str(repo), base=base)
+            self.assertEqual(passing["status"], "PASS")
+            self.assertTrue(passing["authoritative_paths_verified"])
+            self.assertEqual(passing["path_source"], "fresh_candidate_snapshot")
+            self.assertEqual(passing["base_commit"], base.lower())
+            self.assertRegex(passing["candidate_digest"], r"^sha256:[0-9a-f]{64}$")
+            self.assertEqual(passing["reported_changed_paths"], passing["changed_paths"])
+            changes["handoff_frozen"] = True
+            frozen = GUARD.check_changes(changes, plan, repo=str(repo), base=base)
+            self.assertEqual(frozen["status"], "FAIL")
+            self.assertEqual(frozen["violations"], ["handoff_frozen_without_repair"])
+            changes["repair_authorized"] = True
+            repaired = GUARD.check_changes(changes, plan, repo=str(repo), base=base)
+            self.assertEqual(repaired["status"], "PASS")
+            changes["handoff_frozen"] = False
+            changes["repair_authorized"] = False
+            (repo / "src" / "ui.py").write_text("new", encoding="utf-8")
+            changes["changed_paths"] = ["src/core.py"]
+            under = GUARD.check_changes(changes, plan, repo=str(repo), base=base)
+            self.assertEqual(under["status"], "FAIL")
+            self.assertEqual(under["changed_paths"], ["src/core.py", "src/ui.py"])
+            self.assertEqual(under["reported_changed_paths"], ["src/core.py"])
+            self.assertEqual(under["violations"], ["changed_paths_mismatch", "scope_violation"])
+            changes["changed_paths"] = ["src/core.py", "src/ui.py", "tests/extra.py"]
+            over = GUARD.check_changes(changes, plan, repo=str(repo), base=base)
+            self.assertEqual(over["status"], "FAIL")
+            self.assertEqual(over["changed_paths"], ["src/core.py", "src/ui.py"])
+            self.assertEqual(over["scope_violations"], ["src/ui.py"])
+
+    def test_authoritative_cli_pairs_repo_base_and_rejects_invalid_base_without_traceback(self) -> None:
+        changes, plan = self._changes_v2()
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            changes_path = root / "changes.json"
+            plan_path = root / "plan.json"
+            changes_path.write_text(json.dumps(changes), encoding="utf-8")
+            plan_path.write_text(json.dumps(plan), encoding="utf-8")
+            for extra in (("--repo", str(root)), ("--repo", str(root), "--base", "no-such-base")):
+                completed = subprocess.run(
+                    [sys.executable, str(SCRIPT), "check-changes", "--input", str(changes_path),
+                     "--plan", str(plan_path), *extra], capture_output=True, text=True,
+                )
+                self.assertEqual(completed.returncode, 2)
+                self.assertNotIn("Traceback", completed.stderr)
+
+    def test_authoritative_rejects_surrogates_and_non_full_base_without_traceback(self) -> None:
+        changes, plan = self._changes_v2()
+        surrogate = deepcopy(changes)
+        surrogate["changed_paths"] = ["bad\ud800.txt"]
+        with self.assertRaisesRegex(GUARD.OwnershipError, "surrogate"):
+            GUARD.check_changes(surrogate, plan)
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            changes_path = root / "changes.json"
+            plan_path = root / "plan.json"
+            changes_path.write_text(json.dumps(changes), encoding="utf-8")
+            plan_path.write_text(json.dumps(plan), encoding="utf-8")
+            for base in ("HEAD", "abc1234"):
+                completed = subprocess.run(
+                    [sys.executable, str(SCRIPT), "check-changes", "--input", str(changes_path),
+                     "--plan", str(plan_path), "--repo", str(root), "--base", base],
+                    capture_output=True, text=True,
+                )
+                self.assertEqual(completed.returncode, 2)
+                self.assertNotIn("Traceback", completed.stderr)
+            malformed = json.loads(json.dumps(changes))
+            malformed["未知字段"] = True
+            changes_path.write_text(json.dumps(malformed, ensure_ascii=False), encoding="utf-8")
+            completed = subprocess.run(
+                [sys.executable, str(SCRIPT), "check-changes", "--input", str(changes_path),
+                 "--plan", str(plan_path)], capture_output=True, text=True,
+            )
+            self.assertEqual(completed.returncode, 2)
+            self.assertEqual(completed.stdout, "")
+            self.assertNotIn("Traceback", completed.stderr)
+
     def test_schema_two_changes_cli_success_and_failure_exit_codes(self) -> None:
         changes, plan = self._changes_v2()
         with tempfile.TemporaryDirectory() as temp:
