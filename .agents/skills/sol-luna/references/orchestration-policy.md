@@ -63,7 +63,7 @@ When interfaces, ownership, and acceptance are stable, Sol may freeze one outer 
 
 The first handoff preflight is performed by Luna before Sol review, not reconstructed by Sol afterward. It covers the contract's applicable schema/type, boundary, capacity, derived-value, immutability, and error-channel cases, records exact acceptance and probe results, and binds them to the candidate digest. A structured manifest may be projected with `handoff_preflight.py`; any missing, failed, stale, out-of-scope, or open-risk evidence keeps the handoff at `HOLD`. This reduces review rediscovery but does not replace independent acceptance or authorize automatic acceptance.
 
-Validation separation: Luna runs targeted checks during implementation and one full authoritative suite on the final candidate; Sol checks the content-addressed candidate summary and causal mapping (change to risk to acceptance), receipt completeness, and environment/scope gaps, without default full-suite duplication. Sol reruns only the smallest check activated by drift, incomplete evidence, nondeterminism, failure, repair, or material security/platform risk; if Luna lacks the authoritative environment, Luna does causal/targeted checks and Sol runs that environment once. The external common referee remains outside measured route intervals.
+Validation separation: freeze one planned in-route executor for every suite. Luna runs targeted checks during implementation and one full authoritative suite on the final candidate; Sol checks the content-addressed summary and causal mapping, receipt completeness, and environment/scope gaps without repeating a passing suite. If Luna lacks the authoritative environment, Luna does causal checks and Sol runs that suite once. A rerun is an explicit exception activated only by drift, incomplete evidence, nondeterminism, failure, repair, or material security/platform risk, and uses the smallest affected check. The external common referee remains outside measured route intervals.
 
 The compact protocol is a projection: freeze the full manifest once, send/read its `MAN|<package_ref>` reference before `RUN`/`OK`, and expand only `BLOCK`; it does not replace ownership or acceptance authority.
 
@@ -74,10 +74,10 @@ The schema-2 handoff binds the candidate digest, exact changed-path union, every
 ## Risk-proportional review
 
 - `TARGETED`: clean low-risk package, authoritative checks passed, no repair or shared interface. Inspect changed paths and compact diff; verify the authoritative targeted checks.
-- `STANDARD`: ordinary bounded implementation. Inspect the package diff and rerun integration-relevant checks.
-- `DEEP`: high/critical risk, repaired work, shared interfaces, security/safety impact, nondeterministic acceptance, scope discrepancy, or failed verification. Inspect the full diff and affected call paths; run adversarial and regression checks.
+- `STANDARD`: ordinary bounded implementation. Inspect the package diff and its integration risks; rerun only a triggered integration check.
+- `DEEP`: high/critical risk, repaired work, shared interfaces, security/safety impact, nondeterministic acceptance, scope discrepancy, or failed verification. Inspect the full diff and affected call paths; run only the adversarial or regression checks activated by those risks.
 
-Any change to relevant code, generated artifacts, configuration, dependencies, or environment assumptions makes affected validation stale. Refresh only the smallest authoritative evidence needed for the exact final candidate.
+Perform the authoritative ownership check once, after the final suite and the last candidate-changing action. Its `base_commit`, `candidate_digest`, `partition_digest`, and actual paths remain current through read-only review. A write, deletion, rename, permission/file-type/symlink-target change, generated or cleaned file, repair, integration edit, checkout/reset/merge/rebase, or base movement requires recapture; so does inability to establish that none occurred. An environment-only change does not stale the snapshot, but does stale affected acceptance evidence. Refresh only what the exact trigger invalidated.
 
 ## Rework state machine
 

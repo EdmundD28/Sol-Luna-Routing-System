@@ -78,7 +78,7 @@ The Skill uses standard-library Python tools:
 | `routing_policy.py` | Predict route, effort, concurrency, review depth, and rework action |
 | `net_substitution.py` | Predict structural substitution and expected Sol-labor reduction, using the lower value without enabling automatic execution |
 | `closure_contract.py` | Validate complete fine-grained closures, or project the next legal event and compact repair handoff from a frozen live prefix; projection is replay-only and never dispatches work |
-| `ownership_guard.py` | Validate frozen schema-2 partitions, bind final changed paths to their digest (or fresh candidate snapshot actual paths with `--repo`/`--base`; verify again before accepting if drift is possible), and preserve schema-1 compatibility checks |
+| `ownership_guard.py` | Validate frozen schema-2 partitions and bind final actual paths to one post-suite candidate receipt; recapture only after candidate-affecting change |
 | `lifecycle_contract.py` | Replay package transitions, stale evidence, timeout, repair, escalation, continuation, and acceptance |
 | `native_lifecycle_receipt.py` | Fail closed unless a native runner proves profile loading, requested/observed identity and boundaries, timeout, child continuity, stale rejection, repair, and ownership blocking |
 | `runtime_receipt.py` | Compare expected identity and boundaries with one explicit host session record |
@@ -92,7 +92,7 @@ The Skill uses standard-library Python tools:
 | `credit_model.py` | Estimate purchased credits from classified phase usage and a fingerprinted rate card; never convert included plan percentages |
 | `frontier_planner.py` / `frontier_cli.py` | Project deterministic queues and a repair-first retained-domain Luna envelope without ever dispatching work |
 | `handoff_preflight.py` / `handoff_preflight_cli.py` | Expose candidate-bound missing, failed, stale, scope, and risk evidence before Sol review without ever accepting work |
-| `candidate_snapshot.py` | Read-only content-addressed, double-captured point-in-time snapshot and verification; reverify before accepting if the candidate may drift |
+| `candidate_snapshot.py` | Read-only content-addressed, double-captured point-in-time snapshot; reuse through read-only review and reverify only after a drift trigger |
 | `compact_protocol.py` | One-time manifest freeze with strict `MAN` reference and `RUN`/`OK`/`BLOCK` handoff lines |
 | `communication_audit.py` | Optional offline communication diagnostic; transcripts and provider counters are captured outside normal messages and measured route intervals, and never authorize routing or included-plan conclusions |
 
@@ -113,7 +113,7 @@ Execution metrics use half-open intervals `[start, end)`: `executor_execution_un
 
 The matched harness binds each pair to the same starting candidate, task digest, independent acceptance-suite digest, policy fingerprint, and observed runtime identity. It does not launch paid model work. See [runtime and evidence details](.agents/skills/sol-luna/references/evidence-and-runtime.md) and [the orchestration policy](.agents/skills/sol-luna/references/orchestration-policy.md).
 
-Complete-Luna validation uses one Luna implementation loop with targeted checks and one final authoritative full suite; Sol verifies the candidate snapshot and causal coverage, rerunning only the smallest check triggered by drift, incomplete evidence, nondeterminism, failure, repair, or material security/platform risk. If Luna cannot access the authoritative environment, Luna performs causal/targeted checks and Sol runs that environment once; the common external referee remains outside route intervals.
+Complete-Luna validation assigns each suite one in-route executor. Luna normally owns targeted checks and one final authoritative full suite; Sol verifies the post-suite candidate receipt and causal coverage without repeating a passing suite. If Luna cannot access the authoritative environment, Luna performs causal checks and Sol runs that suite once. Only a specific drift, evidence, failure, repair, or risk trigger permits the smallest affected rerun; the common external referee remains outside route intervals.
 
 The compact handoff protocol writes and reads one frozen manifest reference (`MAN|<package_ref>`); normal messages carry that reference followed by `RUN`/`OK`, only `BLOCK` expands, and it remains a projection rather than a second ownership or acceptance authority.
 
