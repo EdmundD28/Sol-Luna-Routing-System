@@ -115,9 +115,9 @@ Execution metrics use half-open intervals `[start, end)`: `executor_execution_un
 
 The matched harness binds each pair to the same starting candidate, task digest, independent acceptance-suite digest, policy fingerprint, and observed runtime identity. It does not launch paid model work. See [runtime and evidence details](.agents/skills/sol-luna/references/evidence-and-runtime.md) and [the orchestration policy](.agents/skills/sol-luna/references/orchestration-policy.md).
 
-Complete-Luna validation assigns each suite one in-route executor. Luna normally owns targeted checks and one final authoritative full suite; Sol verifies the post-suite candidate receipt and causal coverage without repeating a passing suite. If Luna cannot access the authoritative environment, Luna performs causal checks and Sol runs that suite once. Only a specific drift, evidence, failure, repair, or risk trigger permits the smallest affected rerun; the common external referee remains outside route intervals.
+Complete-Luna validation assigns each suite one in-route executor. Luna performs causal/targeted checks while implementing; Sol reviews the candidate receipt, ownership, paths, causal coverage, and risks before the only final full suite, without repeating Luna's checks. The designated executor then runs that suite once. If Luna cannot access the authoritative environment, Luna does causal checks and Sol is the sole full-suite executor. Only a specific drift, evidence, failure, repair, or risk trigger permits the smallest affected rerun; the common external referee remains outside route intervals.
 
-The compact handoff protocol writes and reads one frozen manifest reference (`MAN|<package_ref>`); normal messages carry that reference followed by `RUN`/`OK`, only `BLOCK` expands, and it remains a projection rather than a second ownership or acceptance authority.
+The compact handoff protocol stores one frozen manifest as a shared artifact, starts Luna with `fork_turns="none"`, and sends only its reference (`MAN|<package_ref>`) rather than the manifest body. Normal messages carry `RUN`/`OK`; the same Luna handles focused repairs using only new failure evidence and changed boundaries; only `BLOCK` expands. The protocol remains a projection rather than a second ownership or acceptance authority.
 
 ## Installation lifecycle
 

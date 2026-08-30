@@ -120,6 +120,23 @@ class PackageContractTests(unittest.TestCase):
         ):
             self.assertIn(contract, skill)
 
+    def test_skill_prevents_context_and_full_suite_replay(self) -> None:
+        skill = self.skill()
+        policy = self.policy()
+        readme = self.readme()
+        for contract in (
+            'fork_turns="none"',
+            "never paste its body into model messages",
+            "do not resend the manifest or prior background",
+            "one in-route executor per suite",
+            "before the only final full suite",
+            "without rerunning Luna's checks",
+        ):
+            self.assertIn(contract.casefold(), skill.casefold())
+        self.assertIn("Sol is the sole full-suite executor", skill)
+        self.assertIn("same luna and transmits only new failure evidence", policy.casefold())
+        self.assertIn("The designated executor then runs that suite once", readme)
+
     def test_route_measurement_boundary_is_explicit(self) -> None:
         skill = self.skill()
         self.assertIn("common independent referee runs outside both route intervals", skill)
