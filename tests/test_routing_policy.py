@@ -1722,6 +1722,26 @@ class RoutingPolicyTests(unittest.TestCase):
                     verified_cold_start_evidence=evidence,
                 )
 
+    def test_schema8_cli_rejects_surrogate_manifest_without_traceback(self) -> None:
+        raw_manifest = (
+            '{"schema_version":1,"task_family":"bounded-feature",'
+            '"acceptance_contracts":[{"acceptance_id":"accept-core",'
+            '"command":["python","-m","unittest"],'
+            '"expected_signal":"\\ud800"}]}'
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "surrogate.json"
+            path.write_text(raw_manifest, encoding="utf-8")
+            stderr = io.StringIO()
+            with mock.patch.object(
+                sys,
+                "argv",
+                ["routing_policy.py", "cold-start-template", "--acceptance-manifest", str(path)],
+            ), redirect_stderr(stderr):
+                self.assertEqual(ROUTING.main(), 2)
+        self.assertIn("must be a non-empty single-line string", stderr.getvalue())
+        self.assertNotIn("Traceback", stderr.getvalue())
+
     def test_schema8_rejects_zero_costs_and_multiple_candidates(self) -> None:
         for field in (
             "execution_credits", "execution_seconds", "repair_credits",

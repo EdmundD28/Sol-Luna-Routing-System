@@ -109,7 +109,13 @@ def reject_unknown_fields(source: Mapping[str, Any], allowed: set[str], field: s
 
 
 def require_string(value: Any, field: str) -> str:
-    if not isinstance(value, str) or not value.strip() or "\n" in value or "\r" in value:
+    if (
+        not isinstance(value, str)
+        or not value.strip()
+        or "\n" in value
+        or "\r" in value
+        or any(0xD800 <= ord(character) <= 0xDFFF for character in value)
+    ):
         raise PolicyError(f"{field} must be a non-empty single-line string")
     return value.strip()
 
