@@ -357,6 +357,77 @@ def block_line(manifest: Mapping[str, Any], code: str, reference: str, options: 
     return f"BLOCK|{package}|K={code}|REF={reference}|OPT={','.join(options)}"
 
 
+def _reparse_like(path: Any) -> bool:
+    """Return whether a path is a symlink or Windows reparse point."""
+    try:
+        if path.is_symlink():
+            return True
+        attributes = getattr(path.stat(follow_symlinks=False), "st_file_attributes", 0)
+    except OSError as exc:
+        raise ProtocolError("cannot inspect receipt path") from exc
+    return bool(attributes & 0x400)
+
+
+def _receipt_file(root: Any, relative: str) -> bytes:
+    root_path = root
+    current = root_path
+    for component in relative.split("/"):
+        current = current / component
+        if _reparse_like(current):
+            raise ProtocolError("receipt paths cannot use symlinks or reparse points")
+    try:
+        resolved_root = root_path.resolve(strict=True)
+        resolved = current.resolve(strict=True)
+    except OSError as exc:
+        raise ProtocolError("receipt target does not exist") from exc
+    try:
+        resolved.relative_to(resolved_root)
+    except ValueError as exc:
+        raise ProtocolError("receipt target escapes root") from exc
+    if not current.is_file() or current.is_dir():
+        raise ProtocolError("receipt target must be a regular file")
+    try:
+        return current.read_bytes()
+    except OSError as exc:
+        raise ProtocolError("cannot read receipt target") from exc
+
+
+def build_receipt(
+    manifest_path: str,
+    root: str,
+    paths: list[str],
+    passed: int,
+    total: int,
+    repair_count: int,
+) -> str:
+    """Build the canonical, read-only OK receipt for exact file bytes."""
+    from pathlib import Path
+
+    frozen = freeze_manifest(_read_json(manifest_path))
+    root_path = Path(root)
+    try:
+        if not root_path.exists() or not root_path.is_dir():
+            raise ProtocolError("root must exist and be a directory")
+    except OSError as exc:
+        raise ProtocolError("root must exist and be a directory") from exc
+    if _reparse_like(root_path):
+        raise ProtocolError("root cannot be a symlink or reparse point")
+    normalized = _paths(paths, "path")
+    if not set(normalized).issubset(set(frozen["write_scope"])):
+        raise ProtocolError("receipt paths exceed the frozen write scope")
+    passed_value = _count(str(passed), "passed")
+    total_value = _count(str(total), "total")
+    repair_value = _count(str(repair_count), "repair count")
+    files = []
+    for relative in normalized:
+        digest = "sha256:" + hashlib.sha256(_receipt_file(root_path, relative)).hexdigest()
+        files.append({"path": relative, "content_digest": digest})
+    candidate_payload = {"schema_version": 1, "files": files}
+    path_payload = {"schema_version": 1, "paths": normalized}
+    candidate = hashlib.sha256(canonical_bytes(candidate_payload)).hexdigest()
+    path_set = hashlib.sha256(canonical_bytes(path_payload)).hexdigest()
+    return ok_line(frozen, candidate, path_set, passed_value, total_value, len(normalized), repair_value)
+
 parse_manifest = validate_manifest
 manifest_reference = package_ref
 
@@ -389,6 +460,13 @@ def _parser() -> argparse.ArgumentParser:
     manifest.add_argument("--input", default="-")
     run = sub.add_parser("run")
     run.add_argument("--manifest", required=True)
+    receipt = sub.add_parser("receipt")
+    receipt.add_argument("--manifest", required=True)
+    receipt.add_argument("--root", required=True)
+    receipt.add_argument("--path", dest="paths", action="append", required=True)
+    receipt.add_argument("--passed", required=True)
+    receipt.add_argument("--total", required=True)
+    receipt.add_argument("--repair-count", required=True)
     parse = sub.add_parser("parse")
     parse.add_argument("--line", required=True)
     parse.add_argument("--manifest")
@@ -405,6 +483,8 @@ def main(argv: list[str] | None = None) -> int:
             print(manifest_line(_read_json(args.input)))
         elif args.command == "run":
             print(run_line(freeze_manifest(_read_json(args.manifest))))
+        elif args.command == "receipt":
+            print(build_receipt(args.manifest, args.root, args.paths, args.passed, args.total, args.repair_count))
         else:
             manifest = freeze_manifest(_read_json(args.manifest)) if args.manifest else None
             print(json.dumps(parse_line(args.line, manifest), ensure_ascii=True, sort_keys=True, separators=(",", ":")))

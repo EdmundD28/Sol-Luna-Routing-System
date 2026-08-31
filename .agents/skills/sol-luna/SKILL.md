@@ -39,3 +39,5 @@ Return only exact new failures and changed boundaries to the same Luna for at mo
 Report accepted quality, five-hour and weekly percentage-point changes, elapsed time, Sol rewrites/reclaims, ownership exceptions, and uncertainty. Optional diagnostics in `scripts/` answer specific evidence questions only; they never authorize routing or included-plan conclusions.
 
 Do not commit, push, deploy, install, delete data, or contact external systems unless the underlying user request separately authorizes it.
+
+For canonical receipts, Sol supplies the exact command `python .agents/skills/sol-luna/scripts/compact_protocol.py receipt ...`; use it as a reference without reading the tool body, and never hand-build `C` or `PD`.

@@ -55,6 +55,7 @@ class PackageContractTests(unittest.TestCase):
                 "scripts/net_substitution.py",
                 "scripts/routing_policy.py",
                 "scripts/ownership_guard.py",
+                "scripts/compact_protocol.py",
             },
         )
         self.assertNotIn("references/evidence-and-runtime.md", skill)
@@ -72,8 +73,8 @@ class PackageContractTests(unittest.TestCase):
     def test_writer_profiles_use_compact_v033_execution_contract(self) -> None:
         required = (
             "specified repository root", "capsule dependency closure", "declared",
-            "supplied runtime", "one bounded read", "one candidate edit",
-            "exactly one combined command", "emits path/digests", "No separate diff/status check",
+            "supplied runtime", "receipt command", "never search substitutes or hand-build C/PD",
+            "one bounded read", "one candidate edit", "one command combining validation with path/digests", "No separate diff/status check",
             "messaging tool", "broad", "repeat", "full diff", "second round", "exclusive",
             "agents", "OK|<package_ref>|C=<candidate_digest>|PD=<path_set_digest>|TEST=<passed>/<total>|PATH=<count>|REPAIR=<count>|EX=0",
             "BLOCK|<package_ref>|K=<code>|REF=<minimal>|OPT=<ids>", "same Luna", "FAILED|",

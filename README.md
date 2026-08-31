@@ -119,6 +119,8 @@ Complete-Luna validation assigns each suite one in-route executor. Luna performs
 
 The compact handoff protocol stores one dependency-closed bounded read capsule as a shared artifact, with only required files, interfaces, and acceptance contracts. The normal Luna path is one bounded read, one candidate edit, one combined causal/changed-suite validation bundle, and one concise path/diff check; explicit context, named acceptance, ownership, or high-risk semantic exceptions send only new evidence to the same Luna. Normal success omits broad rereads, full diff bodies, repeated passing suites, and unnecessary second turns. `MAN|<package_ref>` precedes `RUN`/`OK`; `BLOCK` remains for missing authority or external state. The protocol remains a projection rather than a second ownership or acceptance authority.
 
+For canonical receipts, Sol supplies the exact `python .agents/skills/sol-luna/scripts/compact_protocol.py receipt ...` command as a reference; Luna does not read the tool body or hand-build `C`/`PD`.
+
 ## Installation lifecycle
 
 Preview is non-mutating:
