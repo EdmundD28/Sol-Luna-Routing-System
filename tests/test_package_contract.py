@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import importlib.util
 import tomllib
 import unittest
 from pathlib import Path
@@ -67,6 +68,58 @@ class PackageContractTests(unittest.TestCase):
             self.assertEqual(profile["model"], "gpt-5.6-luna")
             self.assertEqual(profile["model_reasoning_effort"], effort)
             self.assertEqual(profile["sandbox_mode"], "workspace-write")
+
+    def test_writer_profiles_use_compact_v033_execution_contract(self) -> None:
+        required = (
+            "specified repository root", "capsule dependency closure", "declared",
+            "supplied runtime", "one bounded read", "one candidate edit",
+            "exactly one combined command", "emits path/digests", "No separate diff/status check",
+            "messaging tool", "broad", "repeat", "full diff", "second round", "exclusive",
+            "agents", "OK|<package_ref>|C=<candidate_digest>|PD=<path_set_digest>|TEST=<passed>/<total>|PATH=<count>|REPAIR=<count>|EX=0",
+            "BLOCK|<package_ref>|K=<code>|REF=<minimal>|OPT=<ids>", "same Luna", "FAILED|",
+        )
+        for filename, effort in (("luna-worker.toml", "high"), *( (f"luna-worker-{e}.toml", e) for e in ("low", "medium", "high", "xhigh", "max") )):
+            path = ROOT / ".codex" / "agents" / filename
+            with path.open("rb") as handle:
+                instructions = tomllib.load(handle)["developer_instructions"]
+            self.assertNotIn("READY_FOR_REVIEW", instructions)
+            self.assertLessEqual(len(instructions.split()), 110)
+            self.assertIn("Return only one final line", instructions)
+            for phrase in required:
+                self.assertIn(phrase, instructions)
+            spec = importlib.util.spec_from_file_location(
+                "compact_protocol", SKILL_ROOT / "scripts" / "compact_protocol.py"
+            )
+            self.assertIsNotNone(spec and spec.loader)
+            protocol = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(protocol)
+            digest = "sha256:" + "1" * 64
+            frozen = protocol.freeze_manifest({
+                "schema_version": 1, "package_id": "profile", "executor_id": "luna-01",
+                "ownership_id": "own-01", "task_digest": digest, "allocation_digest": digest,
+                "luna_effort": effort, "objective": "test", "write_scope": ["src/a.py"],
+                "acceptance_ids": ["accept-a"], "forbidden_actions": ["network"],
+                "stop_conditions": ["scope"], "context_refs": [],
+            })
+            package = protocol.package_ref(frozen)
+            ok_match = re.search(
+                r"OK\|<package_ref>\|C=<candidate_digest>\|PD=<path_set_digest>\|"
+                r"TEST=<passed>/<total>\|PATH=<count>\|REPAIR=<count>\|EX=0",
+                instructions,
+            )
+            self.assertIsNotNone(ok_match)
+            assert ok_match is not None
+            ok = ok_match.group(0)
+            ok = ok.replace("<package_ref>", package).replace("<candidate_digest>", "1" * 64).replace("<path_set_digest>", "2" * 64).replace("<passed>/<total>", "1/1").replace("<count>", "0")
+            self.assertEqual(protocol.parse_line(ok, frozen)["record_type"], "OK")
+            block_match = re.search(
+                r"BLOCK\|<package_ref>\|K=<code>\|REF=<minimal>\|OPT=<ids>", instructions
+            )
+            self.assertIsNotNone(block_match)
+            assert block_match is not None
+            block = block_match.group(0)
+            block = block.replace("<package_ref>", package).replace("<code>", "WAIT").replace("<minimal>", "minimal").replace("<ids>", "ask-user")
+            self.assertEqual(protocol.parse_line(block, frozen)["record_type"], "BLOCK")
 
     def test_specialized_read_only_profiles_are_minimal(self) -> None:
         expected = {"luna-reviewer.toml": "luna_reviewer", "luna-scout.toml": "luna_scout"}
