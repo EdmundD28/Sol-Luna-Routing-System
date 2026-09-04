@@ -84,6 +84,7 @@ class PackageContractTests(unittest.TestCase):
             "READY|<package>|PATH=<paths>|TEST=<acceptance-id>:PASS:<passed>/<total>:EXIT=<code>|RISK=<none-or-code>",
             "BLOCK|<package>|K=<code>|REF=<minimal>",
             "FAILED|<package>|TEST=<acceptance-id>:FAIL:EXIT=<code>", "Retain context", "only new evidence",
+            "Return via immediate-parent completion", "never message another task",
         )
         for filename, effort in (("luna-worker.toml", "high"), *( (f"luna-worker-{e}.toml", e) for e in ("low", "medium", "high", "xhigh", "max") )):
             path = ROOT / ".codex" / "agents" / filename
@@ -93,7 +94,7 @@ class PackageContractTests(unittest.TestCase):
             self.assertNotIn("compact_protocol", instructions)
             self.assertNotIn("candidate_digest", instructions)
             self.assertNotIn("path_set_digest", instructions)
-            self.assertIn("Return one concise line", instructions)
+            self.assertIn("Return via immediate-parent completion", instructions)
             for phrase in required:
                 self.assertIn(phrase, instructions)
 
@@ -152,6 +153,8 @@ class PackageContractTests(unittest.TestCase):
             "lowest effort supported by the task",
             "same-allocation lower-effort option is rejected by a quality or defect gate",
             "Default to one retained Luna writer",
+            "only through normal completion to its immediate Sol parent",
+            "never messages the root or another task",
             "Sol will not repeat that work",
             "Sol never shadow-implements Luna-owned work",
         ):
