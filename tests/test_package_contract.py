@@ -70,8 +70,11 @@ class PackageContractTests(unittest.TestCase):
     def test_writer_profiles_use_lean_human_readable_contract(self) -> None:
         required = (
             "specified repository", "Read only named dependencies", "never read declared-excluded content", "exclusive paths",
-            "complete change", "requested causal checks once", "full suite only when designated",
+            "complete change", "reviewable in-place", "never delete a tracked file", "Stop a refused edit",
+            "route around an edit-safety refusal", "after any required user confirmation, otherwise BLOCK",
+            "requested causal checks once", "full suite only when designated",
             "Do not spawn agents", "architecture or product decisions", "separate authority", "network or external systems", "publish",
+            "commit", "push", "deploy", "install",
             "READY|<package>|PATH=<paths>|TEST=<acceptance-id>:PASS:<passed>/<total>:EXIT=<code>|RISK=<none-or-code>",
             "BLOCK|<package>|K=<code>|REF=<minimal>",
             "FAILED|<package>|TEST=<acceptance-id>:FAIL:EXIT=<code>", "Retain context", "only new evidence",
@@ -171,6 +174,9 @@ class PackageContractTests(unittest.TestCase):
             "Sol does not rerun it",
             "host-observed test command/result",
             "without redoing Luna's investigation",
+            "Never delete a tracked file merely to replace it",
+            "Stop a refused edit and never route around it",
+            "after any required user confirmation, otherwise report `BLOCK`",
         ):
             self.assertIn(contract.casefold(), skill.casefold())
         self.assertIn("Sol is the sole full-suite executor", skill)
