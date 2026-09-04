@@ -20,6 +20,11 @@ def records():
 
 
 class PlannerAcceptance(unittest.TestCase):
+    def assert_exact_error(self, expected, function, *args):
+        with self.assertRaises(Exception) as raised:
+            function(*args)
+        self.assertIs(type(raised.exception), expected)
+
     def test_public_exports(self):
         expected = {
             "BuildPlanError", "TaskSpec", "BuildPlan", "normalize_tasks", "topological_order",
@@ -50,17 +55,23 @@ class PlannerAcceptance(unittest.TestCase):
         self.assertEqual(plan, buildkit.BuildPlan((), (), (), (), 0, 0))
 
     def test_record_shape_and_identifier_validation(self):
-        invalid = [
-            "bad", {"id": "a", "deps": [], "resources": [], "cost": 1},
+        type_errors = [
+            "bad",
+            {"id": "a", "deps": [], "resources": [], "cost": 1},
+            [{"id": "a", "deps": [], "resources": [], "cost": True}],
+        ]
+        value_errors = [
             [{"id": "A", "deps": [], "resources": [], "cost": 1}],
             [{"id": "a", "deps": [], "resources": ["BAD"], "cost": 1}],
-            [{"id": "a", "deps": [], "resources": [], "cost": True}],
             [{"id": "a", "deps": [], "resources": [], "cost": 0}],
             [{"id": "a", "deps": [], "resources": [], "cost": 1, "extra": 2}],
         ]
-        for value in invalid:
-            with self.subTest(value=value), self.assertRaises((TypeError, ValueError)):
-                buildkit.normalize_tasks(value)
+        for value in type_errors:
+            with self.subTest(value=value):
+                self.assert_exact_error(TypeError, buildkit.normalize_tasks, value)
+        for value in value_errors:
+            with self.subTest(value=value):
+                self.assert_exact_error(ValueError, buildkit.normalize_tasks, value)
 
     def test_identifier_boundaries_and_resource_containers(self):
         maximum = "a" * 32
@@ -73,10 +84,11 @@ class PlannerAcceptance(unittest.TestCase):
             {"id": "a", "deps": (), "resources": frozenset({"cpu"}), "cost": 1},
         ])
         self.assertEqual(normalized[0].resources, frozenset({"cpu"}))
-        with self.assertRaises(ValueError):
-            buildkit.normalize_tasks([
-                {"id": "a" * 33, "deps": (), "resources": (), "cost": 1},
-            ])
+        self.assert_exact_error(
+            ValueError,
+            buildkit.normalize_tasks,
+            [{"id": "a" * 33, "deps": (), "resources": (), "cost": 1}],
+        )
 
     def test_duplicate_task_dependency_and_resource_rejected(self):
         cases = [
@@ -91,8 +103,8 @@ class PlannerAcceptance(unittest.TestCase):
             [{"id": "a", "deps": [], "resources": ["cpu", "cpu"], "cost": 1}],
         ]
         for value in cases:
-            with self.subTest(value=value), self.assertRaises(ValueError):
-                buildkit.normalize_tasks(value)
+            with self.subTest(value=value):
+                self.assert_exact_error(ValueError, buildkit.normalize_tasks, value)
 
     def test_missing_self_and_cycle_use_build_plan_error(self):
         cases = [
@@ -104,8 +116,8 @@ class PlannerAcceptance(unittest.TestCase):
             ],
         ]
         for value in cases:
-            with self.subTest(value=value), self.assertRaises(buildkit.BuildPlanError):
-                buildkit.normalize_tasks(value)
+            with self.subTest(value=value):
+                self.assert_exact_error(buildkit.BuildPlanError, buildkit.normalize_tasks, value)
 
     def test_topological_order_uses_lexicographic_ready_queue(self):
         self.assertEqual(buildkit.topological_order(records()), ("fetch", "lint", "parse", "compile", "docs", "package"))
@@ -131,18 +143,18 @@ class PlannerAcceptance(unittest.TestCase):
         self.assertEqual(buildkit.impacted_tasks(records(), ["lint"]), ("lint",))
 
     def test_impact_uses_exact_changed_errors(self):
-        with self.assertRaises(TypeError):
-            buildkit.impacted_tasks(records(), "parse")
-        with self.assertRaises(ValueError):
-            buildkit.impacted_tasks(records(), ["parse", "parse"])
-        with self.assertRaises(buildkit.BuildPlanError):
-            buildkit.impacted_tasks(records(), ["missing"])
+        self.assert_exact_error(TypeError, buildkit.impacted_tasks, records(), "parse")
+        self.assert_exact_error(ValueError, buildkit.impacted_tasks, records(), ["parse", "parse"])
+        self.assert_exact_error(buildkit.BuildPlanError, buildkit.impacted_tasks, records(), ["missing"])
 
     def test_batches_empty_and_max_parallel_validation(self):
         self.assertEqual(buildkit.schedule_batches(records(), [], 2), ())
-        for value in (0, -1, True, 1.5):
-            with self.subTest(value=value), self.assertRaises((TypeError, ValueError)):
-                buildkit.schedule_batches(records(), ["parse"], value)
+        for value in (True, 1.5):
+            with self.subTest(value=value):
+                self.assert_exact_error(TypeError, buildkit.schedule_batches, records(), ["parse"], value)
+        for value in (0, -1):
+            with self.subTest(value=value):
+                self.assert_exact_error(ValueError, buildkit.schedule_batches, records(), ["parse"], value)
 
     def test_batches_respect_dependencies_and_capacity(self):
         selected = [task["id"] for task in records()]
@@ -156,12 +168,9 @@ class PlannerAcceptance(unittest.TestCase):
         self.assertEqual(buildkit.schedule_batches(records(), ["compile", "docs", "package"], 2), (("compile",), ("docs",), ("package",)))
 
     def test_batches_use_exact_selected_errors(self):
-        with self.assertRaises(TypeError):
-            buildkit.schedule_batches(records(), "parse", 2)
-        with self.assertRaises(ValueError):
-            buildkit.schedule_batches(records(), ["parse", "parse"], 2)
-        with self.assertRaises(buildkit.BuildPlanError):
-            buildkit.schedule_batches(records(), ["missing"], 2)
+        self.assert_exact_error(TypeError, buildkit.schedule_batches, records(), "parse", 2)
+        self.assert_exact_error(ValueError, buildkit.schedule_batches, records(), ["parse", "parse"], 2)
+        self.assert_exact_error(buildkit.BuildPlanError, buildkit.schedule_batches, records(), ["missing"], 2)
 
     def test_resource_conflicts_defer_without_starvation(self):
         tasks = [
@@ -185,12 +194,9 @@ class PlannerAcceptance(unittest.TestCase):
         self.assertEqual(buildkit.critical_path(tasks, ["a", "b", "c"]), (("a", "b"), 3))
 
     def test_critical_path_uses_exact_selected_errors(self):
-        with self.assertRaises(TypeError):
-            buildkit.critical_path(records(), "parse")
-        with self.assertRaises(ValueError):
-            buildkit.critical_path(records(), ["parse", "parse"])
-        with self.assertRaises(buildkit.BuildPlanError):
-            buildkit.critical_path(records(), ["missing"])
+        self.assert_exact_error(TypeError, buildkit.critical_path, records(), "parse")
+        self.assert_exact_error(ValueError, buildkit.critical_path, records(), ["parse", "parse"])
+        self.assert_exact_error(buildkit.BuildPlanError, buildkit.critical_path, records(), ["missing"])
 
     def test_plan_build_complete_result(self):
         plan = buildkit.plan_build(records(), ["parse"], 2)
@@ -221,8 +227,7 @@ class PlannerAcceptance(unittest.TestCase):
 
     def test_explain_empty_and_wrong_type(self):
         self.assertEqual(buildkit.explain_plan(buildkit.plan_build([], [], 1)), ("changed=-", "impacted=-", "critical=-:0", "total_cost=0"))
-        with self.assertRaises(TypeError):
-            buildkit.explain_plan({})
+        self.assert_exact_error(TypeError, buildkit.explain_plan, {})
 
 
 if __name__ == "__main__":

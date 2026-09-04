@@ -39,9 +39,9 @@
     {
       "ref_id": "visible",
       "path": "benchmarks/p061/visible_acceptance.py",
-      "content_digest": "sha256:a378c8ae6e01260d6729ada3314f45a1da4cfe8e1cc3abb1c2429dd794301168",
+      "content_digest": "sha256:62ad3a76bba48bf17453fddc7a0992266ffa65128c86fc7a6b5135fad98d4e7d",
       "kind": "acceptance"
     }
   ],
-  "manifest_digest": "sha256:be5710d6209b5a6a5ea1e341052df3a6e490fe7669b3ad7225307da203ca5e4a"
+  "manifest_digest": "sha256:f9a2318676d53fcb8857c16aea5b7546ecfc287ae2861a2d55153d1a08e8661a"
 }
