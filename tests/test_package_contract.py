@@ -75,7 +75,7 @@ class PackageContractTests(unittest.TestCase):
             "For semantic refactors", "minimal causal smoke per changed public boundary",
             "parse or compile already-read source/schema without emitting files",
             "explicit contract permission", "Refresh affected checks after edits",
-            "Review the candidate during preflight", "designated final suite last and once",
+            "Preflight required paths/test IDs", "designated final suite last and once",
             "On failure return FAILED", "repair only after Sol sends new evidence", "After PASS, return immediately",
             "Stop refused edits", "never bypass edit safety",
             "after required user confirmation; otherwise BLOCK",
@@ -201,11 +201,14 @@ class PackageContractTests(unittest.TestCase):
             "returns immediately after a pass without post-pass rereads, diffs, status checks, or tests",
             "short checklist of required-change paths and acceptance-boundary labels",
             "allowed paths are not automatically required",
-            "boundary -> test-file::test-id",
+            "In the same worker turn and before the final suite",
+            "maps each boundary to `test-file::test-id`",
             "required-change paths must occur in the candidate diff",
+            "corrects missing items before the expensive suite without requesting another turn",
+            "final handoff includes the compact mapping",
             "A path mentioned in prose or code is not coverage",
             "does not read test bodies or judge semantics",
-            "with only missing paths or labels",
+            "returns only missing paths or labels",
         ):
             self.assertIn(contract.casefold(), skill.casefold())
         self.assertIn("Sol is the sole full-suite executor", skill)
@@ -213,9 +216,10 @@ class PackageContractTests(unittest.TestCase):
         self.assertIn("number of failing tests or causal roots alone never forces reclaim", policy)
         self.assertIn("reuse the same luna for focused repair and transmit only new failure evidence", policy.casefold())
         self.assertIn("A formal route also reviews its candidate receipt", policy)
-        self.assertIn("Luna reviews before the only final suite and returns immediately after a pass", readme)
-        self.assertIn("bounded presence check never reads test bodies", readme)
-        self.assertIn("presence-only and never reads test bodies", policy)
+        self.assertIn("In the same turn and before the final suite, Luna maps each label", readme)
+        self.assertIn("Luna returns immediately after a pass", readme)
+        self.assertIn("without reading test bodies or repeating the suite", readme)
+        self.assertIn("without reading test bodies or repeating the suite", policy)
 
     def test_route_measurement_boundary_is_explicit(self) -> None:
         skill = self.skill()
