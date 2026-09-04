@@ -1,0 +1,53 @@
+{
+  "schema_version": 2,
+  "route": "SOL_ONLY",
+  "frozen": true,
+  "executors": [
+    {"executor_id": "sol-controller", "actor": "SOL"}
+  ],
+  "work_units": [
+    {
+      "unit_id": "p061-buildkit",
+      "executor_id": "sol-controller",
+      "paths": [
+        "benchmarks/p061/buildkit/__init__.py",
+        "benchmarks/p061/buildkit/batches.py",
+        "benchmarks/p061/buildkit/critical.py",
+        "benchmarks/p061/buildkit/errors.py",
+        "benchmarks/p061/buildkit/explain.py",
+        "benchmarks/p061/buildkit/graph.py",
+        "benchmarks/p061/buildkit/impact.py",
+        "benchmarks/p061/buildkit/model.py",
+        "benchmarks/p061/buildkit/planner.py"
+      ]
+    }
+  ],
+  "acceptances": [
+    {
+      "acceptance_id": "p061-visible-suite",
+      "unit_id": "p061-buildkit",
+      "executor_id": "sol-controller",
+      "paths": ["benchmarks/p061/visible_acceptance.py"]
+    }
+  ],
+  "partitions": [
+    {
+      "partition_id": "p061-sol-partition",
+      "executor_id": "sol-controller",
+      "unit_ids": ["p061-buildkit"],
+      "acceptance_ids": ["p061-visible-suite"],
+      "paths": [
+        "benchmarks/p061/buildkit/__init__.py",
+        "benchmarks/p061/buildkit/batches.py",
+        "benchmarks/p061/buildkit/critical.py",
+        "benchmarks/p061/buildkit/errors.py",
+        "benchmarks/p061/buildkit/explain.py",
+        "benchmarks/p061/buildkit/graph.py",
+        "benchmarks/p061/buildkit/impact.py",
+        "benchmarks/p061/buildkit/model.py",
+        "benchmarks/p061/buildkit/planner.py",
+        "benchmarks/p061/visible_acceptance.py"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "package_id": "p061-buildkit",
+  "executor_id": "luna-p061-medium",
+  "ownership_id": "p061-buildkit",
+  "task_digest": "sha256:386ab1fadcd321e96e8d8c67a08bb6cd658c12af5f24444281e490b1ae932186",
+  "allocation_digest": "sha256:b03efd49288e25efb669d2e46e7005e67af444a15f5e2b06cd8585525e90204c",
+  "luna_effort": "medium",
+  "objective": "Implement the complete deterministic nine-file incremental build planner and close its visible acceptance without Sol implementation.",
+  "write_scope": [
+    "benchmarks/p061/buildkit/__init__.py",
+    "benchmarks/p061/buildkit/batches.py",
+    "benchmarks/p061/buildkit/critical.py",
+    "benchmarks/p061/buildkit/errors.py",
+    "benchmarks/p061/buildkit/explain.py",
+    "benchmarks/p061/buildkit/graph.py",
+    "benchmarks/p061/buildkit/impact.py",
+    "benchmarks/p061/buildkit/model.py",
+    "benchmarks/p061/buildkit/planner.py"
+  ],
+  "acceptance_ids": ["p061-visible-suite"],
+  "forbidden_actions": [
+    "broad-search",
+    "commit",
+    "external-workspace",
+    "hidden-acceptance",
+    "manual-digest",
+    "second-worker",
+    "usage-read"
+  ],
+  "stop_conditions": ["acceptance", "context", "ownership", "semantic-risk"],
+  "context_refs": [
+    {
+      "ref_id": "task",
+      "path": "benchmarks/p061/task-spec.md",
+      "content_digest": "sha256:386ab1fadcd321e96e8d8c67a08bb6cd658c12af5f24444281e490b1ae932186",
+      "kind": "interface"
+    },
+    {
+      "ref_id": "visible",
+      "path": "benchmarks/p061/visible_acceptance.py",
+      "content_digest": "sha256:a378c8ae6e01260d6729ada3314f45a1da4cfe8e1cc3abb1c2429dd794301168",
+      "kind": "acceptance"
+    }
+  ],
+  "manifest_digest": "sha256:be5710d6209b5a6a5ea1e341052df3a6e490fe7669b3ad7225307da203ca5e4a"
+}
