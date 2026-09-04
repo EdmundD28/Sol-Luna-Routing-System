@@ -165,6 +165,8 @@ class PackageContractTests(unittest.TestCase):
             "Use schema-2 ownership and compact receipts only for formal evidence",
             "does not change the candidate or retest until Sol sends exact new failure evidence",
             "Do not resend the task background",
+            "all exact failures from that suite",
+            "failure count alone is not a reclaim signal",
             "reclaims only the affected slice",
         ):
             self.assertIn(contract, skill)
@@ -197,6 +199,8 @@ class PackageContractTests(unittest.TestCase):
         ):
             self.assertIn(contract.casefold(), skill.casefold())
         self.assertIn("Sol is the sole full-suite executor", skill)
+        self.assertNotIn("multiple independent failure clusters", skill)
+        self.assertIn("number of failing tests or causal roots alone never forces reclaim", policy)
         self.assertIn("reuse the same luna for focused repair and transmit only new failure evidence", policy.casefold())
         self.assertIn("A formal route also reviews its candidate receipt", policy)
         self.assertIn("Luna reviews before the only final suite and returns immediately after a pass", readme)
