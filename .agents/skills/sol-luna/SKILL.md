@@ -29,7 +29,7 @@ Exact-byte, platform-sensitive, strict-serialization, and adversarial work norma
 
 Default to one retained Luna writer. Start it with `fork_turns="none"`. The dispatch itself contains only what the worker needs: repository root, package ID, deliverable, exclusive writable paths, named read dependencies or interfaces, acceptance command and expected signal, forbidden actions, stop conditions, and effort. Do not require a manifest, digest, ledger, ownership tool, or receipt generator on the normal path. Use schema-2 ownership and compact receipts only for formal evidence, concurrency, disputed scope, or high-risk work.
 
-The intended worker path is one bounded read, one complete edit, causal or changed-area checks, and a concise handoff. The final line is human-readable:
+The intended worker path is one bounded read, one complete candidate, causal or changed-area checks, and a concise handoff. "Complete" describes the delivered candidate, not one giant patch: for a multi-file or large-file change, use the smallest deterministic sequence of file-scoped edits that keeps each patch context stable, without rereading unchanged context between edits. The final line is human-readable:
 
 ```text
 READY|<package>|PATH=<paths>|TEST=<acceptance-id>:PASS:<passed>/<total>:EXIT=<code>|RISK=<none-or-code>
@@ -41,7 +41,7 @@ Use `BLOCK|<package>|K=<code>|REF=<minimal>` for missing authority, ownership co
 
 Luna runs causal or changed-area checks while implementing. Sol verifies ownership, changed paths, causal coverage, diff risk, and the host-observed test command/result without redoing Luna's investigation. Exactly one executor runs the final full suite after the last candidate change. If Luna ran that final suite and its host-observed result is available, Sol does not rerun it; otherwise Sol is the sole full-suite executor. A specific failure, drift, nondeterminism, or safety risk may trigger only the smallest affected check.
 
-Return exact new failure evidence and any changed boundary to the same Luna for one focused repair by default. Do not resend the task background. A second repair or effort escalation needs new evidence and a still-positive substitution case; otherwise Sol reclaims only the affected slice and records that the route failed economically. Sol never shadow-implements Luna-owned work.
+Return exact new failure evidence and any changed boundary to the same Luna for one focused repair by default. Do not resend the task background. If one test run exposes multiple independent failure clusters, reclaim instead of disguising broad reimplementation as one repair. A second repair or effort escalation needs new evidence and a still-positive substitution case; otherwise Sol reclaims only the affected slice and records that the route failed economically. Sol never shadow-implements Luna-owned work.
 
 Report accepted quality, five-hour and weekly percentage-point changes when measured, elapsed time, effort, repairs, Sol rewrites or reclaims, and remaining uncertainty. Diagnostic tools under `scripts/` are optional and answer specific evidence questions; they never authorize routing or included-plan claims.
 
