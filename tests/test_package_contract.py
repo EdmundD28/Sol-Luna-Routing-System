@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import re
-import importlib.util
 import tomllib
 import unittest
 from pathlib import Path
@@ -54,8 +53,6 @@ class PackageContractTests(unittest.TestCase):
             {
                 "scripts/net_substitution.py",
                 "scripts/routing_policy.py",
-                "scripts/ownership_guard.py",
-                "scripts/compact_protocol.py",
             },
         )
         self.assertNotIn("references/evidence-and-runtime.md", skill)
@@ -70,57 +67,39 @@ class PackageContractTests(unittest.TestCase):
             self.assertEqual(profile["model_reasoning_effort"], effort)
             self.assertEqual(profile["sandbox_mode"], "workspace-write")
 
-    def test_writer_profiles_use_compact_v033_execution_contract(self) -> None:
+    def test_writer_profiles_use_lean_human_readable_contract(self) -> None:
         required = (
-            "specified repository root", "capsule dependency closure", "declared",
-            "supplied runtime", "receipt command", "never search substitutes or hand-build C/PD",
-            "one bounded read", "one candidate edit", "one command combining validation with path/digests", "No separate diff/status check",
-            "messaging tool", "broad", "repeat", "full diff", "second round", "exclusive",
-            "agents", "OK|<package_ref>|C=<candidate_digest>|PD=<path_set_digest>|TEST=<passed>/<total>|PATH=<count>|REPAIR=<count>|EX=0",
-            "BLOCK|<package_ref>|K=<code>|REF=<minimal>|OPT=<ids>", "same Luna", "FAILED|",
+            "specified repository", "Read only named dependencies", "never read declared-excluded content", "exclusive paths",
+            "complete change", "requested causal checks once", "full suite only when designated",
+            "Do not spawn agents", "architecture or product decisions", "separate authority", "network or external systems", "publish",
+            "READY|<package>|PATH=<paths>|TEST=<acceptance-id>:PASS:<passed>/<total>:EXIT=<code>|RISK=<none-or-code>",
+            "BLOCK|<package>|K=<code>|REF=<minimal>",
+            "FAILED|<package>|TEST=<acceptance-id>:FAIL:EXIT=<code>", "Retain context", "only new evidence",
         )
         for filename, effort in (("luna-worker.toml", "high"), *( (f"luna-worker-{e}.toml", e) for e in ("low", "medium", "high", "xhigh", "max") )):
             path = ROOT / ".codex" / "agents" / filename
             with path.open("rb") as handle:
                 instructions = tomllib.load(handle)["developer_instructions"]
-            self.assertNotIn("READY_FOR_REVIEW", instructions)
-            self.assertLessEqual(len(instructions.split()), 110)
-            self.assertIn("Return only one final line", instructions)
+            self.assertLessEqual(len(instructions.split()), 125)
+            self.assertNotIn("compact_protocol", instructions)
+            self.assertNotIn("candidate_digest", instructions)
+            self.assertNotIn("path_set_digest", instructions)
+            self.assertIn("Return one concise line", instructions)
             for phrase in required:
                 self.assertIn(phrase, instructions)
-            spec = importlib.util.spec_from_file_location(
-                "compact_protocol", SKILL_ROOT / "scripts" / "compact_protocol.py"
-            )
-            self.assertIsNotNone(spec and spec.loader)
-            protocol = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(protocol)
-            digest = "sha256:" + "1" * 64
-            frozen = protocol.freeze_manifest({
-                "schema_version": 1, "package_id": "profile", "executor_id": "luna-01",
-                "ownership_id": "own-01", "task_digest": digest, "allocation_digest": digest,
-                "luna_effort": effort, "objective": "test", "write_scope": ["src/a.py"],
-                "acceptance_ids": ["accept-a"], "forbidden_actions": ["network"],
-                "stop_conditions": ["scope"], "context_refs": [],
-            })
-            package = protocol.package_ref(frozen)
-            ok_match = re.search(
-                r"OK\|<package_ref>\|C=<candidate_digest>\|PD=<path_set_digest>\|"
-                r"TEST=<passed>/<total>\|PATH=<count>\|REPAIR=<count>\|EX=0",
-                instructions,
-            )
-            self.assertIsNotNone(ok_match)
-            assert ok_match is not None
-            ok = ok_match.group(0)
-            ok = ok.replace("<package_ref>", package).replace("<candidate_digest>", "1" * 64).replace("<path_set_digest>", "2" * 64).replace("<passed>/<total>", "1/1").replace("<count>", "0")
-            self.assertEqual(protocol.parse_line(ok, frozen)["record_type"], "OK")
-            block_match = re.search(
-                r"BLOCK\|<package_ref>\|K=<code>\|REF=<minimal>\|OPT=<ids>", instructions
-            )
-            self.assertIsNotNone(block_match)
-            assert block_match is not None
-            block = block_match.group(0)
-            block = block.replace("<package_ref>", package).replace("<code>", "WAIT").replace("<minimal>", "minimal").replace("<ids>", "ask-user")
-            self.assertEqual(protocol.parse_line(block, frozen)["record_type"], "BLOCK")
+
+    def test_lean_skill_keeps_numeric_route_gates_and_host_observed_results(self) -> None:
+        skill = (ROOT / ".agents" / "skills" / "sol-luna" / "SKILL.md").read_text(encoding="utf-8")
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        for phrase in (
+            "at least 80% predicted first-pass acceptance",
+            "at least 50% expected accepted-cost reduction",
+            "no predicted final-defect or elapsed regression",
+        ):
+            self.assertIn(phrase, skill)
+        self.assertIn("or its test result is not host-observable", readme)
+        self.assertNotIn("A lower-effort failure is not required", readme)
+        self.assertIn("same-allocation lower-effort option is rejected by a quality or defect gate", readme)
 
     def test_specialized_read_only_profiles_are_minimal(self) -> None:
         expected = {"luna-reviewer.toml": "luna_reviewer", "luna-scout.toml": "luna_scout"}
@@ -142,8 +121,8 @@ class PackageContractTests(unittest.TestCase):
     def test_allowance_and_credit_boundaries_fail_closed(self) -> None:
         skill = self.skill()
         reference = (SKILL_ROOT / "references" / "evidence-and-runtime.md").read_text(encoding="utf-8")
-        self.assertIn("matched five-hour readings", skill)
-        self.assertIn("never authorize routing or included-plan conclusions", skill)
+        self.assertIn("matched five-hour and weekly readings", skill)
+        self.assertIn("never authorize routing or included-plan claims", skill)
         self.assertIn("does **not** fetch billing data", reference)
         self.assertIn("validate a provider signature", reference)
         self.assertIn("does not establish a Codex desktop task-level authenticated credit receipt", self.readme())
@@ -151,26 +130,33 @@ class PackageContractTests(unittest.TestCase):
     def test_skill_preserves_economic_routing_and_effort_gates(self) -> None:
         skill = self.skill()
         for contract in (
-            "included-plan allowance before elapsed time",
-            "one complete-Luna envelope",
-            "lowest evidence-supported effort",
-            "external quality evidence bound to the task family",
+            "Quality and included-plan allowance are co-primary gates",
+            "same independent acceptance contract",
+            "predicted quality and defects are no worse",
+            "expected included-plan allowance is lower",
+            "expected elapsed time is no worse",
+            "matched task-family evidence",
+            "one low-impact complete-Luna Low/Medium cold start",
+            "empty Sol controller queue",
+            "conservative execution plus one repair plus Sol recovery and downstream dependency-closure re-execution",
+            "one Luna can own substantial",
+            "lowest effort supported by the task",
+            "same-allocation lower-effort option is rejected by a quality or defect gate",
             "Default to one retained Luna writer",
-            "Sol does not pre-script Luna's internal units",
-            "read-only acceptance lane",
-            "never shadow-implements Luna work",
+            "Sol will not repeat that work",
+            "Sol never shadow-implements Luna-owned work",
         ):
             self.assertIn(contract, skill)
+        self.assertNotIn("first-pass completion is plausible", skill)
 
     def test_skill_preserves_ownership_handoff_and_repair_gates(self) -> None:
         skill = self.skill()
         for contract in (
-            "schema-2 ownership plan",
-            "candidate-digest-bound `OK`",
-            "remains `HOLD`",
-            "same Luna for at most three focused repairs",
-            "at most one evidence-backed effort escalation",
-            "reclaim only the affected responsibility unit",
+            "Do not require a manifest, digest, ledger, ownership tool, or receipt generator on the normal path",
+            "Use schema-2 ownership and compact receipts only for formal evidence",
+            "same Luna for one focused repair by default",
+            "Do not resend the task background",
+            "reclaims only the affected slice",
         ):
             self.assertIn(contract, skill)
 
@@ -180,22 +166,23 @@ class PackageContractTests(unittest.TestCase):
         readme = self.readme()
         for contract in (
             'fork_turns="none"',
-            "never paste its body into model messages",
-            "do not resend the manifest or prior background",
-            "one in-route executor per suite",
-            "before the only final full suite",
-            "without rerunning Luna's checks",
+            "Do not resend the task background",
+            "Exactly one executor runs the final full suite",
+            "Sol does not rerun it",
+            "host-observed test command/result",
+            "without redoing Luna's investigation",
         ):
             self.assertIn(contract.casefold(), skill.casefold())
         self.assertIn("Sol is the sole full-suite executor", skill)
-        self.assertIn("same luna and transmits only new failure evidence", policy.casefold())
+        self.assertIn("reuse the same luna for focused repair and transmit only new failure evidence", policy.casefold())
+        self.assertIn("A formal route also reviews its candidate receipt", policy)
         self.assertIn("The designated executor then runs that suite once", readme)
 
     def test_route_measurement_boundary_is_explicit(self) -> None:
         skill = self.skill()
-        self.assertIn("common independent referee runs outside both route intervals", skill)
-        self.assertIn("Luna-specific planning, review, repair, integration, and rework remain inside", skill)
         self.assertIn("five-hour and weekly percentage-point changes", skill)
+        self.assertIn("Diagnostic tokens explain failures", skill)
+        self.assertIn("never replace matched five-hour and weekly readings", skill)
 
     def test_detailed_policy_and_readme_contracts_remain_available(self) -> None:
         policy = self.policy()
