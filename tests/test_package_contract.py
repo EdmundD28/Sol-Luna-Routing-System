@@ -196,6 +196,13 @@ class PackageContractTests(unittest.TestCase):
             "does not change the candidate or retest until Sol sends exact new failure evidence",
             "compress statements to game a line cap",
             "returns immediately after a pass without post-pass rereads, diffs, status checks, or tests",
+            "short checklist of required-change paths and acceptance-boundary labels",
+            "allowed paths are not automatically required",
+            "boundary -> test-file::test-id",
+            "required-change paths must occur in the candidate diff",
+            "A path mentioned in prose or code is not coverage",
+            "does not read test bodies or judge semantics",
+            "with only missing paths or labels",
         ):
             self.assertIn(contract.casefold(), skill.casefold())
         self.assertIn("Sol is the sole full-suite executor", skill)
@@ -204,6 +211,8 @@ class PackageContractTests(unittest.TestCase):
         self.assertIn("reuse the same luna for focused repair and transmit only new failure evidence", policy.casefold())
         self.assertIn("A formal route also reviews its candidate receipt", policy)
         self.assertIn("Luna reviews before the only final suite and returns immediately after a pass", readme)
+        self.assertIn("bounded presence check never reads test bodies", readme)
+        self.assertIn("presence-only and never reads test bodies", policy)
 
     def test_route_measurement_boundary_is_explicit(self) -> None:
         skill = self.skill()
