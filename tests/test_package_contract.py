@@ -70,10 +70,16 @@ class PackageContractTests(unittest.TestCase):
     def test_writer_profiles_use_lean_human_readable_contract(self) -> None:
         required = (
             "specified repository", "Read only named dependencies", "never read declared-excluded content", "exclusive paths",
-            "complete change", "reviewable in-place", "never delete a tracked file", "Stop a refused edit",
-            "route around an edit-safety refusal", "after any required user confirmation, otherwise BLOCK",
-            "requested causal checks once", "full suite only when designated",
-            "Do not spawn agents", "architecture or product decisions", "separate authority", "network or external systems", "publish",
+            "complete semantic change", "file-scoped in-place", "Never delete a tracked file", "hide executable code",
+            "simulate a refactor by duplication", "stable file-scoped stages", "game line caps through compression",
+            "For semantic refactors", "minimal causal smoke per changed public boundary",
+            "parse or compile already-read source/schema without emitting files",
+            "explicit contract permission", "Refresh affected checks after edits",
+            "Review the candidate during preflight", "designated final suite last and once",
+            "On failure return FAILED", "repair only after Sol sends new evidence", "After PASS, return immediately",
+            "Stop refused edits", "never bypass edit safety",
+            "after required user confirmation; otherwise BLOCK",
+            "Do not spawn agents", "architecture/product decisions", "separate authority", "network/external systems", "publish",
             "commit", "push", "deploy", "install",
             "READY|<package>|PATH=<paths>|TEST=<acceptance-id>:PASS:<passed>/<total>:EXIT=<code>|RISK=<none-or-code>",
             "BLOCK|<package>|K=<code>|REF=<minimal>",
@@ -83,7 +89,7 @@ class PackageContractTests(unittest.TestCase):
             path = ROOT / ".codex" / "agents" / filename
             with path.open("rb") as handle:
                 instructions = tomllib.load(handle)["developer_instructions"]
-            self.assertLessEqual(len(instructions.split()), 125)
+            self.assertLessEqual(len(instructions.split()), 185)
             self.assertNotIn("compact_protocol", instructions)
             self.assertNotIn("candidate_digest", instructions)
             self.assertNotIn("path_set_digest", instructions)
@@ -157,7 +163,7 @@ class PackageContractTests(unittest.TestCase):
         for contract in (
             "Do not require a manifest, digest, ledger, ownership tool, or receipt generator on the normal path",
             "Use schema-2 ownership and compact receipts only for formal evidence",
-            "same Luna for one focused repair by default",
+            "does not change the candidate or retest until Sol sends exact new failure evidence",
             "Do not resend the task background",
             "reclaims only the affected slice",
         ):
@@ -177,12 +183,23 @@ class PackageContractTests(unittest.TestCase):
             "Never delete a tracked file merely to replace it",
             "Stop a refused edit and never route around it",
             "after any required user confirmation, otherwise report `BLOCK`",
+            "Complete\" is semantic",
+            "never hide old executable source inside strings or comments",
+            "when the acceptance contract requires a public compatibility facade",
+            "cheapest affected in-memory preflight",
+            "direct imports only when the contract explicitly requires and permits them",
+            "A candidate-changing edit invalidates only its affected checks",
+            "one smallest representative causal smoke per moved public boundary",
+            "structural preflight alone is not acceptance",
+            "does not change the candidate or retest until Sol sends exact new failure evidence",
+            "compress statements to game a line cap",
+            "returns immediately after a pass without post-pass rereads, diffs, status checks, or tests",
         ):
             self.assertIn(contract.casefold(), skill.casefold())
         self.assertIn("Sol is the sole full-suite executor", skill)
         self.assertIn("reuse the same luna for focused repair and transmit only new failure evidence", policy.casefold())
         self.assertIn("A formal route also reviews its candidate receipt", policy)
-        self.assertIn("The designated executor then runs that suite once", readme)
+        self.assertIn("Luna reviews before the only final suite and returns immediately after a pass", readme)
 
     def test_route_measurement_boundary_is_explicit(self) -> None:
         skill = self.skill()
