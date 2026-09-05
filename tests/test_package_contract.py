@@ -69,16 +69,16 @@ class PackageContractTests(unittest.TestCase):
 
     def test_writer_profiles_use_lean_human_readable_contract(self) -> None:
         required = (
-            "specified repository", "Read only named dependencies", "never read declared-excluded content", "exclusive paths",
-            "complete semantic change", "file-scoped in-place", "Never delete a tracked file", "hide executable code",
-            "simulate a refactor by duplication", "stable file-scoped stages", "game line caps through compression",
-            "For semantic refactors", "minimal causal smoke per changed public boundary",
-            "parse or compile already-read source/schema without emitting files",
-            "explicit contract permission", "Refresh affected checks after edits",
+            "absolute edit paths under the specified repository root", "command workdirs do not retarget edit tools",
+            "Verify the first changed path stays inside it", "Read only named dependencies",
+            "never read declared-excluded content", "exclusive paths", "complete semantics", "file-scoped in-place",
+            "Never delete tracked files", "hide executable code", "duplicate refactors", "game line caps",
+            "For semantic refactors", "smoke each changed public boundary once",
+            "parse/compile already-read source/schema without outputs",
+            "explicit contract permission", "Refresh affected checks",
             "Preflight required paths/test IDs", "designated final suite last and once",
             "On failure return FAILED", "repair only after Sol sends new evidence", "After PASS, return immediately",
-            "Stop refused edits", "never bypass edit safety",
-            "after required user confirmation; otherwise BLOCK",
+            "Stop refused edits", "never bypass edit safety", "after required user confirmation; otherwise BLOCK",
             "Do not spawn agents", "architecture/product decisions", "separate authority", "network/external systems", "publish",
             "commit", "push", "deploy", "install",
             "READY|<package>|PATH=<paths>|TEST=<acceptance-id>:PASS:<passed>/<total>:EXIT=<code>|RISK=<none-or-code>",
@@ -164,7 +164,7 @@ class PackageContractTests(unittest.TestCase):
     def test_skill_preserves_ownership_handoff_and_repair_gates(self) -> None:
         skill = self.skill()
         for contract in (
-            "Do not require a manifest, digest, ledger, ownership tool, or receipt generator on the normal path",
+            "Do not require a manifest, digest, ledger, ownership tool, or receipt generator normally",
             "Use schema-2 ownership and compact receipts only for formal evidence",
             "does not change the candidate or retest until Sol sends exact new failure evidence",
             "Do not resend the task background",
@@ -212,6 +212,9 @@ class PackageContractTests(unittest.TestCase):
         ):
             self.assertIn(contract.casefold(), skill.casefold())
         self.assertIn("Sol is the sole full-suite executor", skill)
+        self.assertIn("edit only with absolute paths under it", skill)
+        self.assertIn("command workdirs do not retarget edit tools", skill)
+        self.assertIn("Verify the first changed path stays inside", skill)
         self.assertNotIn("multiple independent failure clusters", skill)
         self.assertIn("number of failing tests or causal roots alone never forces reclaim", policy)
         self.assertIn("reuse the same luna for focused repair and transmit only new failure evidence", policy.casefold())
