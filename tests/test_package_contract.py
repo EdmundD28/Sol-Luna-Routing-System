@@ -71,15 +71,16 @@ class PackageContractTests(unittest.TestCase):
         required = (
             "absolute edit paths under the specified repository root", "command workdirs do not retarget edit tools",
             "Verify the first changed path stays inside it", "Read only named dependencies",
-            "never read declared-excluded content", "exclusive paths", "complete semantics", "file-scoped in-place",
-            "Never delete tracked files", "hide executable code", "duplicate refactors", "game line caps",
-            "For semantic refactors", "smoke each changed public boundary once",
-            "parse/compile already-read source/schema without outputs",
-            "explicit contract permission", "Refresh affected checks",
-            "Preflight required paths/test IDs", "designated final suite last and once",
+            "never read declared-excluded content", "Edit only exclusive paths", "preserve others' work",
+            "complete semantics", "reviewable stages", "Never delete tracked files",
+            "hide executable code", "duplicate refactors", "game line caps", "Smoke each changed public boundary once",
+            "Parse/compile already-read structural inputs without outputs", "direct imports require permission",
+            "Refresh affected checks", "Preflight required paths/test semantics",
+            "If Luna changes acceptance tests", "run causal checks and return for Sol's sole final suite",
+            "otherwise run the suite last and once",
             "On failure return FAILED", "repair only after Sol sends new evidence", "After PASS, return immediately",
             "Stop refused edits", "never bypass edit safety", "after required user confirmation; otherwise BLOCK",
-            "Do not spawn agents", "architecture/product decisions", "separate authority", "network/external systems", "publish",
+            "Do not spawn agents", "architecture/product decisions", "Without authority", "network/external systems", "publish",
             "commit", "push", "deploy", "install",
             "READY|<package>|PATH=<paths>|TEST=<acceptance-id>:PASS:<passed>/<total>:EXIT=<code>|RISK=<none-or-code>",
             "BLOCK|<package>|K=<code>|REF=<minimal>",
@@ -107,7 +108,7 @@ class PackageContractTests(unittest.TestCase):
             "no predicted final-defect or elapsed regression",
         ):
             self.assertIn(phrase, skill)
-        self.assertIn("or its test result is not host-observable", readme)
+        self.assertIn("When Luna creates or changes designated acceptance tests", readme)
         self.assertNotIn("A lower-effort failure is not required", readme)
         self.assertIn("same-allocation lower-effort option is rejected by a quality or defect gate", readme)
 
@@ -182,47 +183,43 @@ class PackageContractTests(unittest.TestCase):
             'fork_turns="none"',
             "Do not resend the task background",
             "Exactly one executor runs the final full suite",
-            "Sol does not rerun it",
-            "host-observed test command/result",
-            "without redoing Luna's investigation",
             "Never delete a tracked file merely to replace it",
             "Stop a refused edit and never route around it",
             "after any required user confirmation, otherwise report `BLOCK`",
             "Complete\" is semantic",
             "never hide old executable source inside strings or comments",
             "when the acceptance contract requires a public compatibility facade",
-            "cheapest affected in-memory preflight",
-            "direct imports only when the contract explicitly requires and permits them",
-            "A candidate-changing edit invalidates only its affected checks",
-            "one smallest representative causal smoke per moved public boundary",
             "structural preflight alone is not acceptance",
             "does not change the candidate or retest until Sol sends exact new failure evidence",
             "compress statements to game a line cap",
-            "returns immediately after a pass without post-pass rereads, diffs, status checks, or tests",
-            "short checklist of required-change paths and acceptance-boundary labels",
-            "allowed paths are not automatically required",
-            "In the same worker turn and before the final suite",
-            "maps each boundary to `test-file::test-id`",
-            "required-change paths must occur in the candidate diff",
-            "corrects missing items before the expensive suite without requesting another turn",
-            "final handoff includes the compact mapping",
+            "allowed paths are not required",
+            "maps each label to `test-file::test-id`",
             "A path mentioned in prose or code is not coverage",
-            "does not read test bodies or judge semantics",
-            "returns only missing paths or labels",
+            "If designated acceptance is pre-existing and independent",
+            "without reading test bodies or rerunning",
+            "If Luna creates or changes designated acceptance tests",
+            "those tests cannot certify themselves",
+            "Sol reviews only the changed test bodies",
+            "rejects empty, assertion-free, or tautological tests",
+            "Price that Sol work before routing",
+            "choose `SOL_ONLY` if either economic gate fails",
+            "A discrepancy returns only missing labels and minimal evidence",
+            "After a pass, no post-pass rereads, diffs, status checks, or tests",
         ):
             self.assertIn(contract.casefold(), skill.casefold())
-        self.assertIn("Sol is the sole full-suite executor", skill)
+        self.assertIn("then becomes the sole final-suite executor", skill)
         self.assertIn("edit only with absolute paths under it", skill)
         self.assertIn("command workdirs do not retarget edit tools", skill)
         self.assertIn("Verify the first changed path stays inside", skill)
         self.assertNotIn("multiple independent failure clusters", skill)
-        self.assertIn("number of failing tests or causal roots alone never forces reclaim", policy)
+        self.assertIn("failure count alone never forces reclaim", policy)
         self.assertIn("reuse the same luna for focused repair and transmit only new failure evidence", policy.casefold())
-        self.assertIn("A formal route also reviews its candidate receipt", policy)
-        self.assertIn("In the same turn and before the final suite, Luna maps each label", readme)
-        self.assertIn("Luna returns immediately after a pass", readme)
-        self.assertIn("without reading test bodies or repeating the suite", readme)
-        self.assertIn("without reading test bodies or repeating the suite", policy)
+        self.assertIn("any formal receipt", policy)
+        self.assertIn("they cannot certify themselves", readme)
+        self.assertIn("Sol reviews only those changed test bodies", readme)
+        self.assertIn("runs the sole final suite", readme)
+        self.assertIn("If those tests are pre-existing and independent", policy)
+        self.assertIn("Sol stays receipt-only", policy)
 
     def test_route_measurement_boundary_is_explicit(self) -> None:
         skill = self.skill()
