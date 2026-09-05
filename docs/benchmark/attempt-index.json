@@ -1,0 +1,114 @@
+{
+  "schema_version": 1,
+  "updated_through": "v0.37.4",
+  "normal_dispatch_loads_this_file": false,
+  "attempt_families": [
+    {
+      "id": "installation-and-measurement-foundations",
+      "versions": ["v0.2.0", "v0.2.1", "v0.3.0", "v0.4.0", "v0.4.1", "v0.5.0", "v0.5.1"],
+      "direction": "Make installation, runtime identity, phase boundaries, credit claims, reset windows, and referee isolation auditable.",
+      "mechanism_ids": ["managed-installation", "runtime-identity", "phase-metering", "allowance-window", "referee-isolation"],
+      "evidence": ["tests/test_setup.py", "tests/test_phase_tracker.py", "tests/test_publish_release.py"],
+      "observed_result": "Keep the safety and measurement boundaries, but they do not reduce ordinary route cost and cannot establish subscription savings by themselves.",
+      "repeat_rule": "Revisit only for a concrete host, loader, meter, or release API change; keep new measurement machinery outside ordinary dispatch."
+    },
+    {
+      "id": "more-workers-and-overlap",
+      "versions": ["v0.6.0", "v0.7.0", "v0.8.0", "v0.9.0", "v0.10.0", "v0.11.0", "v0.12.0", "v0.13.0", "v0.14.0", "v0.15.0", "v0.15.1"],
+      "direction": "Increase Luna coverage with fixed, dynamic, rolling, repair-first, and candidate-bound handoffs while retaining Sol overlap.",
+      "mechanism_ids": ["fixed-luna-topology", "multiple-luna-writers", "rolling-ready-queue", "retained-sol-overlap", "candidate-bound-handoff", "same-luna-repair"],
+      "evidence": ["docs/benchmark/matched-allowance-p003-2026-08-28.md", "docs/benchmark/matched-allowance-p004-2026-08-28.md", "docs/benchmark/p007-parallel-frontier-allowance-2026-08-29.md", "docs/benchmark/p008-first-handoff-preflight-allowance-2026-08-29.md"],
+      "observed_result": "Some runs showed coarse allowance signals, but quality misses, retained Sol replay, coordination, repair, and elapsed regressions prevented an equal-quality win.",
+      "repeat_rule": "Do not retry by merely adding workers, packages, overlap, routing scores, or handoff fields. A retry must remove measured Sol work or change the acceptance boundary."
+    },
+    {
+      "id": "effort-selection-and-complete-luna",
+      "versions": ["v0.16.0", "v0.17.0", "v0.18.0", "v0.19.0"],
+      "direction": "Bind Luna reasoning effort to external quality evidence and allow one Luna to own the complete implementation envelope.",
+      "mechanism_ids": ["evidence-bound-effort-selection", "complete-luna-ownership"],
+      "evidence": ["docs/benchmark/p011-reasoning-effort-calibration-2026-08-29.md", "docs/benchmark/p016-complete-luna-allowance-2026-08-29.md"],
+      "observed_result": "Complete Luna ownership produced a task-local 1-point versus 2-point five-hour signal and stronger quality, but it was 6 minutes 48 seconds slower and did not provide an equal-quality time win.",
+      "repeat_rule": "Keep lowest-supported effort and complete ownership. Do not make High a default; retry only with a bounded Medium-capable family and a cheaper Sol acceptance path."
+    },
+    {
+      "id": "content-addressed-handoffs-and-validation-ownership",
+      "versions": ["v0.20.0", "v0.20.1", "v0.21.0", "v0.22.0", "v0.23.0", "v0.24.0", "v0.25.0", "v0.26.0", "v0.27.0", "v0.28.0"],
+      "direction": "Separate route-external acceptance, bind candidate paths and receipts, compress handoffs, select effort, and assign validation ownership.",
+      "mechanism_ids": ["route-external-acceptance", "candidate-snapshot", "content-addressed-handoff", "validation-ownership", "changed-path-binding", "adaptive-validation-order"],
+      "evidence": ["work/P021-P031 mechanism records", "P024 matched account-meter result"],
+      "observed_result": "The controls closed real evidence and ownership gaps, but P024 still used 3 displayed five-hour points versus 1 for Sol-only and took 1305.748 versus 861.129 seconds.",
+      "repeat_rule": "Retain the guards off the hot path. Do not add manifests, ledgers, hashes, or duplicated validation to ordinary success; a retry must delete measured controller or replay work."
+    },
+    {
+      "id": "duplicate-work-removal-and-cold-start",
+      "versions": ["v0.29.0", "v0.30.0", "v0.30.1", "v0.31.0"],
+      "direction": "Remove duplicate acceptance checks and inherited-context replay, and permit a bounded Medium cold start.",
+      "mechanism_ids": ["duplicate-acceptance-removal", "bounded-cold-start", "inherited-context-removal"],
+      "evidence": ["P024-P042 attribution records", "work/p042/v0.31.0-release-notes.md"],
+      "observed_result": "This identified Sol controller repetition as the dominant avoidable cost and removed several structural replays, but still lacked an equal-quality subscription-meter win.",
+      "repeat_rule": "Do not re-add controller polling, inherited context, repeated test bodies, or a second default full-suite run. New work must reduce an observed hot-path action."
+    },
+    {
+      "id": "exception-triggered-compact-closure",
+      "versions": ["v0.32.0", "v0.33.0", "v0.34.0"],
+      "direction": "Use bounded dependency capsules, exception-triggered expansion, one retained Luna, compact installed profiles, and canonical receipts.",
+      "mechanism_ids": ["dependency-capsule", "exception-triggered-expansion", "compact-line-protocol", "installed-worker-closure", "canonical-receipt"],
+      "evidence": ["P043-P060 mechanism records", "work/p058/result.md", "work/p060/result.md"],
+      "observed_result": "Medium first-pass samples reached 32-45 seconds and about 5k-7k non-cached input, but compact text alone often increased rereads; High over-routing reached about 699 seconds and 119846 non-cached input.",
+      "repeat_rule": "Do not retry compact syntax, READ protocols, receipt fields, or global High as standalone levers. Retry only when the task capsule closes a previously observed semantic edge without another normal-path round."
+    },
+    {
+      "id": "slim-edits-and-semantic-closure",
+      "versions": ["v0.35.0", "v0.35.1", "v0.35.2", "v0.36.0", "v0.36.1"],
+      "direction": "Slim ordinary Luna delivery, survive edit-safety refusals, add causal semantic refactor checks, and permit bounded multi-failure repair.",
+      "mechanism_ids": ["slim-ordinary-path", "edit-safety-recovery", "causal-semantic-check", "bounded-multi-failure-repair"],
+      "evidence": ["work/p062/results.md", "work/p067/results.md", "work/p068/results.md", "work/p069/results.md", "work/p073/results.md", "work/p074/results.md", "work/p075/results.md"],
+      "observed_result": "Several arms cut diagnostic input or time but lost quality, were censored by edit safety, or broke the evidence return. Bounded same-Luna repair worked as a mechanism but did not establish allowance savings.",
+      "repeat_rule": "Do not trade acceptance coverage for fewer calls or cap repairs by failure count. Retry only with representative causal checks, absolute ownership, and one evidence-bearing return path."
+    },
+    {
+      "id": "delivery-correctness-gates",
+      "versions": ["v0.37.0", "v0.37.1", "v0.37.2", "v0.37.3"],
+      "direction": "Require pre-suite contract coverage, immediate-parent receipts, one-turn preflight, and absolute formal-root path binding.",
+      "mechanism_ids": ["contract-coverage-gate", "immediate-parent-receipt", "one-turn-preflight", "absolute-formal-root"],
+      "evidence": ["work/p076/results.md", "work/p077/results.md", "work/p080/results.md", "work/p081/results.md", "work/p082/results.md", "work/p083/results.md"],
+      "observed_result": "The sequence fixed missing tests, wrong-parent evidence, extra preflight turns, and cross-workspace edits. P081 still failed both arms; P083 exposed self-authored tests being mistaken for independent authority.",
+      "repeat_rule": "Keep these correctness invariants. Do not repeat path, parent, or presence gates unless a new host failure violates them; the remaining target is economic substitution."
+    },
+    {
+      "id": "single-final-acceptance-executor",
+      "versions": ["v0.37.4"],
+      "direction": "Choose exactly one final suite executor from acceptance ownership and bind Sol review to the returned receipt.",
+      "mechanism_ids": ["single-final-suite-executor", "receipt-bound-sol-review"],
+      "evidence": ["work/p084/results.md", "work/p085/results.md"],
+      "observed_result": "P085 matched 33 public and 12 hidden checks on both versions. v0.37.4 was 22.202% faster at the meter boundary, used 32.096% fewer combined non-cached input tokens, and halved full-suite executions, but both allowance changes stayed below one percentage point.",
+      "repeat_rule": "Retain the mechanism. Do not claim subscription savings until a frozen 20-30 minute task crosses the account meter; one pair cannot separate mechanism effect from first-pass candidate variance."
+    }
+  ],
+  "release_entries": [
+    {
+      "id": "v0.37.5-release-history-gate",
+      "tag": "v0.37.5",
+      "history_reviewed_through": "v0.37.4",
+      "prior_art_refs": [
+        "installation-and-measurement-foundations",
+        "more-workers-and-overlap",
+        "effort-selection-and-complete-luna",
+        "content-addressed-handoffs-and-validation-ownership",
+        "duplicate-work-removal-and-cold-start",
+        "exception-triggered-compact-closure",
+        "slim-edits-and-semantic-closure",
+        "delivery-correctness-gates",
+        "single-final-acceptance-executor"
+      ],
+      "direction": "Block a release until its proposed mechanisms are compared against every indexed prior attempt family.",
+      "mechanism_ids": ["release-history-gate"],
+      "classification": "new_direction",
+      "changed_premise": null,
+      "novelty_statement": "Earlier releases guarded runtime economics and GitHub Latest, but none made prior-attempt review a pre-network release condition.",
+      "evidence_refs": ["P085 matched result", "tests/test_publish_release.py"],
+      "decision": "SHIP_EXPERIMENTAL",
+      "normal_path_cost": "none"
+    }
+  ]
+}
