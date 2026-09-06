@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from typing import Any
+from types import MappingProxyType
 
 
 @dataclass(frozen=True)
@@ -16,6 +17,10 @@ class ResultSnapshot:
     cases: tuple[CaseResult, ...]
     counts: dict[str, int]
     total_duration_ms: int | float
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "cases", tuple(self.cases))
+        object.__setattr__(self, "counts", MappingProxyType(dict(self.counts)))
 
 
 @dataclass(frozen=True)
