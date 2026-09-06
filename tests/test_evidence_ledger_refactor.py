@@ -27,6 +27,15 @@ MODULES = {
         "_cohort_pair_output", "cohort_identity", "evidence_status", "task_family_feedback",
     },
 }
+CONSTANTS = {
+    "evidence_schema.py": {
+        "SCHEMA_VERSION", "MIN_MATCHED_PAIRS", "ROUTES", "OUTCOMES", "INDEPENDENT_RESULTS",
+        "FAILURE_CLASSES", "CREDIT_KINDS", "CREDIT_VERIFICATIONS",
+        "VERIFIED_RECEIPTS_SCHEMA_VERSION", "PHASES", "EFFORTS", "REVIEW_DEPTHS",
+        "ALLOWED_FIELDS", "REQUIRED_FIELDS", "PRIVATE_PATH", "LABEL", "DIGEST",
+    },
+    "evidence_receipts.py": {"VERIFIED_CLAIM_FIELDS", "VERIFIED_INDEX_FIELDS"},
+}
 
 
 def parse(path: Path) -> ast.Module:
@@ -40,6 +49,16 @@ class EvidenceLedgerRefactorTests(unittest.TestCase):
             self.assertTrue(path.is_file(), filename)
             defined = {node.name for node in parse(path).body if isinstance(node, (ast.FunctionDef, ast.ClassDef))}
             self.assertTrue(expected <= defined, f"{filename}: missing {sorted(expected - defined)}")
+
+    def test_schema_and_receipt_constants_have_explicit_owners(self) -> None:
+        for filename, expected in CONSTANTS.items():
+            assigned: set[str] = set()
+            for node in parse(SCRIPTS / filename).body:
+                if isinstance(node, ast.Assign):
+                    assigned.update(target.id for target in node.targets if isinstance(target, ast.Name))
+                elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+                    assigned.add(node.target.id)
+            self.assertTrue(expected <= assigned, f"{filename}: missing {sorted(expected - assigned)}")
 
     def test_facade_is_thin_and_keeps_only_cli_construction(self) -> None:
         tree = parse(FACADE)
@@ -89,7 +108,7 @@ class EvidenceLedgerRefactorTests(unittest.TestCase):
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
         self.assertEqual(sys.path, before)
-        expected = set().union(*MODULES.values()) | {"template", "parser", "main", "SCHEMA_VERSION"}
+        expected = set().union(*MODULES.values(), *CONSTANTS.values()) | {"template", "parser", "main"}
         self.assertTrue(expected <= set(dir(module)))
 
     def test_reexports_are_the_live_split_objects(self) -> None:
