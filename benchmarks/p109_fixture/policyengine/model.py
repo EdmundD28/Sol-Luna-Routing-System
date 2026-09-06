@@ -31,3 +31,26 @@ class NormalizedRule:
     actions: Tuple[Any, ...]
     when: Any
 
+@dataclass(frozen=True)
+class Selector:
+    ids: Tuple[str, ...]; roles: Tuple[str, ...]; groups: Tuple[str, ...]
+
+@dataclass(frozen=True)
+class ResourceSelector:
+    ids: Tuple[str, ...]; kinds: Tuple[str, ...]; tags: Tuple[Tuple[str, Tuple[Any, ...]], ...]
+
+@dataclass(frozen=True)
+class RequestSubject:
+    id: str; roles: Tuple[str, ...]; groups: Tuple[str, ...]; attrs: Any
+
+@dataclass(frozen=True)
+class RequestResource:
+    id: str; kind: str; tags: Any; attrs: Any
+
+@dataclass(frozen=True)
+class Request:
+    subject: RequestSubject; resource: RequestResource; action: str; context: Any
+
+@dataclass(frozen=True)
+class Condition:
+    kind: str; data: Any
