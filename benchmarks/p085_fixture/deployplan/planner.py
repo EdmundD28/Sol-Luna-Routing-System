@@ -7,8 +7,11 @@ import json
 from typing import Any
 
 from .diff import diff_services
+from .impact import diff_with_impact
+from .overlay import apply_profile
 from .graph import dependency_closure, dependency_order
-from .model import Operation, Plan, Service
+from .model import Operation, Plan, ProfiledPlan, Service
+from .waves import build_waves
 from .normalize import parse_manifest
 
 
@@ -73,3 +76,19 @@ def render_plan(plan: Plan) -> str:
     body = _payload(plan.services, plan.operations)
     body["digest"] = plan.digest
     return _canonical(body) + "\n"
+
+def compile_profiled_plan(current: Mapping[str, Any], desired: Mapping[str, Any], profile: Mapping[str, Any], *, roots: tuple[str, ...] | None = None, max_parallel: int = 1) -> ProfiledPlan:
+    if isinstance(max_parallel, bool) or not isinstance(max_parallel, int) or max_parallel <= 0:
+        raise __import__("benchmarks.p085_fixture.deployplan.errors", fromlist=["ManifestError"]).ManifestError("BAD_PARALLELISM", "max_parallel", "max_parallel must be a positive integer")
+    current_items=parse_manifest(current); profiled=apply_profile(desired, profile)
+    if roots is None: selected=profiled; selected_current=current_items
+    else:
+        selected=dependency_closure(profiled, roots); names={s.name for s in selected}; selected_current=tuple(s for s in current_items if s.name in names)
+    operations=diff_with_impact(selected_current, selected); waves=build_waves(operations, selected_current, selected, max_parallel)
+    payload={"services":[_service(s) for s in selected],"operations":[_operation(o) for o in operations],"waves":[[_operation(o) for o in w] for w in waves]}
+    digest="sha256:"+hashlib.sha256(_canonical(payload).encode("utf-8")).hexdigest()
+    return ProfiledPlan(selected, operations, waves, digest)
+
+def render_profiled_plan(plan: ProfiledPlan) -> str:
+    body={"services":[_service(s) for s in plan.services],"operations":[_operation(o) for o in plan.operations],"waves":[[_operation(o) for o in w] for w in plan.waves]}; body["digest"]="sha256:"+hashlib.sha256(_canonical({k:v for k,v in body.items() if k!="digest"}).encode("utf-8")).hexdigest()
+    return _canonical(body)+"\n"
