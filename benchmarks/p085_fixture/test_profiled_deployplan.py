@@ -117,7 +117,8 @@ class ProfileOverlayTests(unittest.TestCase):
     def test_12_omitted_existing_fields_retain_values(self):
         base = manifest(svc("api", "old", depends_on=["db"], env={"A": "1"}, tags=["x"], replicas=2), svc("db"))
         result = apply_profile(base, {"services": [{"name": " api ", "image": "new"}]})
-        self.assertEqual(result[0], Service("api", "new", ("db",), (("A", "1"),), ("x",), 2))
+        api = next(item for item in result if item.name == "api")
+        self.assertEqual(api, Service("api", "new", ("db",), (("A", "1"),), ("x",), 2))
 
     def test_13_new_service_requires_image_and_uses_defaults(self):
         err_code(self, lambda: apply_profile(manifest(), {"services": [{"name": "api"}]}), "BAD_IMAGE", "services[0].image")
