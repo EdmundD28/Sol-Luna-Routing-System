@@ -26,3 +26,11 @@ class Plan:
     services: tuple[Service, ...]
     operations: tuple[Operation, ...]
     digest: str
+
+
+@dataclass(frozen=True, slots=True)
+class ProfiledPlan:
+    services: tuple[Service, ...]
+    operations: tuple[Operation, ...]
+    waves: tuple[tuple[Operation, ...], ...]
+    digest: str

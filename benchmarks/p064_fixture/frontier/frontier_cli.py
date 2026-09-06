@@ -34,6 +34,19 @@ def _load_planner() -> ModuleType:
         raise FrontierCliError(f"cannot load sibling frontier planner: {exc}") from exc
 
 
+def _load_replay() -> ModuleType:
+    path = Path(__file__).with_name("status_replay.py")
+    try:
+        spec = importlib.util.spec_from_file_location("sol_luna_status_replay", path)
+        if spec is None or spec.loader is None:
+            raise ImportError("no module loader")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+    except Exception as exc:
+        raise FrontierCliError(f"cannot load sibling status replay: {exc}") from exc
+
+
 def _unique_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     result: dict[str, Any] = {}
     for key, value in pairs:
@@ -94,7 +107,6 @@ def main(argv=None) -> int:
 
     arguments = list(sys.argv[1:] if argv is None else argv)
     try:
-        planner = None
         if arguments == ["template"]:
             planner = _load_planner()
             output = planner.template()
@@ -103,9 +115,18 @@ def main(argv=None) -> int:
                 raise FrontierCliError("input file path must be non-empty")
             planner = _load_planner()
             output = planner.plan(_load_json(arguments[2]))
+        elif len(arguments) == 5 and arguments[:2] == ["session-freeze", "--input"] and arguments[3] == "--owner":
+            replay = _load_replay()
+            output = replay.freeze(_load_json(arguments[2]), arguments[4])
+        elif len(arguments) == 5 and arguments[:2] == ["session-transition", "--input"] and arguments[3] == "--event":
+            replay = _load_replay()
+            output = replay.transition(_load_json(arguments[2]), _load_json(arguments[4]))
+        elif len(arguments) == 3 and arguments[:2] == ["session-project", "--input"]:
+            replay = _load_replay()
+            output = replay.project(_load_json(arguments[2]))
         else:
             raise FrontierCliError(
-                "invalid arguments; expected 'template' or 'evaluate --input FILE'"
+                "invalid arguments"
             )
         _emit(output)
         return 0

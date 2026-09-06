@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 
-class BomError(Exception):
+class BomError(ValueError):
     def __init__(self, code, path):
         self.code, self.path = code, path
         super().__init__(code, path)
