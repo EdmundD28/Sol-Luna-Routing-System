@@ -184,10 +184,13 @@ Add `render_profiled_plan(plan) -> str`.
 
 The independent public suite preserves all 33 P085 tests and adds 50 P110 tests
 covering every rule above, including order permutations and immutability. It is
-frozen in fixture commit `6aadba66f7d9bd257709924f369a1a1c56b5eed7`.
+frozen in corrected fixture commit
+`98bd1ae30ea560aa8bd90cb0330a2a3838c87e4f`. The earlier fixture commit
+`6aadba66f7d9bd257709924f369a1a1c56b5eed7` is superseded because one test
+indexed a dependency-ordered result as if manifest insertion order were kept.
 
 Public test SHA-256:
-`005cedfb621ff482f24011202c0be9dc1c154548dd04f7d7a790795a0298ac23`.
+`9f91a96393fdc2df589c92455f6ab06b48dd541f00dd286cd8363b179496f2a0`.
 
 Run exactly from the formal repository root:
 
