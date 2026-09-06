@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_through": "v0.37.4",
+  "updated_through": "v0.37.5",
   "normal_dispatch_loads_this_file": false,
   "attempt_families": [
     {
@@ -107,6 +107,36 @@
       "changed_premise": null,
       "novelty_statement": "Earlier releases guarded runtime economics and GitHub Latest, but none made prior-attempt review a pre-network release condition.",
       "evidence_refs": ["P085 matched result", "tests/test_publish_release.py"],
+      "decision": "SHIP_EXPERIMENTAL",
+      "normal_path_cost": "none"
+    },
+    {
+      "id": "v0.37.6-acceptance-capsule",
+      "tag": "v0.37.6",
+      "history_reviewed_through": "v0.37.5",
+      "prior_art_refs": [
+        "installation-and-measurement-foundations",
+        "more-workers-and-overlap",
+        "effort-selection-and-complete-luna",
+        "content-addressed-handoffs-and-validation-ownership",
+        "duplicate-work-removal-and-cold-start",
+        "exception-triggered-compact-closure",
+        "slim-edits-and-semantic-closure",
+        "delivery-correctness-gates",
+        "single-final-acceptance-executor"
+      ],
+      "direction": "Bind ordinary acceptance execution to a canonical workdir, exact executable and arguments, and resolved environment values.",
+      "mechanism_ids": ["absolute-formal-root", "launch-ready-acceptance-capsule", "infrastructure-fail-closed"],
+      "evidence_refs": ["docs/benchmark/v0.37.6-release-notes.md", "tests/test_package_contract.py"],
+      "observed_result": "Relative environment and wrong-directory launches produced import failures; absolute formal-root execution also exposed semantic failures, so infrastructure evidence cannot justify escalation.",
+      "classification": "retry_changed_premise",
+      "changed_premise": {
+        "prior_mechanism_ids": ["absolute-formal-root"],
+        "falsified_assumption": "An absolute formal root plus a textual acceptance command was assumed to preserve the worker's launch directory and relative environment resolution.",
+        "measurable_difference": "The existing acceptance field now names one canonical workdir, exact executable and arguments, and environment values resolved from that workdir without adding a tool or model round.",
+        "new_evidence": ["P103 relative fixture-only PYTHONPATH import failure", "P104 relative two-entry PYTHONPATH launched from the tests directory"]
+      },
+      "novelty_statement": null,
       "decision": "SHIP_EXPERIMENTAL",
       "normal_path_cost": "none"
     }

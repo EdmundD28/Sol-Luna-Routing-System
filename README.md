@@ -55,6 +55,8 @@ python .agents/skills/sol-luna/scripts/net_substitution.py template
 The policy is advisory and never launches a worker automatically. Missing estimates stay unknown; Sol can retain the task or run a short read-only scout probe.
 The default schema-7 template keeps quality records in a separate strict index and binds each candidate by content to the same task family, Luna effort, allocation shape, and acceptance-suite digest. Its reasoning profile produces a minimum effort but never auto-selects Max. Use `cold-start-template` only for the schema-8 bounded path above; the strict external manifest supplies the task family, executable acceptance commands, expected signals, and complete acceptance-ID set, then binds the full route request. Risk classification and cost estimates remain Sol-approved judgments, not tool-proven facts. Schema 6 remains compatible without the effort floor; schema 5 is legacy compatibility.
 
+The ordinary dispatch must state a launch-ready acceptance capsule: canonical repository workdir, exact executable plus arguments, and environment values already resolved from that workdir. This is an auditable dispatch contract, not a runtime launcher. A capsule defect found before launch returns `BLOCK` with `K=ACCEPTANCE_CAPSULE`; an exact launch failure before test collection returns infrastructure `FAILED`. Neither is quality evidence or authorizes effort escalation, and retry requires a corrected capsule rather than an implementation repair.
+
 ## Profiles
 
 The project ships two roles rather than a large role hierarchy:

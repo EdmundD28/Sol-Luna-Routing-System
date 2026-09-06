@@ -81,7 +81,8 @@ class PackageContractTests(unittest.TestCase):
             "On failure return FAILED", "repair only after Sol sends new evidence", "After PASS, return immediately",
             "Stop refused edits", "never bypass edit safety", "after required user confirmation; otherwise BLOCK",
             "Do not spawn agents", "architecture/product decisions", "Without authority", "network/external systems", "publish",
-            "commit", "push", "deploy", "install",
+            "commit", "push", "deploy", "install", "or weaken permissions",
+            "Stop on ambiguity, conflict, unsafe scope, missing acceptance",
             "READY|<package>|PATH=<paths>|TEST=<acceptance-id>:PASS:<passed>/<total>:EXIT=<code>|RISK=<none-or-code>",
             "BLOCK|<package>|K=<code>|REF=<minimal>",
             "FAILED|<package>|TEST=<acceptance-id>:FAIL:EXIT=<code>", "Retain context", "only new evidence",
@@ -98,6 +99,21 @@ class PackageContractTests(unittest.TestCase):
             self.assertIn("Return via immediate-parent completion", instructions)
             for phrase in required:
                 self.assertIn(phrase, instructions)
+
+    def test_acceptance_capsule_is_launch_ready_and_fail_closed(self) -> None:
+        capsule = ("launch-ready acceptance capsule", "canonical repository workdir",
+                   "exact executable", "environment values", "dispatch contract",
+                   "quality evidence", "corrected capsule")
+        for document in (self.skill(), self.policy(), self.readme()):
+            for phrase in capsule:
+                self.assertIn(phrase.casefold(), document.casefold())
+        self.assertIn("BLOCK` with `K=ACCEPTANCE_CAPSULE", self.skill())
+        self.assertIn("BLOCK|<package>|K=ACCEPTANCE_CAPSULE", self.policy())
+        self.assertIn("not a runtime launcher", self.skill().casefold())
+        self.assertIn("not runtime enforcement", self.policy().casefold())
+        self.assertIn("not a runtime launcher", self.readme().casefold())
+        for document in (self.skill(), self.policy(), self.readme()):
+            self.assertIn("infrastructure `failed`", document.casefold())
 
     def test_lean_skill_keeps_numeric_route_gates_and_host_observed_results(self) -> None:
         skill = (ROOT / ".agents" / "skills" / "sol-luna" / "SKILL.md").read_text(encoding="utf-8")

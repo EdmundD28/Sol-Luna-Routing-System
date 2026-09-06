@@ -17,17 +17,17 @@ Do not run planning scripts on the ordinary path. For a material decision that r
 
 Choose the lowest effort supported by the task:
 
-- Low: mechanical, explicit, cheaply verified work.
-- Medium: settled bounded implementation with deterministic acceptance.
-- High: complex logic or substantial edge cases.
+- Low: explicit, cheaply verified work.
+- Medium: bounded implementation with deterministic acceptance.
+- High: complex logic or edge cases.
 - XHigh: difficult debugging, shared interfaces, or costly ambiguity.
-- Max: exceptional uncertainty that decomposition cannot remove.
+- Max: uncertainty decomposition cannot remove.
 
 Exact-byte, platform-sensitive, strict-serialization, and adversarial work normally needs High unless matched evidence supports less. High, XHigh, or Max on Luna-owned critical-path work is eligible only after the same-allocation lower-effort option is rejected by a quality or defect gate. Use `luna_scout` for a bounded read-only feasibility question and `luna_reviewer` for independent review. Never silently substitute another model family.
 
 ## Dispatch once
 
-Default to one retained Luna writer with `fork_turns="none"`. Send only repository root, package ID, deliverable, exclusive writable paths, named dependencies/interfaces, acceptance command and signal, forbidden actions, stop conditions, and effort. If that root differs from the parent workspace, edit only with absolute paths under it; command workdirs do not retarget edit tools. Verify the first changed path stays inside. The worker returns only through normal completion to its immediate Sol parent; routine success or failure never messages the root or another task. Do not require a manifest, digest, ledger, ownership tool, or receipt generator normally. Use schema-2 ownership and compact receipts only for formal evidence, concurrency, disputed scope, or high risk.
+Default to one retained Luna writer with `fork_turns="none"`. Send repository root, package ID, deliverable, exclusive writable paths, named dependencies/interfaces, a launch-ready acceptance capsule, forbidden actions, stop conditions, and effort. This is a dispatch contract, not a runtime launcher: it states the canonical repository workdir, exact executable plus arguments, and environment values already resolved from that workdir, and instructs Luna to execute there without `cd` or reinterpreting relative values. If that root differs from the parent workspace, edit only with absolute paths under it; command workdirs do not retarget edit tools. Verify the first changed path stays inside. A missing, inconsistent, or unexecutable capsule before launch returns `BLOCK` with `K=ACCEPTANCE_CAPSULE`; an exact launch that fails before tests collect returns infrastructure `FAILED` with minimal launch evidence. Neither is quality evidence or authorizes effort escalation; retry only with a corrected capsule, not an implementation repair. The worker returns only through normal completion to its immediate Sol parent; routine success or failure never messages the root or another task. Do not require a manifest, digest, ledger, ownership tool, or receipt generator normally. Use schema-2 ownership and compact receipts only for formal evidence, concurrency, disputed scope, or high risk.
 
 The intended worker path is one bounded read, one complete candidate, causal or changed-area checks, and a concise handoff. "Complete" is semantic, not a demand for one giant patch or the fewest changed lines: use stable file-scoped stages for multi-file or large-file work. A refactor must move the live implementation into the intended structure; when the acceptance contract requires a public compatibility facade, leave a genuine one. Never hide old executable source inside strings or comments, duplicate it to simulate decomposition, or compress statements to game a line cap. Never delete a tracked file merely to replace it. Stop a refused edit and never route around it; continue only with a permitted reviewable in-place update after any required user confirmation, otherwise report `BLOCK`. The final line is human-readable:
 
