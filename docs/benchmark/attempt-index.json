@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_through": "v0.37.5",
+  "updated_through": "v0.37.6",
   "normal_dispatch_loads_this_file": false,
   "attempt_families": [
     {
@@ -139,6 +139,36 @@
       "novelty_statement": null,
       "decision": "SHIP_EXPERIMENTAL",
       "normal_path_cost": "none"
+    },
+    {
+      "id": "v0.37.7-delegated-authority-recognition",
+      "tag": "v0.37.7",
+      "history_reviewed_through": "v0.37.6",
+      "prior_art_refs": [
+        "installation-and-measurement-foundations",
+        "more-workers-and-overlap",
+        "effort-selection-and-complete-luna",
+        "content-addressed-handoffs-and-validation-ownership",
+        "duplicate-work-removal-and-cold-start",
+        "exception-triggered-compact-closure",
+        "slim-edits-and-semantic-closure",
+        "delivery-correctness-gates",
+        "single-final-acceptance-executor"
+      ],
+      "direction": "Distinguish an already user-authorized bounded parent package from a real tool or host edit refusal so Luna does not invent a second confirmation gate.",
+      "mechanism_ids": ["edit-safety-recovery", "delegated-authority-recognition"],
+      "evidence_refs": ["docs/benchmark/v0.37.7-release-notes.md", "tests/test_package_contract.py"],
+      "observed_result": "The old worker contract rejected an explicitly authorized disposable edit; the candidate contract completed the exact 18-byte edit once while preserving refusal and sandbox gates.",
+      "classification": "retry_changed_premise",
+      "changed_premise": {
+        "prior_mechanism_ids": ["edit-safety-recovery"],
+        "falsified_assumption": "The generic required-user-confirmation clause was assumed to distinguish missing authority from a genuine edit-safety refusal.",
+        "measurable_difference": "The candidate treats a user-authorized bounded parent package as sufficient edit authority, keeps real refusal fail-closed, and reduces the Skill to 1194 words and each writer profile to 184 words.",
+        "new_evidence": ["Old luna_worker_low rejected the explicitly authorized disposable probe", "Candidate gpt-5.6-luna low wrote the exact 18-byte probe on its first attempt"]
+      },
+      "novelty_statement": null,
+      "decision": "SHIP_EXPERIMENTAL",
+      "normal_path_cost": "reduced"
     }
   ]
 }

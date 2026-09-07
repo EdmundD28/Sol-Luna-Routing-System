@@ -79,7 +79,8 @@ class PackageContractTests(unittest.TestCase):
             "If Luna changes acceptance tests", "run causal checks and return for Sol's sole final suite",
             "otherwise run the suite last and once",
             "On failure return FAILED", "repair only after Sol sends new evidence", "After PASS, return immediately",
-            "Stop refused edits", "never bypass edit safety", "after required user confirmation; otherwise BLOCK",
+            "Stop refused edits", "never bypass edit safety",
+            "User-authorized parent package permits bounded edits; otherwise BLOCK",
             "Do not spawn agents", "architecture/product decisions", "Without authority", "network/external systems", "publish",
             "commit", "push", "deploy", "install", "or weaken permissions",
             "Stop on ambiguity, conflict, unsafe scope, missing acceptance",
@@ -201,7 +202,7 @@ class PackageContractTests(unittest.TestCase):
             "Exactly one executor runs the final full suite",
             "Never delete a tracked file merely to replace it",
             "Stop a refused edit and never route around it",
-            "after any required user confirmation, otherwise report `BLOCK`",
+            "A user-authorized parent package permits bounded edits; otherwise report `BLOCK`",
             "Complete\" is semantic",
             "never hide old executable source inside strings or comments",
             "when the acceptance contract requires a public compatibility facade",
@@ -224,6 +225,7 @@ class PackageContractTests(unittest.TestCase):
         ):
             self.assertIn(contract.casefold(), skill.casefold())
         self.assertIn("then becomes the sole final-suite executor", skill)
+        self.assertNotIn("after any required user confirmation", skill)
         self.assertIn("edit only with absolute paths under it", skill)
         self.assertIn("command workdirs do not retarget edit tools", skill)
         self.assertIn("Verify the first changed path stays inside", skill)
