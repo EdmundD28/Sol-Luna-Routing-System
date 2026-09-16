@@ -23,7 +23,7 @@ Choose the lowest effort supported by the task:
 - XHigh: difficult debugging, shared interfaces, or costly ambiguity.
 - Max: uncertainty decomposition cannot remove.
 
-Exact-byte, platform-sensitive, strict-serialization, and adversarial work normally needs High unless matched evidence supports less. High, XHigh, or Max on Luna-owned critical-path work is eligible only after the same-allocation lower-effort option is rejected by a quality or defect gate. Use `luna_scout` for a bounded read-only feasibility question and `luna_reviewer` for independent review. Never silently substitute another model family.
+Exact-byte, platform-sensitive, strict-serialization, and adversarial labels do not authorize High. High+ critical-path work requires matched task-family evidence that the same allocation at lower effort missed a quality or defect gate. Use `luna_scout` for a bounded read-only feasibility question and `luna_reviewer` for independent review. Never silently substitute another model family.
 
 ## Dispatch once
 

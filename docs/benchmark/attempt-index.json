@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_through": "v0.37.8",
+  "updated_through": "v0.37.9",
   "normal_dispatch_loads_this_file": false,
   "attempt_families": [
     {
@@ -231,6 +231,37 @@
         "falsified_assumption": "Removing inherited task context and duplicate acceptance was assumed to make an idle Sol controller passive while its retained Luna ran.",
         "measurable_difference": "The controller now makes one long completion wait and never polls or enumerates unrelated agents on the ordinary empty-queue path, without adding a tool or model round.",
         "new_evidence": ["P117 four one-minute wait wakeups", "P117 global agent enumeration exposed the matched arm summary"]
+      },
+      "novelty_statement": null,
+      "decision": "SHIP_EXPERIMENTAL",
+      "normal_path_cost": "reduced"
+    },
+    {
+      "id": "v0.38.0-evidence-bound-high",
+      "tag": "v0.38.0",
+      "history_reviewed_through": "v0.37.9",
+      "prior_art_refs": [
+        "installation-and-measurement-foundations",
+        "more-workers-and-overlap",
+        "effort-selection-and-complete-luna",
+        "content-addressed-handoffs-and-validation-ownership",
+        "duplicate-work-removal-and-cold-start",
+        "exception-triggered-compact-closure",
+        "slim-edits-and-semantic-closure",
+        "delivery-correctness-gates",
+        "single-final-acceptance-executor",
+        "release-safety-and-delegated-authority"
+      ],
+      "direction": "Require observed matched lower-effort quality evidence before a risk label can promote complete-Luna work to High or above.",
+      "mechanism_ids": ["evidence-bound-effort-selection"],
+      "evidence_refs": ["docs/benchmark/v0.38.0-release-notes.md", "tests/test_package_contract.py"],
+      "observed_result": "On the same frozen P117 task, Luna Medium matched High at 19/19 public and 10/10 hidden checks with zero formal repair while the full route beat Sol-only time by 33.789% and credit equivalent by 29.340%; the earlier label-driven High route was 24.457% slower than Sol-only.",
+      "classification": "retry_changed_premise",
+      "changed_premise": {
+        "prior_mechanism_ids": ["evidence-bound-effort-selection"],
+        "falsified_assumption": "Strict serialization and adversarial edge labels were assumed to be sufficient evidence that P117 required Luna High.",
+        "measurable_difference": "The ordinary rule now treats risk labels only as a higher quality bar and requires matched task-family evidence of a lower-effort quality or defect miss before High-or-above dispatch.",
+        "new_evidence": ["P117 Luna High equal-quality route remained 24.457% slower than Sol-only", "P117 Luna Medium passed the same 19 public and 10 hidden checks in 160.060 seconds"]
       },
       "novelty_statement": null,
       "decision": "SHIP_EXPERIMENTAL",

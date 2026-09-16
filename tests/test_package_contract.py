@@ -169,7 +169,8 @@ class PackageContractTests(unittest.TestCase):
             "conservative execution plus one repair plus Sol recovery and downstream dependency-closure re-execution",
             "one Luna can own substantial",
             "lowest effort supported by the task",
-            "same-allocation lower-effort option is rejected by a quality or defect gate",
+            "labels do not authorize High",
+            "matched task-family evidence that the same allocation at lower effort missed a quality or defect gate",
             "Default to one retained Luna writer",
             "wait once on the retained worker until completion",
             "never poll, enumerate all agents, or wake on commentary",
@@ -180,6 +181,7 @@ class PackageContractTests(unittest.TestCase):
         ):
             self.assertIn(contract, skill)
         self.assertNotIn("first-pass completion is plausible", skill)
+        self.assertNotIn("normally needs High", skill)
 
     def test_skill_preserves_ownership_handoff_and_repair_gates(self) -> None:
         skill = self.skill()
