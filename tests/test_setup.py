@@ -3,10 +3,13 @@ from __future__ import annotations
 import importlib.util
 import io
 import json
+import queue
+import subprocess
 import sys
 import tempfile
+import threading
 import unittest
-from contextlib import redirect_stdout
+from contextlib import contextmanager, redirect_stdout
 from pathlib import Path
 from unittest import mock
 
@@ -17,6 +20,49 @@ SPEC = importlib.util.spec_from_file_location("sol_luna_setup", SCRIPT)
 assert SPEC and SPEC.loader
 SETUP = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(SETUP)
+
+
+@contextmanager
+def held_by_child(codex_home: Path):
+    source = """
+import importlib.util
+import sys
+from pathlib import Path
+
+spec = importlib.util.spec_from_file_location("child_setup", Path(sys.argv[1]))
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+with module.mutation_lock(Path(sys.argv[2]), "test-child"):
+    print("LOCKED", flush=True)
+    sys.stdin.readline()
+"""
+    process = subprocess.Popen(
+        [sys.executable, "-B", "-c", source, str(SCRIPT), str(codex_home)],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    assert process.stdout is not None
+    ready: queue.Queue[str] = queue.Queue(maxsize=1)
+    threading.Thread(target=lambda: ready.put(process.stdout.readline()), daemon=True).start()
+    try:
+        line = ready.get(timeout=5).strip()
+        if line != "LOCKED":
+            _, error = process.communicate(timeout=5)
+            raise AssertionError(f"child lock holder failed: {line!r} {error!r}")
+        yield
+    finally:
+        if process.poll() is None:
+            assert process.stdin is not None
+            process.stdin.write("release\n")
+            process.stdin.flush()
+            try:
+                process.communicate(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.communicate(timeout=5)
+                raise AssertionError("child lock holder did not exit")
 
 
 class SetupTests(unittest.TestCase):
@@ -43,6 +89,39 @@ class SetupTests(unittest.TestCase):
             self.assertEqual(SETUP.apply(codex, skills, update=True)["doctor"]["status"], "healthy")
             self.assertEqual(SETUP.rollback(codex, skills)["status"], "rolled-back")
             self.assertFalse((skills / "sol-luna").exists())
+
+    def test_mutation_lock_contention_is_busy_and_zero_write(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            codex = Path(temp) / "codex"
+            skills = Path(temp) / "skills"
+            with SETUP.mutation_lock(codex, "holder"):
+                with self.assertRaisesRegex(SETUP.SetupError, r"BUSY.*install.*sol-luna-setup\.lock"):
+                    SETUP.apply(codex, skills)
+            self.assertFalse(SETUP.state_path(codex).exists())
+            self.assertFalse((skills / "sol-luna").exists())
+
+    def test_mutation_lock_is_released_after_exception(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            codex = Path(temp) / "codex"
+            skills = Path(temp) / "skills"
+            with mock.patch.object(SETUP, "atomic_write", side_effect=OSError("injected failure")):
+                with self.assertRaises(OSError):
+                    SETUP.apply(codex, skills)
+            with SETUP.mutation_lock(codex, "after-error"):
+                pass
+
+    def test_child_holder_blocks_update_but_not_read_only_commands(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            codex = root / "codex"
+            skills = root / "skills"
+            SETUP.apply(codex, skills)
+            with held_by_child(codex):
+                with self.assertRaisesRegex(SETUP.SetupError, r"BUSY.*update"):
+                    SETUP.apply(codex, skills, update=True)
+                self.assertTrue(SETUP.preview(codex, skills, require_installed=True)["safe_to_apply"])
+                self.assertTrue(SETUP.migration_plan(codex, root / "new-skills")["safe_to_apply"])
+                self.assertEqual(SETUP.doctor(codex)["status"], "healthy")
 
     def test_migration_preview_migrate_doctor_update_and_rollback(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

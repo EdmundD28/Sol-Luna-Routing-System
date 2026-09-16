@@ -14,9 +14,10 @@ import stat
 import sys
 import tempfile
 import uuid
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Iterator, Mapping
 
 STATE_SCHEMA = 1
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -24,10 +25,85 @@ SKILL_SOURCE = REPO_ROOT / ".agents" / "skills" / "sol-luna"
 AGENT_SOURCE = REPO_ROOT / ".codex" / "agents"
 OLD_SKILL_RELATIVE = Path("skills") / "sol-luna"
 OLD_AGENT_NAME = "luna-worker.toml"
+LOCK_NAME = "sol-luna-setup.lock"
 
 
 class SetupError(ValueError):
     """A setup operation is unsafe, conflicted, or inconsistent."""
+
+
+def _assert_no_link_like_component(path: Path) -> None:
+    absolute = path.absolute()
+    current = Path(absolute.anchor)
+    for part in absolute.parts[1:]:
+        current = current / part
+        if is_link_like(current):
+            raise SetupError("mutation lock path traverses a symlink or reparse point")
+
+
+@contextmanager
+def mutation_lock(codex_home: Path, operation: str) -> Iterator[None]:
+    """Take one non-blocking OS advisory lock for a setup mutation."""
+    requested = Path(codex_home)
+    _assert_no_link_like_component(requested)
+    codex = requested.resolve(strict=False)
+    if codex == Path(codex.anchor) or codex == REPO_ROOT.resolve():
+        raise SetupError("codex_home is too broad or points at the source repository")
+    codex.mkdir(parents=True, exist_ok=True)
+    _assert_no_link_like_component(requested)
+
+    lock_path = codex / LOCK_NAME
+    if is_link_like(lock_path):
+        raise SetupError("mutation lock target is a symlink or reparse point")
+    resolved_lock = lock_path.resolve(strict=False)
+    if resolved_lock.parent != codex or resolved_lock.name != LOCK_NAME:
+        raise SetupError("mutation lock target escapes codex_home")
+
+    flags = os.O_RDWR | os.O_CREAT
+    if hasattr(os, "O_BINARY"):
+        flags |= os.O_BINARY
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        descriptor = os.open(lock_path, flags, 0o600)
+    except OSError as exc:
+        raise SetupError(f"cannot open mutation lock {resolved_lock}: {exc}") from exc
+
+    handle = os.fdopen(descriptor, "r+b", buffering=0)
+    acquired = False
+    try:
+        if is_link_like(lock_path) or lock_path.resolve(strict=False) != resolved_lock:
+            raise SetupError("mutation lock target changed or became unsafe")
+        if os.fstat(descriptor).st_size == 0:
+            handle.write(b"\0")
+        handle.seek(0)
+        try:
+            if os.name == "nt":
+                import msvcrt
+
+                msvcrt.locking(descriptor, msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as exc:
+            raise SetupError(f"BUSY: {operation} mutation lock is held: {resolved_lock}") from exc
+        acquired = True
+        yield
+    finally:
+        try:
+            if acquired:
+                handle.seek(0)
+                if os.name == "nt":
+                    import msvcrt
+
+                    msvcrt.locking(descriptor, msvcrt.LK_UNLCK, 1)
+                else:
+                    import fcntl
+
+                    fcntl.flock(descriptor, fcntl.LOCK_UN)
+        finally:
+            handle.close()
 
 
 def digest(path: Path) -> str:
@@ -429,6 +505,12 @@ def _remove_known_tree(path: Path, expected_root: Path) -> None:
 
 
 def migrate(codex_home: Path, skills_home: Path, plan_fingerprint: str) -> dict[str, Any]:
+    codex, _ = validate_roots(codex_home, skills_home)
+    with mutation_lock(codex, "migrate"):
+        return _migrate_locked(codex_home, skills_home, plan_fingerprint)
+
+
+def _migrate_locked(codex_home: Path, skills_home: Path, plan_fingerprint: str) -> dict[str, Any]:
     codex, skills = validate_roots(codex_home, skills_home)
     state, old_skills, old_state_bytes = _old_state_context(codex, skills)
     if old_skills is None or state is None:
@@ -506,6 +588,13 @@ def migrate(codex_home: Path, skills_home: Path, plan_fingerprint: str) -> dict[
 
 
 def apply(codex_home: Path, skills_home: Path, *, update: bool = False) -> dict[str, Any]:
+    codex, _ = validate_roots(codex_home, skills_home)
+    operation = "update" if update else "install"
+    with mutation_lock(codex, operation):
+        return _apply_locked(codex_home, skills_home, update=update)
+
+
+def _apply_locked(codex_home: Path, skills_home: Path, *, update: bool = False) -> dict[str, Any]:
     codex, skills = validate_roots(codex_home, skills_home)
     prior_state = load_state(codex)
     validated_backup: Path | None = None
@@ -618,6 +707,12 @@ def doctor(codex_home: Path) -> dict[str, Any]:
 
 
 def rollback(codex_home: Path, skills_home: Path) -> dict[str, Any]:
+    codex, _ = validate_roots(codex_home, skills_home)
+    with mutation_lock(codex, "rollback"):
+        return _rollback_locked(codex_home, skills_home)
+
+
+def _rollback_locked(codex_home: Path, skills_home: Path) -> dict[str, Any]:
     codex, skills = validate_roots(codex_home, skills_home)
     state = load_state(codex)
     if not state or state.get("status") != "installed":

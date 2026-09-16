@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_through": "v0.37.6",
+  "updated_through": "v0.37.7",
   "normal_dispatch_loads_this_file": false,
   "attempt_families": [
     {
@@ -83,6 +83,15 @@
       "evidence": ["work/p084/results.md", "work/p085/results.md"],
       "observed_result": "P085 matched 33 public and 12 hidden checks on both versions. v0.37.4 was 22.202% faster at the meter boundary, used 32.096% fewer combined non-cached input tokens, and halved full-suite executions, but both allowance changes stayed below one percentage point.",
       "repeat_rule": "Retain the mechanism. Do not claim subscription savings until a frozen 20-30 minute task crosses the account meter; one pair cannot separate mechanism effect from first-pass candidate variance."
+    },
+    {
+      "id": "release-safety-and-delegated-authority",
+      "versions": ["v0.37.5", "v0.37.6", "v0.37.7"],
+      "direction": "Keep prior-attempt review outside normal dispatch, bind acceptance launches to one absolute workdir capsule, and distinguish delegated edit authority from a real host refusal.",
+      "mechanism_ids": ["release-history-gate", "launch-ready-acceptance-capsule", "infrastructure-fail-closed", "delegated-authority-recognition"],
+      "evidence": ["docs/benchmark/v0.37.7-release-notes.md", "tests/test_publish_release.py", "tests/test_package_contract.py"],
+      "observed_result": "The release gate prevents unreviewed mechanism loops and the authority wording removed one false model-side refusal, but real host write denials remain fail-closed and cannot be repaired by prompt wording.",
+      "repeat_rule": "Do not add normal-path manifests or confirmation prose. Revisit only for a concrete release-history omission, launch-boundary failure, or host authority API change."
     }
   ],
   "release_entries": [
@@ -169,6 +178,32 @@
       "novelty_statement": null,
       "decision": "SHIP_EXPERIMENTAL",
       "normal_path_cost": "reduced"
+    },
+    {
+      "id": "v0.37.8-setup-mutation-lock",
+      "tag": "v0.37.8",
+      "history_reviewed_through": "v0.37.7",
+      "prior_art_refs": [
+        "installation-and-measurement-foundations",
+        "more-workers-and-overlap",
+        "effort-selection-and-complete-luna",
+        "content-addressed-handoffs-and-validation-ownership",
+        "duplicate-work-removal-and-cold-start",
+        "exception-triggered-compact-closure",
+        "slim-edits-and-semantic-closure",
+        "delivery-correctness-gates",
+        "single-final-acceptance-executor",
+        "release-safety-and-delegated-authority"
+      ],
+      "direction": "Serialize setup mutations with one fail-fast operating-system advisory lock while leaving preview, migration-preview, and Doctor available.",
+      "mechanism_ids": ["setup-mutation-lock"],
+      "evidence_refs": ["docs/benchmark/v0.37.8-release-notes.md", "tests/test_setup.py"],
+      "observed_result": "A real duplicate-updater failure motivated the fix. The candidate passed 6 visible checks, 451 repository tests with 4 skips, 10 route-external hidden checks with 1 platform-permission skip, diff validation, and independent implementation review.",
+      "classification": "new_direction",
+      "changed_premise": null,
+      "novelty_statement": "Earlier setup work made individual writes atomic but did not exclude concurrent install, update, migrate, or rollback operations across processes.",
+      "decision": "SHIP_EXPERIMENTAL",
+      "normal_path_cost": "none"
     }
   ]
 }

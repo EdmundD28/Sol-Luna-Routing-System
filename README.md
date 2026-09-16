@@ -164,6 +164,8 @@ python scripts/setup.py rollback --confirm
 
 Setup manages only the Sol-Luna Skill and named agent TOMLs. It uses source hashes, conflict refusal, atomic writes, backups, install state, post-write Doctor verification, and rollback refusal when a managed target has user drift. Tests use isolated temporary homes; this repository does not install itself during validation.
 
+All mutating lifecycle commands (`install`, `update`, `migrate`, and `rollback`) take a single non-blocking operating-system advisory lock on `<codex-home>/sol-luna-setup.lock`. A concurrent writer fails immediately with a `BUSY` setup error instead of waiting or retrying. The persistent lock file is coordination state and is not a managed asset. Read-only `preview`, `migration-preview`, and `doctor` commands remain available while the mutation lock is held.
+
 ## Release safety
 
 `v0.1.1` remains the pinned Latest release because it is the current user-validated baseline. Publish later milestones with `scripts/publish_release.py`; it refuses to proceed unless Latest is still `v0.1.1`, forces `--latest=false`, and verifies the pin again after publication. Omit `--confirm` for a non-mutating preview.
