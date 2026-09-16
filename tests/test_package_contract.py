@@ -171,6 +171,8 @@ class PackageContractTests(unittest.TestCase):
             "lowest effort supported by the task",
             "same-allocation lower-effort option is rejected by a quality or defect gate",
             "Default to one retained Luna writer",
+            "wait once on the retained worker until completion",
+            "never poll, enumerate all agents, or wake on commentary",
             "only through normal completion to its immediate Sol parent",
             "never messages the root or another task",
             "Sol will not repeat that work",

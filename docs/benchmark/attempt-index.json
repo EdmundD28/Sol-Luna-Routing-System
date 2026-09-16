@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_through": "v0.37.7",
+  "updated_through": "v0.37.8",
   "normal_dispatch_loads_this_file": false,
   "attempt_families": [
     {
@@ -41,11 +41,11 @@
     },
     {
       "id": "duplicate-work-removal-and-cold-start",
-      "versions": ["v0.29.0", "v0.30.0", "v0.30.1", "v0.31.0"],
+      "versions": ["v0.29.0", "v0.30.0", "v0.30.1", "v0.31.0", "v0.37.9"],
       "direction": "Remove duplicate acceptance checks and inherited-context replay, and permit a bounded Medium cold start.",
-      "mechanism_ids": ["duplicate-acceptance-removal", "bounded-cold-start", "inherited-context-removal"],
+      "mechanism_ids": ["duplicate-acceptance-removal", "bounded-cold-start", "inherited-context-removal", "single-completion-wait"],
       "evidence": ["P024-P042 attribution records", "work/p042/v0.31.0-release-notes.md"],
-      "observed_result": "This identified Sol controller repetition as the dominant avoidable cost and removed several structural replays, but still lacked an equal-quality subscription-meter win.",
+      "observed_result": "This identified Sol controller repetition as the dominant avoidable cost. P117 later isolated repeated one-minute waits and global agent enumeration: one completion wait reduced same-task Sol-Luna credit equivalent by 42.618% and elapsed time by 10.246%, while the route remained slower than Sol-only.",
       "repeat_rule": "Do not re-add controller polling, inherited context, repeated test bodies, or a second default full-suite run. New work must reduce an observed hot-path action."
     },
     {
@@ -204,6 +204,37 @@
       "novelty_statement": "Earlier setup work made individual writes atomic but did not exclude concurrent install, update, migrate, or rollback operations across processes.",
       "decision": "SHIP_EXPERIMENTAL",
       "normal_path_cost": "none"
+    },
+    {
+      "id": "v0.37.9-single-completion-wait",
+      "tag": "v0.37.9",
+      "history_reviewed_through": "v0.37.8",
+      "prior_art_refs": [
+        "installation-and-measurement-foundations",
+        "more-workers-and-overlap",
+        "effort-selection-and-complete-luna",
+        "content-addressed-handoffs-and-validation-ownership",
+        "duplicate-work-removal-and-cold-start",
+        "exception-triggered-compact-closure",
+        "slim-edits-and-semantic-closure",
+        "delivery-correctness-gates",
+        "single-final-acceptance-executor",
+        "release-safety-and-delegated-authority"
+      ],
+      "direction": "Replace repeated empty-queue Sol wakeups and global agent enumeration with one retained-worker completion wait.",
+      "mechanism_ids": ["single-completion-wait"],
+      "evidence_refs": ["docs/benchmark/v0.37.9-release-notes.md", "tests/test_package_contract.py"],
+      "observed_result": "On the P117 same-task ablation, full Sol-Luna credit equivalent fell from 8.063423 to 4.626947 and elapsed time from 335.215 to 300.868 seconds while public and hidden implementation quality remained equal. It stayed 24.457% slower than Sol-only.",
+      "classification": "retry_changed_premise",
+      "changed_premise": {
+        "prior_mechanism_ids": ["inherited-context-removal"],
+        "falsified_assumption": "Removing inherited task context and duplicate acceptance was assumed to make an idle Sol controller passive while its retained Luna ran.",
+        "measurable_difference": "The controller now makes one long completion wait and never polls or enumerates unrelated agents on the ordinary empty-queue path, without adding a tool or model round.",
+        "new_evidence": ["P117 four one-minute wait wakeups", "P117 global agent enumeration exposed the matched arm summary"]
+      },
+      "novelty_statement": null,
+      "decision": "SHIP_EXPERIMENTAL",
+      "normal_path_cost": "reduced"
     }
   ]
 }
