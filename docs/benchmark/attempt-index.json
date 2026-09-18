@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_through": "v0.37.9",
+  "updated_through": "v0.38.0",
   "normal_dispatch_loads_this_file": false,
   "attempt_families": [
     {
@@ -264,6 +264,32 @@
         "new_evidence": ["P117 Luna High equal-quality route remained 24.457% slower than Sol-only", "P117 Luna Medium passed the same 19 public and 10 hidden checks in 160.060 seconds"]
       },
       "novelty_statement": null,
+      "decision": "SHIP_EXPERIMENTAL",
+      "normal_path_cost": "reduced"
+    },
+    {
+      "id": "v0.38.1-batched-controller-acquisition",
+      "tag": "v0.38.1",
+      "history_reviewed_through": "v0.38.0",
+      "prior_art_refs": [
+        "installation-and-measurement-foundations",
+        "more-workers-and-overlap",
+        "effort-selection-and-complete-luna",
+        "content-addressed-handoffs-and-validation-ownership",
+        "duplicate-work-removal-and-cold-start",
+        "exception-triggered-compact-closure",
+        "slim-edits-and-semantic-closure",
+        "delivery-correctness-gates",
+        "single-final-acceptance-executor",
+        "release-safety-and-delegated-authority"
+      ],
+      "direction": "Acquire already-known Skill, contract, dependency, acceptance, and test-list inputs in one bounded Sol action without removing information from the launch-ready capsule.",
+      "mechanism_ids": ["batched-controller-acquisition"],
+      "evidence_refs": ["docs/benchmark/v0.38.1-release-notes.md", "tests/test_package_contract.py"],
+      "observed_result": "The P122 controller-only microbenchmark preserved the P121 pre-dispatch information and complete capsule while reducing proxy credit from 3.829540 to 2.181700 and elapsed time from 55.074 to 27.616 seconds.",
+      "classification": "new_direction",
+      "changed_premise": null,
+      "novelty_statement": "Earlier work removed context, replay, polling, and redundant tests, but no indexed mechanism batched multiple already-known controller reads into one model round while preserving all inputs.",
       "decision": "SHIP_EXPERIMENTAL",
       "normal_path_cost": "reduced"
     }
