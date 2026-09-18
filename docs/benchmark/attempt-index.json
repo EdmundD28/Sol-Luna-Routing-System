@@ -380,6 +380,12 @@
         "decision": "UNSEEN_TASK_LOCAL_PASS_KEEP_CURRENT_MECHANISM",
         "retry_gate": "Retire P128. Do not tune its paths, labels, checks, effort, or repair policy. Expand the claim only on another independently frozen task family or a sufficiently resolved account meter, without adding ordinary-path reporting burden."
       },
+      "second_unseen_transfer_evidence": {
+        "evidence_ref": "docs/benchmark/p129-second-unseen-transfer-2026-09-18.md",
+        "observed_result": "On the independently frozen P129 interval-policy task, v0.38.3 Sol-Luna and Sol-only both passed 72/72 public and 12/12 hidden checks with zero repair. Sol-Luna used 3.489888 versus 9.442300 full-session credit equivalent (63.039853% lower) and 162.791 versus 205.376 seconds (20.735139% faster), with one Luna Medium writer, zero Sol implementation/replay/reclaim, and strict final-suite-last conformance.",
+        "decision": "SECOND_UNSEEN_TASK_LOCAL_PASS_KEEP_CURRENT_MECHANISM",
+        "retry_gate": "Retire P129. Do not tune it. Treat P128 and P129 as bounded local transfer evidence for v0.38.3; require a new independently selected task or a sufficiently resolved account meter before broadening the claim."
+      },
       "novelty_statement": null,
       "decision": "SHIP_EXPERIMENTAL",
       "normal_path_cost": "reduced"
