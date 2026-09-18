@@ -275,6 +275,12 @@
         "decision": "KEEP_EVIDENCE_GATE_REJECT_HIGH_FOR_THIS_FAMILY",
         "retry_gate": "Do not retry another effort level or repair on P124/P125. A future unseen task may use High only after its own matched lower-effort quality evidence and must still pass the no-time-regression gate."
       },
+      "required_path_causal_follow_up": {
+        "evidence_ref": "docs/benchmark/p126-p127-required-path-causal-2026-09-18.md",
+        "observed_result": "P126's one-batch Medium route cleared diagnostic proxy and elapsed gates but failed 24/25 because a required path was omitted. P127 added the frozen required paths and structural acceptance label, passed 25/25 public and 12/12 hidden, used 69.282% less proxy credit, and was 8.941% faster than Sol-only; however, post-pass diff/status calls violated the installed Skill protocol.",
+        "decision": "TRANSFER_HYPOTHESIS_ONLY_PROTOCOL_FAIL",
+        "retry_gate": "Retire P124/P126/P127. Test a distinct unseen task with a complete required-path/acceptance-label capsule, all diff/status checks before the final suite, and any post-pass tool call treated as a censor."
+      },
       "novelty_statement": null,
       "decision": "SHIP_EXPERIMENTAL",
       "normal_path_cost": "reduced"
