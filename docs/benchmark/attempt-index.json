@@ -269,6 +269,12 @@
         "measurable_difference": "The ordinary rule now treats risk labels only as a higher quality bar and requires matched task-family evidence of a lower-effort quality or defect miss before High-or-above dispatch.",
         "new_evidence": ["P117 Luna High equal-quality route remained 24.457% slower than Sol-only", "P117 Luna Medium passed the same 19 public and 10 hidden checks in 160.060 seconds"]
       },
+      "follow_up_evidence": {
+        "evidence_ref": "docs/benchmark/p124-p125-evidence-bound-high-2026-09-18.md",
+        "observed_result": "On a new P124 task, Medium used 58.653% less credit equivalent than Sol-only but failed public quality 24/25 after one repair and was 16.841% slower. The evidence-authorized P125 High ablation recovered 25/25 public and 12/12 hidden quality and saved 65.116% credit equivalent, but was 56.357% slower than Sol-only.",
+        "decision": "KEEP_EVIDENCE_GATE_REJECT_HIGH_FOR_THIS_FAMILY",
+        "retry_gate": "Do not retry another effort level or repair on P124/P125. A future unseen task may use High only after its own matched lower-effort quality evidence and must still pass the no-time-regression gate."
+      },
       "novelty_statement": null,
       "decision": "SHIP_EXPERIMENTAL",
       "normal_path_cost": "reduced"
