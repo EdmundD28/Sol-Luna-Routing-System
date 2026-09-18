@@ -7,4 +7,4 @@ interface:
   default_prompt: "Use $sol-luna to choose SOL_ONLY or the lowest expected-cost accepted Luna route, enforce bounded ownership and rework, and verify the final candidate proportionally to risk."
 
 policy:
-  allow_implicit_invocation: false
+  allow_implicit_invocation: true

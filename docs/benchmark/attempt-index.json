@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_through": "v0.38.0",
+  "updated_through": "v0.38.1",
   "normal_dispatch_loads_this_file": false,
   "attempt_families": [
     {
@@ -292,6 +292,37 @@
       "novelty_statement": "Earlier work removed context, replay, polling, and redundant tests, but no indexed mechanism batched multiple already-known controller reads into one model round while preserving all inputs.",
       "decision": "SHIP_EXPERIMENTAL",
       "normal_path_cost": "reduced"
+    },
+    {
+      "id": "v0.38.2-implicit-discovery-alignment",
+      "tag": "v0.38.2",
+      "history_reviewed_through": "v0.38.1",
+      "prior_art_refs": [
+        "installation-and-measurement-foundations",
+        "more-workers-and-overlap",
+        "effort-selection-and-complete-luna",
+        "content-addressed-handoffs-and-validation-ownership",
+        "duplicate-work-removal-and-cold-start",
+        "exception-triggered-compact-closure",
+        "slim-edits-and-semantic-closure",
+        "delivery-correctness-gates",
+        "single-final-acceptance-executor",
+        "release-safety-and-delegated-authority"
+      ],
+      "direction": "Align packaged skill-discovery metadata with the already verified implicit-discovery installation so managed updates cannot silently disable Sol-Luna discovery.",
+      "mechanism_ids": ["managed-installation"],
+      "evidence_refs": ["docs/benchmark/v0.38.2-release-notes.md", "tests/test_package_contract.py"],
+      "observed_result": "The installed metadata with implicit invocation enabled is discoverable in Codex, while the v0.38.1 managed-update preview rejected the repository's conflicting disabled source value instead of overwriting it.",
+      "classification": "retry_changed_premise",
+      "changed_premise": {
+        "prior_mechanism_ids": ["managed-installation"],
+        "falsified_assumption": "Source-bound managed installation was assumed to coexist safely with a locally enabled implicit-discovery policy that differed from the repository source.",
+        "measurable_difference": "The packaged source now matches the verified discoverable installed value, and a contract test prevents later releases from silently disabling implicit invocation.",
+        "new_evidence": ["Installed allow_implicit_invocation true exposes the sol-luna Skill", "v0.38.1 setup preview reported agents/openai.yaml as a conflict against source false"]
+      },
+      "novelty_statement": null,
+      "decision": "SHIP_EXPERIMENTAL",
+      "normal_path_cost": "none"
     }
   ]
 }

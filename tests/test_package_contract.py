@@ -25,6 +25,11 @@ class PackageContractTests(unittest.TestCase):
         self.assertLessEqual(len(skill.splitlines()), 85)
         self.assertLessEqual(len(skill.split()), 1200)
 
+    def test_skill_remains_implicitly_discoverable(self) -> None:
+        metadata = (SKILL_ROOT / "agents" / "openai.yaml").read_text(encoding="utf-8")
+        self.assertIn("allow_implicit_invocation: true", metadata)
+        self.assertNotIn("allow_implicit_invocation: false", metadata)
+
     def test_shipped_components_exist_without_inflating_the_hot_path(self) -> None:
         shipped = (
             "references/orchestration-policy.md",
