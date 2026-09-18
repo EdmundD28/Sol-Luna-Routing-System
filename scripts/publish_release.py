@@ -139,10 +139,29 @@ def load_attempt_entry(index_path: Path, tag: str) -> tuple[dict[str, object], s
     entries = document.get("release_entries")
     if not isinstance(entries, list):
         raise ReleaseError("attempt index release_entries must be a list")
-    matches = [entry for entry in entries if isinstance(entry, dict) and entry.get("tag") == tag]
-    if len(matches) != 1:
+    match_positions = [
+        index
+        for index, release_entry in enumerate(entries)
+        if isinstance(release_entry, dict) and release_entry.get("tag") == tag
+    ]
+    if len(match_positions) != 1:
         raise ReleaseError(f"attempt index must contain exactly one release entry for {tag}")
-    entry = matches[0]
+    match_position = match_positions[0]
+    if match_position != len(entries) - 1:
+        raise ReleaseError("candidate release entry must be the final release_entries item")
+    for prior_entry in entries[:match_position]:
+        if not isinstance(prior_entry, dict):
+            raise ReleaseError("prior release_entries items must be objects")
+        prior_tag = prior_entry.get("tag")
+        if not isinstance(prior_tag, str) or not prior_tag.strip():
+            raise ReleaseError("prior release entry tag must be a non-empty string")
+        indexed_mechanisms.update(
+            _string_list(
+                prior_entry.get("mechanism_ids"),
+                f"prior release entry {prior_tag} mechanism_ids",
+            )
+        )
+    entry = entries[match_position]
     entry_id = entry.get("id")
     if not isinstance(entry_id, str) or not entry_id.strip():
         raise ReleaseError("release entry id must be non-empty")

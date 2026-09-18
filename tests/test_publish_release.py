@@ -187,6 +187,49 @@ class PublishReleaseTests(unittest.TestCase):
                 confirm=False,
             )
 
+    def test_prior_release_mechanism_is_part_of_history(self) -> None:
+        document = json.loads(self.index.read_text(encoding="utf-8"))
+        document["release_entries"].insert(
+            0,
+            {
+                "id": "prior-release",
+                "tag": "v0.4.0",
+                "mechanism_ids": ["release-history-gate"],
+            },
+        )
+        self.index.write_text(json.dumps(document), encoding="utf-8")
+        with self.assertRaisesRegex(RELEASE.ReleaseError, "overlaps prior attempts"):
+            RELEASE.publish(
+                gh=self.gh,
+                repository=self.repository,
+                tag="v0.4.1",
+                title="Disguised release-mechanism retry",
+                notes_file=self.notes,
+                attempt_index=self.index,
+                confirm=False,
+            )
+
+    def test_candidate_release_entry_must_be_last(self) -> None:
+        document = json.loads(self.index.read_text(encoding="utf-8"))
+        document["release_entries"].append(
+            {
+                "id": "future-draft",
+                "tag": "v0.5.0",
+                "mechanism_ids": ["future-mechanism"],
+            },
+        )
+        self.index.write_text(json.dumps(document), encoding="utf-8")
+        with self.assertRaisesRegex(RELEASE.ReleaseError, "final release_entries item"):
+            RELEASE.publish(
+                gh=self.gh,
+                repository=self.repository,
+                tag="v0.4.1",
+                title="Out-of-order candidate",
+                notes_file=self.notes,
+                attempt_index=self.index,
+                confirm=False,
+            )
+
     def test_structured_changed_premise_allows_a_reviewed_retry(self) -> None:
         self.write_index(
             classification="retry_changed_premise",

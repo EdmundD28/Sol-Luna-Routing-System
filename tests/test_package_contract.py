@@ -177,8 +177,6 @@ class PackageContractTests(unittest.TestCase):
             "labels do not authorize High",
             "matched task-family evidence that the same allocation at lower effort missed a quality or defect gate",
             "Default to one retained Luna writer",
-            "Batch already-known Skill, contract, dependency, acceptance, and test-list reads into one bounded action",
-            "never split them across Sol turns",
             "wait once on the retained worker until completion",
             "never poll, enumerate all agents, or wake on commentary",
             "only through normal completion to its immediate Sol parent",
@@ -189,6 +187,8 @@ class PackageContractTests(unittest.TestCase):
             self.assertIn(contract, skill)
         self.assertNotIn("first-pass completion is plausible", skill)
         self.assertNotIn("normally needs High", skill)
+        self.assertNotIn("Batch already-known", skill)
+        self.assertNotIn("never split them across Sol turns", skill)
 
     def test_skill_preserves_ownership_handoff_and_repair_gates(self) -> None:
         skill = self.skill()

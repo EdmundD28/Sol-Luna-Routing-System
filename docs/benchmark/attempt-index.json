@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_through": "v0.38.1",
+  "updated_through": "v0.38.2",
   "normal_dispatch_loads_this_file": false,
   "attempt_families": [
     {
@@ -334,6 +334,37 @@
       "novelty_statement": null,
       "decision": "SHIP_EXPERIMENTAL",
       "normal_path_cost": "none"
+    },
+    {
+      "id": "v0.38.3-remove-failed-batching",
+      "tag": "v0.38.3",
+      "history_reviewed_through": "v0.38.2",
+      "prior_art_refs": [
+        "installation-and-measurement-foundations",
+        "more-workers-and-overlap",
+        "effort-selection-and-complete-luna",
+        "content-addressed-handoffs-and-validation-ownership",
+        "duplicate-work-removal-and-cold-start",
+        "exception-triggered-compact-closure",
+        "slim-edits-and-semantic-closure",
+        "delivery-correctness-gates",
+        "single-final-acceptance-executor",
+        "release-safety-and-delegated-authority"
+      ],
+      "direction": "Remove the ordinary-path batched-acquisition requirement after its isolated gain failed to transfer, and make the release gate review mechanisms from every prior release entry.",
+      "mechanism_ids": ["batched-controller-acquisition", "release-history-gate"],
+      "evidence_refs": ["docs/benchmark/p118-v0382-batched-controller-2026-09-18.md", "docs/benchmark/v0.38.3-release-notes.md", "tests/test_package_contract.py", "tests/test_publish_release.py"],
+      "observed_result": "On P118, the batched v0.38.2 route preserved quality but cost 4.913135 credit equivalent and 185.211 seconds, versus 4.678860 and 155.579 seconds for v0.38.0. The original guarded preview then misclassified removal of the v0.38.1 mechanism because it indexed mechanism families but not prior release entries.",
+      "classification": "retry_changed_premise",
+      "changed_premise": {
+        "prior_mechanism_ids": ["batched-controller-acquisition", "release-history-gate"],
+        "falsified_assumption": "The isolated P122 batching gain was assumed to reduce the complete route, and the release gate was assumed to detect repeats of mechanisms introduced after the original family index.",
+        "measurable_difference": "The Skill no longer requires one batched acquisition action, while the release-only guard now includes mechanisms from every earlier release entry and requires the candidate entry to be last.",
+        "new_evidence": ["P118 equal-quality v0.38.2 full-route cost increased 5.007096% and elapsed increased 19.046272% versus v0.38.0", "The first v0.38.3 guarded preview rejected an explicit batching retry as a non-overlapping new direction"]
+      },
+      "novelty_statement": null,
+      "decision": "SHIP_EXPERIMENTAL",
+      "normal_path_cost": "reduced"
     }
   ]
 }

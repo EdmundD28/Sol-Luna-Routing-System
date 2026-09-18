@@ -22,7 +22,7 @@ Complete fresh-session counters produced `4.492800` for the Sol controller and `
 
 ## Decision
 
-The P122 controller-only microbenchmark showed that batching can reduce an isolated acquisition prefix, but P118 shows that this saving does not survive a complete implementation route. The existing low-burden rule may remain, but no stronger product claim or added mechanism is justified.
+The P122 controller-only microbenchmark showed that batching can reduce an isolated acquisition prefix, but P118 shows that this saving does not survive a complete implementation route. Because the rule is ordinary-path work with no demonstrated route benefit, v0.38.3 removes it rather than preserving a failed micro-optimization.
 
 Close this direction under the current premise. A retry requires a host or protocol change that measurably reduces the complete launch capsule or controller output without removing task semantics, acceptance detail, exact executable/workdir, or quality. Rebatching the same inputs is not a changed premise.
 
