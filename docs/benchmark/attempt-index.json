@@ -374,6 +374,12 @@
         "measurable_difference": "The Skill no longer requires one batched acquisition action, while the release-only guard now includes mechanisms from every earlier release entry and requires the candidate entry to be last.",
         "new_evidence": ["P118 equal-quality v0.38.2 full-route cost increased 5.007096% and elapsed increased 19.046272% versus v0.38.0", "The first v0.38.3 guarded preview rejected an explicit batching retry as a non-overlapping new direction"]
       },
+      "unseen_transfer_evidence": {
+        "evidence_ref": "docs/benchmark/p128-unseen-transfer-2026-09-18.md",
+        "observed_result": "On the distinct frozen P128 capacity-reservation task, v0.38.3 Sol-Luna and Sol-only both passed 49/49 public and 12/12 hidden checks. Sol-Luna used 5.078984 versus 13.906900 full-session credit equivalent (63.478676% lower) and 186.875 versus 329.289 seconds (43.248939% faster), with one Luna Medium writer, zero repair, zero Sol implementation/replay/reclaim, and strict final-suite-last conformance.",
+        "decision": "UNSEEN_TASK_LOCAL_PASS_KEEP_CURRENT_MECHANISM",
+        "retry_gate": "Retire P128. Do not tune its paths, labels, checks, effort, or repair policy. Expand the claim only on another independently frozen task family or a sufficiently resolved account meter, without adding ordinary-path reporting burden."
+      },
       "novelty_statement": null,
       "decision": "SHIP_EXPERIMENTAL",
       "normal_path_cost": "reduced"
