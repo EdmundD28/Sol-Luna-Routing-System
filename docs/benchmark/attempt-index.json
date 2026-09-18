@@ -225,6 +225,11 @@
       "mechanism_ids": ["inherited-context-removal"],
       "evidence_refs": ["docs/benchmark/v0.37.9-release-notes.md", "tests/test_package_contract.py"],
       "observed_result": "On the P117 same-task ablation, full Sol-Luna credit equivalent fell from 8.063423 to 4.626947 and elapsed time from 335.215 to 300.868 seconds while public and hidden implementation quality remained equal. It stayed 24.457% slower than Sol-only.",
+      "milestone": {
+        "importance": "major",
+        "reason": "This was the first equal-quality matched route in the indexed history to clear the 50% credit-equivalent reduction target against Sol-only by removing controller wakeup work alone.",
+        "boundary": "It did not clear the no-time-regression gate and did not measure the five-hour or weekly included-plan allowance."
+      },
       "classification": "retry_changed_premise",
       "changed_premise": {
         "prior_mechanism_ids": ["inherited-context-removal"],
