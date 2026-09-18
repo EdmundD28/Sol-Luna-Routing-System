@@ -290,8 +290,13 @@
       ],
       "direction": "Acquire already-known Skill, contract, dependency, acceptance, and test-list inputs in one bounded Sol action without removing information from the launch-ready capsule.",
       "mechanism_ids": ["batched-controller-acquisition"],
-      "evidence_refs": ["docs/benchmark/v0.38.1-release-notes.md", "tests/test_package_contract.py"],
-      "observed_result": "The P122 controller-only microbenchmark preserved the P121 pre-dispatch information and complete capsule while reducing proxy credit from 3.829540 to 2.181700 and elapsed time from 55.074 to 27.616 seconds.",
+      "evidence_refs": ["docs/benchmark/v0.38.1-release-notes.md", "docs/benchmark/p118-v0382-batched-controller-2026-09-18.md", "tests/test_package_contract.py"],
+      "observed_result": "The P122 controller-only microbenchmark preserved the P121 pre-dispatch information and complete capsule while reducing proxy credit from 3.829540 to 2.181700 and elapsed time from 55.074 to 27.616 seconds. The later equal-quality P118 full-route ablation did not transfer: 4.913135 was only 41.478808% below Sol-only and 185.211 seconds was 19.004967% slower.",
+      "follow_up_decision": {
+        "status": "CLOSE_UNDER_CURRENT_PREMISE",
+        "reason": "The isolated controller-prefix win did not reduce complete-route accepted cost or elapsed time on P118.",
+        "retry_gate": "Require a host or protocol change that reduces complete launch-capsule or controller-output cost without removing semantics, acceptance detail, exact execution identity, or quality."
+      },
       "classification": "new_direction",
       "changed_premise": null,
       "novelty_statement": "Earlier work removed context, replay, polling, and redundant tests, but no indexed mechanism batched multiple already-known controller reads into one model round while preserving all inputs.",
