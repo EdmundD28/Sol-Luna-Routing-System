@@ -45,8 +45,9 @@
       "direction": "Remove duplicate acceptance checks and inherited-context replay, and permit a bounded Medium cold start.",
       "mechanism_ids": ["duplicate-acceptance-removal", "bounded-cold-start", "inherited-context-removal"],
       "evidence": ["P024-P042 attribution records", "work/p042/v0.31.0-release-notes.md"],
-      "observed_result": "This identified Sol controller repetition as the dominant avoidable cost and removed several structural replays, but still lacked an equal-quality subscription-meter win.",
-      "repeat_rule": "Do not re-add controller polling, inherited context, repeated test bodies, or a second default full-suite run. New work must reduce an observed hot-path action."
+      "observed_result": "This identified Sol controller repetition as the dominant avoidable cost and removed several structural replays, but still lacked an equal-quality subscription-meter win. A later P123 changed-premise probe supplied fork_turns=1 yet did not expose the active parent-task marker to the model-overridden child.",
+      "repeat_rule": "Do not re-add controller polling, inherited context, repeated test bodies, or a second default full-suite run. Positive-count inheritance may be retried only with host evidence that the active task turn is exposed and auditable before child response; changing the count or wording is insufficient. New work must reduce an observed hot-path action.",
+      "follow_up_evidence": ["docs/benchmark/p123-bounded-fork-visibility-2026-09-18.md"]
     },
     {
       "id": "exception-triggered-compact-closure",
