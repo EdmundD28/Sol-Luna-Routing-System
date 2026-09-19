@@ -1297,6 +1297,32 @@ def evaluate_route(
             sol_luna_overlap_seconds = 0.0
             sol_critical_path_overlap_seconds = 0.0
             controller_mode = None
+        # Externally bound quality evidence supplies a conservative lower bound
+        # on the supported first-pass success rate, never a license to trust the candidate's point
+        # estimate.  In particular, 1/1 and 2/2 must not clear an 80% quality
+        # floor merely because their empirical frequency is 100%.
+        claimed_first_pass_probability = first_pass_probability
+        conservative_first_pass = first_pass_probability
+        if quality_evidence_mode:
+            assert quality_evidence is not None
+            conservative_first_pass = min(
+                conservative_first_pass,
+                float(quality_evidence["first_pass_wilson_lower_bound_95"]),
+            )
+            conservative_failure = 1.0 - conservative_first_pass
+            if package_mode:
+                expected_recovery_credits = conservative_failure * schedule["maximum_recovery_credits"]
+                expected_recovery_seconds = conservative_failure * schedule["maximum_recovery_seconds"]
+                package_credits = (
+                    schedule["execution_package_credits"] + expected_recovery_credits
+                    if not cold_start_mode
+                    else package_credits
+                )
+            else:
+                package_credits = values["execution_credits"] + conservative_failure * recovery_credits
+                expected_recovery_credits = conservative_failure * recovery_credits
+                expected_recovery_seconds = conservative_failure * recovery_seconds
+            first_pass_probability = conservative_first_pass
         expected_credits = coordination["credits"] + package_credits
         if v5_mode:
             scheduled_seconds = coordination["serial_seconds"] + package_seconds + expected_recovery_seconds
@@ -1324,7 +1350,7 @@ def evaluate_route(
                 rejection_reasons.append("quality_evidence_effort_mismatch")
             if quality_evidence["allocation_shape_fingerprint"] != schedule["allocation_shape_fingerprint"]:
                 rejection_reasons.append("quality_evidence_allocation_shape_mismatch")
-            if first_pass_probability > quality_evidence["first_pass_probability"] + 1e-12:
+            if claimed_first_pass_probability > quality_evidence["first_pass_probability"] + 1e-12:
                 rejection_reasons.append("quality_evidence_first_pass_overstated")
             if final_defect_probability + 1e-12 < quality_evidence["final_defect_probability"]:
                 rejection_reasons.append("quality_evidence_final_defect_understated")
@@ -1395,6 +1421,17 @@ def evaluate_route(
                 "expected_recovery_credits": round(expected_recovery_credits, 6),
                 "expected_recovery_seconds": round(expected_recovery_seconds, 6),
                 "first_pass_probability": None if cold_start_mode else first_pass_probability,
+                "first_pass_probability_empirical": (
+                    None if cold_start_mode else quality_evidence["first_pass_probability"]
+                    if quality_evidence_mode else first_pass_probability
+                ),
+                "first_pass_probability_claimed": (
+                    None if cold_start_mode else claimed_first_pass_probability
+                    if quality_evidence_mode else first_pass_probability
+                ),
+                "first_pass_wilson_lower_bound_95": (
+                    None if not quality_evidence_mode else quality_evidence["first_pass_wilson_lower_bound_95"]
+                ),
                 "final_defect_probability": None if cold_start_mode else final_defect_probability,
                 "serial_package_seconds": serial_package_seconds,
                 "scheduled_package_seconds": package_seconds,
@@ -1554,7 +1591,7 @@ ADAPTIVE_EVIDENCE_STATUS = {"MATCHED_EXPERIENCE", "UNKNOWN", "BUDGETED_RESEARCH_
 
 
 def wilson_lower_bound(successes: Any, observations: Any, *, z: float = 1.96) -> float:
-    """Return a diagnostic Wilson lower bound; it is never an unknown-task prior."""
+    """Return a conservative lower bound on an observed success rate."""
     n = integer(observations, "observations", minimum=1)
     k = integer(successes, "successes", minimum=0)
     if k > n:
@@ -1580,6 +1617,12 @@ def cold_start_credit_bound(baseline: Any, launch: Any, overhead: Any, recovery:
     return (0.5 * b - l - o) / r
 
 
+ADAPTIVE_OPERATIONS = {
+    "implementation", "test_execution", "browser_render", "visual_review", "document_review",
+}
+ADAPTIVE_ACTORS = {"SOL", "LUNA"}
+
+
 def _adaptive_capabilities(value: Any) -> list[dict[str, str]]:
     if value is None:
         return []
@@ -1589,7 +1632,8 @@ def _adaptive_capabilities(value: Any) -> list[dict[str, str]]:
     names: set[str] = set()
     for index, raw in enumerate(value):
         item = require_object(raw, f"required_tool_capabilities[{index}]")
-        reject_unknown_fields(item, {"name", "status", "source"}, f"required_tool_capabilities[{index}]")
+        allowed = {"name", "status", "source", "operation", "actor", "surface"}
+        reject_unknown_fields(item, allowed, f"required_tool_capabilities[{index}]")
         name = require_string(item.get("name"), f"required_tool_capabilities[{index}].name")
         status = require_string(item.get("status"), f"required_tool_capabilities[{index}].status").lower()
         source = require_string(item.get("source"), f"required_tool_capabilities[{index}].source").lower()
@@ -1597,8 +1641,21 @@ def _adaptive_capabilities(value: Any) -> list[dict[str, str]]:
             raise PolicyError(f"required_tool_capabilities[{index}].status is unsupported")
         if name in names:
             raise PolicyError("required_tool_capabilities names must be unique")
+        for field in ("operation", "actor", "surface"):
+            if field not in item:
+                raise PolicyError(
+                    f"required_tool_capabilities[{index}] requires operation, actor, and surface"
+                )
+        operation = require_string(item["operation"], f"required_tool_capabilities[{index}].operation").lower()
+        actor = require_string(item["actor"], f"required_tool_capabilities[{index}].actor").upper()
+        surface = require_string(item["surface"], f"required_tool_capabilities[{index}].surface").lower()
+        if operation not in ADAPTIVE_OPERATIONS:
+            raise PolicyError(f"required_tool_capabilities[{index}].operation is unsupported")
+        if actor not in ADAPTIVE_ACTORS:
+            raise PolicyError(f"required_tool_capabilities[{index}].actor is unsupported")
         names.add(name)
-        result.append({"name": name, "status": status, "source": source})
+        result.append({"name": name, "status": status, "source": source,
+                       "operation": operation, "actor": actor, "surface": surface})
     return result
 
 
@@ -1630,11 +1687,15 @@ def select_adaptive_route(task: Mapping[str, Any], *, evidence: Mapping[str, Any
     if output not in ADAPTIVE_OUTPUTS:
         raise PolicyError("output_kind is unsupported")
     acceptance = require_object(source.get("acceptance"), "adaptive task.acceptance")
-    reject_unknown_fields(acceptance, {"kind", "independent", "closed", "suite_digest"}, "adaptive task.acceptance")
+    reject_unknown_fields(acceptance, {"kind", "independent", "closed", "suite_digest", "verification_cost"}, "adaptive task.acceptance")
     suite_digest = require_digest(acceptance.get("suite_digest"), "adaptive task.acceptance.suite_digest")
     kind = require_string(acceptance.get("kind"), "adaptive task.acceptance.kind").lower()
     if kind not in ADAPTIVE_ACCEPTANCE_KINDS or type(acceptance.get("independent")) is not bool or type(acceptance.get("closed")) is not bool:
         raise PolicyError("acceptance requires supported kind and boolean independent/closed")
+    default_verification_cost = "medium" if kind in {"visual_review", "document_review", "mixed_review"} else "low"
+    verification_cost = require_string(acceptance.get("verification_cost", default_verification_cost), "adaptive task.acceptance.verification_cost").lower()
+    if verification_cost not in {"low", "medium", "high"}:
+        raise PolicyError("adaptive task.acceptance.verification_cost is unsupported")
     coupling = require_string(source.get("coupling"), "adaptive task.coupling").lower()
     risk = require_string(source.get("risk"), "adaptive task.risk").lower()
     if coupling not in ADAPTIVE_COUPLING or risk not in ADAPTIVE_RISK:
@@ -1659,11 +1720,20 @@ def select_adaptive_route(task: Mapping[str, Any], *, evidence: Mapping[str, Any
     economics = source.get("economics")
     if economics is not None:
         economics = require_object(economics, "adaptive task.economics")
-        reject_unknown_fields(economics, {"baseline_credits", "launch_credits", "overhead_credits", "recovery_credits", "failure_probability"}, "adaptive task.economics")
+        reject_unknown_fields(economics, {
+            "baseline_credits", "launch_credits", "overhead_credits", "recovery_credits",
+            "failure_probability", "execution_credits", "coordination_credits",
+            "baseline_seconds", "launch_seconds", "overhead_seconds", "execution_seconds", "coordination_seconds", "recovery_seconds",
+        }, "adaptive task.economics")
         if cold_start:
             q = finite_number(economics.get("failure_probability"), "economics.failure_probability", maximum=1.0)
             bound = cold_start_credit_bound(economics.get("baseline_credits"), economics.get("launch_credits"), economics.get("overhead_credits"), economics.get("recovery_credits"))
-            if bound < 0 or q > bound + 1e-12:
+            required_seconds = ("baseline_seconds", "launch_seconds", "overhead_seconds", "recovery_seconds")
+            if any(field not in economics for field in required_seconds):
+                return _adaptive_result(family, "S0", "cold_start_economics_incomplete", "UNKNOWN", modalities, output, kind, capabilities, "SOL_ONLY", "gpt-5.6-sol", "high", coordination)
+            baseline_seconds = finite_number(economics["baseline_seconds"], "economics.baseline_seconds", minimum=0.0)
+            route_seconds = finite_number(economics["launch_seconds"], "economics.launch_seconds", minimum=0.0) + finite_number(economics["overhead_seconds"], "economics.overhead_seconds", minimum=0.0) + q * finite_number(economics["recovery_seconds"], "economics.recovery_seconds", minimum=0.0)
+            if bound < 0 or q > bound + 1e-12 or route_seconds >= baseline_seconds:
                 return _adaptive_result(family, "S0", "cold_start_economics_fail", "UNKNOWN", modalities, output, kind, capabilities, "SOL_ONLY", "gpt-5.6-sol", "high", coordination)
     elif cold_start:
         raise PolicyError("cold_start requires economics")
@@ -1673,7 +1743,7 @@ def select_adaptive_route(task: Mapping[str, Any], *, evidence: Mapping[str, Any
     needs_visual_tool = visual or kind in {"visual_review", "document_review", "mixed_review"}
     if needs_visual_tool and not capabilities:
         return _adaptive_result(family, "S0", "required_visual_or_document_capability_missing", "MATCHED_EXPERIENCE" if evidence_match else "UNKNOWN", modalities, output, kind, capabilities, "SOL_ONLY", "gpt-5.6-sol", "high", coordination)
-    if unavailable or size == "small" or coordination >= 1.0 or not acceptance["independent"] or not acceptance["closed"] or coupling == "high" or risk in {"high", "critical"}:
+    if unavailable or size == "small" or not acceptance["independent"] or not acceptance["closed"] or coupling == "high" or risk in {"high", "critical"}:
         reason = "required_capability_unknown" if unavailable else "task_too_small" if size == "small" else "acceptance_not_independent" if not acceptance["independent"] else "acceptance_not_closed" if not acceptance["closed"] else "coupling_or_risk_requires_sol"
         return _adaptive_result(family, "S0", reason, "MATCHED_EXPERIENCE" if evidence_match else "UNKNOWN", modalities, output, kind, capabilities, "SOL_ONLY", "gpt-5.6-sol", "high", coordination)
     proven = all(
@@ -1683,20 +1753,76 @@ def select_adaptive_route(task: Mapping[str, Any], *, evidence: Mapping[str, Any
     )
     if not proven:
         return _adaptive_result(family, "S0", "required_capability_not_basic_proven", "UNKNOWN", modalities, output, kind, capabilities, "SOL_ONLY", "gpt-5.6-sol", "high", coordination)
-    if evidence_match and evidence_match.get("effort") == "high" and evidence_match.get("lower_effort_comparator") is True:
-        return _adaptive_result(family, "S3", "matched_high_effort_with_lower_effort_comparator", "MATCHED_EXPERIENCE", modalities, output, kind, capabilities, "SOL_LUNA", "gpt-5.6-luna", "high", coordination)
-    medium_signals = sum((size == "large", kind in {"visual_review", "document_review", "mixed_review"}, needs_visual_tool and bool(capabilities), coupling == "medium", risk == "medium", len(capabilities) > 1, coordination >= 0.25))
-    effort = "medium" if medium_signals >= 2 else "low"
+    implementation_bindings = [item for item in capabilities if item["operation"] == "implementation"]
+    if len(implementation_bindings) > 1 or any(item["actor"] != "LUNA" for item in implementation_bindings):
+        return _adaptive_result(family, "S0", "implementation_actor_binding_invalid", "MATCHED_EXPERIENCE" if evidence_match else "UNKNOWN", modalities, output, kind, capabilities, "SOL_ONLY", "gpt-5.6-sol", "high", coordination)
+    # For tool-bearing tasks the operation/actor/surface table is part of the
+    # decision, not decorative metadata.  A text capability cannot stand in
+    # for a browser or image surface, and a visual acceptance operation must
+    # have exactly one declared reviewer.
+    if needs_visual_tool:
+        operations = {item["operation"] for item in capabilities}
+        required_operations = {"document_review" if kind == "document_review" else "visual_review"}
+        browser_required = any(
+            item["surface"] == "browser"
+            and item["operation"] in {"browser_render", "visual_review", "document_review"}
+            for item in capabilities
+        )
+        if browser_required:
+            required_operations.add("browser_render")
+        if not required_operations.issubset(operations):
+            return _adaptive_result(family, "S0", "required_operation_capability_missing", "MATCHED_EXPERIENCE" if evidence_match else "UNKNOWN", modalities, output, kind, capabilities, "SOL_ONLY", "gpt-5.6-sol", "high", coordination)
+        reviewers = [item for item in capabilities if item["operation"] in {"visual_review", "document_review"}]
+        if len(reviewers) != 1:
+            return _adaptive_result(family, "S0", "visual_acceptance_reviewer_not_unique", "MATCHED_EXPERIENCE" if evidence_match else "UNKNOWN", modalities, output, kind, capabilities, "SOL_ONLY", "gpt-5.6-sol", "high", coordination)
+    # Distinct, observable work factors only.  Modality names and the
+    # coordination number are deliberately not double-counted as effort.
+    medium_signals = sum((
+        size == "large",
+        coupling == "medium",
+        risk == "medium",
+        verification_cost in {"medium", "high"},
+        len({item["operation"] for item in capabilities}) > 1,
+    ))
+    effort = "high" if evidence_match and evidence_match.get("effort") == "high" and evidence_match.get("lower_effort_comparator") is True else ("medium" if medium_signals >= 2 else "low")
     if evidence_match is not None and evidence_match.get("effort") != effort:
         evidence_match = None
-    strategy = "LUNA_MEDIUM_VISUAL_OR_DOCUMENT" if effort == "medium" else "LUNA_LOW_BOUNDED"
+    strategy = (
+        "LUNA_HIGH_MATCHED_COMPARATOR" if effort == "high"
+        else "LUNA_MEDIUM_VISUAL_OR_DOCUMENT" if effort == "medium"
+        else "LUNA_LOW_BOUNDED"
+    )
     if not evidence_match:
         if not cold_start and decision_context == "budgeted_research":
             return _adaptive_result(family, "S4", "budgeted_research_exploration", "BUDGETED_RESEARCH_EXPLORATION", modalities, output, kind, capabilities, "SOL_LUNA", "gpt-5.6-luna", effort, coordination)
         if not cold_start:
             return _adaptive_result(family, "S0", "production_route_requires_matching_evidence", "UNKNOWN", modalities, output, kind, capabilities, "SOL_ONLY", "gpt-5.6-sol", "high", coordination)
+    # Production routes require complete economics.  Research S4 is the only
+    # route allowed to proceed without it; a matched boolean cannot bypass a
+    # failed or missing credit/time gate.
+    if not cold_start:
+        if economics is None:
+            return _adaptive_result(family, "S0", "production_economics_unknown", "UNKNOWN", modalities, output, kind, capabilities, "SOL_ONLY", "gpt-5.6-sol", "high", coordination)
+        required_econ = ("baseline_credits", "execution_credits", "coordination_credits", "recovery_credits", "baseline_seconds", "execution_seconds", "coordination_seconds", "recovery_seconds")
+        if any(field not in economics for field in required_econ):
+            return _adaptive_result(family, "S0", "production_economics_incomplete", "UNKNOWN", modalities, output, kind, capabilities, "SOL_ONLY", "gpt-5.6-sol", "high", coordination)
+        baseline_credits = finite_number(economics["baseline_credits"], "economics.baseline_credits", minimum=0.0)
+        execution_credits = finite_number(economics["execution_credits"], "economics.execution_credits", minimum=0.0)
+        coordination_credits = finite_number(economics["coordination_credits"], "economics.coordination_credits", minimum=0.0)
+        recovery_credits = finite_number(economics["recovery_credits"], "economics.recovery_credits", minimum=0.0)
+        baseline_seconds = finite_number(economics["baseline_seconds"], "economics.baseline_seconds", minimum=0.0)
+        execution_seconds = finite_number(economics["execution_seconds"], "economics.execution_seconds", minimum=0.0)
+        coordination_seconds = finite_number(economics["coordination_seconds"], "economics.coordination_seconds", minimum=0.0)
+        recovery_seconds = finite_number(economics["recovery_seconds"], "economics.recovery_seconds", minimum=0.0)
+        failure_probability = 1.0 - float(evidence_match["wilson_lower_bound_95"])
+        expected_credits = execution_credits + coordination_credits + failure_probability * recovery_credits
+        expected_seconds = execution_seconds + coordination_seconds + failure_probability * recovery_seconds
+        if expected_credits > 0.5 * baseline_credits + 1e-12:
+            return _adaptive_result(family, "S0", "production_credit_gate_failed", "MATCHED_EXPERIENCE", modalities, output, kind, capabilities, "SOL_ONLY", "gpt-5.6-sol", "high", coordination)
+        if expected_seconds >= baseline_seconds:
+            return _adaptive_result(family, "S0", "production_time_gate_failed", "MATCHED_EXPERIENCE", modalities, output, kind, capabilities, "SOL_ONLY", "gpt-5.6-sol", "high", coordination)
     status = "MATCHED_EXPERIENCE" if evidence_match else "UNKNOWN"
-    return _adaptive_result(family, "S2" if effort == "medium" else "S1", strategy, status, modalities, output, kind, capabilities, "SOL_LUNA", "gpt-5.6-luna", effort, coordination)
+    return _adaptive_result(family, "S3" if effort == "high" else "S2" if effort == "medium" else "S1", strategy, status, modalities, output, kind, capabilities, "SOL_LUNA", "gpt-5.6-luna", effort, coordination)
 
 
 def _adaptive_matching_evidence(evidence: Mapping[str, Any] | None, family: str, modalities: list[str], output: str, acceptance: str, distribution_id: str, suite_digest: str) -> Mapping[str, Any] | None:
@@ -1722,11 +1848,25 @@ def _adaptive_matching_evidence(evidence: Mapping[str, Any] | None, family: str,
 
 
 def _adaptive_result(family: str, candidate: str, reason: str, evidence_status: str, modalities: list[str], output: str, acceptance: str, capabilities: list[dict[str, str]], route: str, model: str, effort: str, coordination: float) -> dict[str, Any]:
-    responsibilities = {
-        "implementer": "LUNA" if route == "SOL_LUNA" else "SOL",
-        "final_acceptance_owner": "SOL",
-        "visual_document_reviewer": "LUNA" if acceptance in {"visual_review", "document_review", "mixed_review"} and route == "SOL_LUNA" else "SOL",
-    }
+    implementer = "LUNA" if route == "SOL_LUNA" else "SOL"
+    responsibilities = {"implementer": implementer, "final_acceptance_owner": "SOL"}
+    if acceptance in {"visual_review", "document_review", "mixed_review"}:
+        reviewer = (
+            next((item["actor"] for item in capabilities
+                  if item["operation"] in {"visual_review", "document_review"}), None)
+            if route == "SOL_LUNA"
+            else "SOL"
+        )
+        responsibilities["visual_document_reviewer"] = reviewer or "SOL"
+    responsibility_capabilities = (
+        capabilities
+        if route == "SOL_LUNA"
+        else [item for item in capabilities if item["actor"] == "SOL"]
+    )
+    responsibilities["capability_bindings"] = [
+        {"name": item["name"], "operation": item["operation"], "actor": item["actor"], "surface": item["surface"]}
+        for item in responsibility_capabilities
+    ]
     return {
         "schema_version": 1, "task_family": family, "candidate": candidate, "route": route,
         "strategy": reason, "model": model, "effort": effort,

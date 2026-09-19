@@ -193,7 +193,7 @@ def _sha256_json(value: dict | list) -> str:
     return "sha256:" + hashlib.sha256(ROUTING.canonical_json(value)).hexdigest()
 
 
-def schema6_request(*, first_pass_accepted: int = 1, observations: int = 1) -> tuple[dict, dict]:
+def schema6_request(*, first_pass_accepted: int = 16, observations: int = 16) -> tuple[dict, dict]:
     source = v5_request()
     source["schema_version"] = 6
     source["acceptance_suite_digest"] = _sha256_json(source["acceptance_contract_ids"])
@@ -331,6 +331,11 @@ class RoutingPolicyTests(unittest.TestCase):
             "acceptance": {"kind": "deterministic", "independent": True, "closed": True, "suite_digest": "sha256:" + "0" * 64},
             "coupling": "low", "risk": "low", "size": "normal",
             "coordination_overhead": 0,
+            "economics": {
+                "baseline_credits": 100, "execution_credits": 20, "coordination_credits": 5,
+                "recovery_credits": 10, "baseline_seconds": 100, "execution_seconds": 30,
+                "coordination_seconds": 5, "recovery_seconds": 10,
+            },
         }
         task.update(overrides)
         return task
@@ -341,7 +346,8 @@ class RoutingPolicyTests(unittest.TestCase):
         self.assertEqual((low["candidate"], low["effort"]), ("S1", "low"))
         visual = self.adaptive_task(
             required_input_modalities=["screenshot"], output_kind="document",
-            required_tool_capabilities=[{"name": "vision", "status": "basic-proven", "source": "basic-proven"}],
+            coupling="medium",
+            required_tool_capabilities=[{"name": "vision", "status": "basic-proven", "source": "basic-proven", "operation": "document_review", "actor": "LUNA", "surface": "view_image"}],
             acceptance={"kind": "document_review", "independent": True, "closed": True, "suite_digest": "sha256:" + "0" * 64},
         )
         medium = ROUTING.select_adaptive_route(visual, evidence=dict(evidence, input_modalities=["screenshot"], output_kind="document", acceptance_kind="document_review", effort="medium"))
@@ -350,9 +356,9 @@ class RoutingPolicyTests(unittest.TestCase):
         self.assertEqual(small["candidate"], "S0")
 
     def test_adaptive_unknown_unavailable_and_unproven_are_distinct(self) -> None:
-        unknown = self.adaptive_task(required_tool_capabilities=[{"name": "vision", "status": "unknown", "source": "host-observed"}])
+        unknown = self.adaptive_task(required_tool_capabilities=[{"name": "vision", "status": "unknown", "source": "host-observed", "operation": "visual_review", "actor": "LUNA", "surface": "browser"}])
         self.assertEqual(ROUTING.select_adaptive_route(unknown)["candidate"], "S0")
-        research = self.adaptive_task(required_tool_capabilities=[{"name": "vision", "status": "host-observed", "source": "unknown"}])
+        research = self.adaptive_task(required_tool_capabilities=[{"name": "vision", "status": "host-observed", "source": "unknown", "operation": "visual_review", "actor": "LUNA", "surface": "browser"}])
         self.assertEqual(ROUTING.select_adaptive_route(research)["candidate"], "S0")
 
     def test_adaptive_budgeted_research_is_explicit_and_effort_sensitive(self) -> None:
@@ -363,7 +369,7 @@ class RoutingPolicyTests(unittest.TestCase):
         self.assertEqual((text_result["candidate"], text_result["effort"]), ("S4", "low"))
         visual = self.adaptive_task(
             decision_context="budgeted_research", required_input_modalities=["screenshot"], output_kind="document",
-            required_tool_capabilities=[{"name": "vision", "status": "basic-proven", "source": "basic-proven"}],
+            required_tool_capabilities=[{"name": "vision", "status": "basic-proven", "source": "basic-proven", "operation": "document_review", "actor": "LUNA", "surface": "view_image"}],
             acceptance={"kind": "document_review", "independent": True, "closed": True, "suite_digest": "sha256:" + "0" * 64},
             size="large", coupling="medium",
         )
@@ -381,7 +387,7 @@ class RoutingPolicyTests(unittest.TestCase):
         self.assertEqual(ROUTING.select_adaptive_route(task, evidence=borrowed)["candidate"], "S0")
 
     def test_adaptive_cold_start_exact_q_boundary(self) -> None:
-        base = self.adaptive_task(cold_start=True, cold_start_constraints={key: True for key in ("architecture_settled", "deterministic_acceptance", "low_risk", "low_coupling", "complete_luna_ownership", "exclusive_write", "single_writer", "sol_queue_empty")}, economics={"baseline_credits": 10, "launch_credits": 2, "overhead_credits": 3, "recovery_credits": 5, "failure_probability": 0})
+        base = self.adaptive_task(cold_start=True, cold_start_constraints={key: True for key in ("architecture_settled", "deterministic_acceptance", "low_risk", "low_coupling", "complete_luna_ownership", "exclusive_write", "single_writer", "sol_queue_empty")}, economics={"baseline_credits": 10, "launch_credits": 2, "overhead_credits": 3, "recovery_credits": 5, "baseline_seconds": 100, "launch_seconds": 20, "overhead_seconds": 5, "recovery_seconds": 10, "failure_probability": 0})
         self.assertEqual(ROUTING.select_adaptive_route(base)["candidate"], "S1")
         over = dict(base, economics=dict(base["economics"], failure_probability=0.0001))
         self.assertEqual(ROUTING.select_adaptive_route(over)["candidate"], "S0")
@@ -389,7 +395,7 @@ class RoutingPolicyTests(unittest.TestCase):
         self.assertEqual(ROUTING.cold_start_credit_bound(10, 5.1, 0, 5), -1)
 
     def test_adaptive_execution_mismatch_fails_closed(self) -> None:
-        selected = ROUTING.select_adaptive_route(self.adaptive_task(cold_start=True, cold_start_constraints={key: True for key in ("architecture_settled", "deterministic_acceptance", "low_risk", "low_coupling", "complete_luna_ownership", "exclusive_write", "single_writer", "sol_queue_empty")}, economics={"baseline_credits": 10, "launch_credits": 2, "overhead_credits": 3, "recovery_credits": 5, "failure_probability": 0}))
+        selected = ROUTING.select_adaptive_route(self.adaptive_task(cold_start=True, cold_start_constraints={key: True for key in ("architecture_settled", "deterministic_acceptance", "low_risk", "low_coupling", "complete_luna_ownership", "exclusive_write", "single_writer", "sol_queue_empty")}, economics={"baseline_credits": 10, "launch_credits": 2, "overhead_credits": 3, "recovery_credits": 5, "baseline_seconds": 100, "launch_seconds": 20, "overhead_seconds": 5, "recovery_seconds": 10, "failure_probability": 0}))
         actual = {key: selected[key] for key in ("route", "candidate", "model", "effort", "execution_token", "responsibilities")}
         self.assertTrue(ROUTING.validate_adaptive_execution(selected, actual)["valid"])
         actual["effort"] = "medium"
@@ -1440,6 +1446,106 @@ class RoutingPolicyTests(unittest.TestCase):
         self.assertEqual(selected["quality_evidence_source"], "controlled-routing-campaign")
         self.assertNotIn("quality_evidence", selected)
         self.assertNotIn("observations", selected)
+
+    def test_schema6_uses_conservative_quality_bound_at_original_entry(self) -> None:
+        for accepted, observations in ((1, 1), (2, 2)):
+            source, evidence = schema6_request(first_pass_accepted=accepted, observations=observations)
+            result = ROUTING.evaluate_route(source, POLICY, verified_quality_evidence=bound_quality(source, evidence))
+            self.assertEqual(result["route"], "SOL_ONLY")
+            selected = result["candidates"][0]
+            self.assertEqual(selected["first_pass_probability"], ROUTING.wilson_lower_bound(accepted, observations))
+            self.assertEqual(selected["first_pass_probability_empirical"], 1.0)
+            self.assertEqual(selected["first_pass_wilson_lower_bound_95"], selected["first_pass_probability"])
+            self.assertLess(selected["first_pass_probability"], 0.8)
+        source, evidence = schema6_request(first_pass_accepted=16, observations=16)
+        result = ROUTING.evaluate_route(source, POLICY, verified_quality_evidence=bound_quality(source, evidence))
+        selected = result["candidates"][0]
+        self.assertEqual(result["route"], "SOL_LUNA")
+        self.assertEqual(selected["first_pass_probability"], ROUTING.wilson_lower_bound(16, 16))
+        self.assertGreaterEqual(selected["first_pass_probability"], 0.8)
+        self.assertEqual(selected["first_pass_probability_empirical"], 1.0)
+
+    def test_adaptive_production_economics_is_hard_for_low_and_high(self) -> None:
+        task = self.adaptive_task()
+        evidence = {"effort": "low", "status": "MATCHED_EXPERIENCE", "lower_effort_comparator": False,
+                    "task_family": "adaptive-demo", "input_modalities": ["text"], "output_kind": "code",
+                    "acceptance_kind": "deterministic", "distribution_id": "same-distribution-v1",
+                    "acceptance_suite_digest": "sha256:" + "0" * 64, "observations": 16, "first_pass_accepted": 16}
+        bad = dict(task, economics=dict(task["economics"], baseline_credits=10, execution_credits=100))
+        self.assertEqual(ROUTING.select_adaptive_route(bad, evidence=evidence)["candidate"], "S0")
+        high_evidence = dict(evidence, effort="high", lower_effort_comparator=True)
+        high = dict(task, risk="medium", economics=dict(task["economics"], baseline_credits=10, execution_credits=100))
+        self.assertEqual(ROUTING.select_adaptive_route(high, evidence=high_evidence)["candidate"], "S0")
+
+    def test_adaptive_ui_binds_luna_implementation_to_sol_visual_acceptance(self) -> None:
+        task = self.adaptive_task(
+            required_input_modalities=["screenshot"], output_kind="document", coupling="medium",
+            acceptance={"kind": "mixed_review", "independent": True, "closed": True,
+                        "verification_cost": "medium", "suite_digest": "sha256:" + "0" * 64},
+            required_tool_capabilities=[
+                {"name": "writer", "status": "host-observed", "source": "host-observed", "operation": "implementation", "actor": "LUNA", "surface": "filesystem"},
+                {"name": "browser", "status": "host-observed", "source": "host-observed", "operation": "browser_render", "actor": "SOL", "surface": "browser"},
+                {"name": "visual", "status": "host-observed", "source": "host-observed", "operation": "visual_review", "actor": "SOL", "surface": "browser"},
+            ],
+        )
+        evidence = {"effort": "medium", "status": "MATCHED_EXPERIENCE", "lower_effort_comparator": False,
+                    "task_family": "adaptive-demo", "input_modalities": ["screenshot"], "output_kind": "document",
+                    "acceptance_kind": "mixed_review", "distribution_id": "same-distribution-v1",
+                    "acceptance_suite_digest": "sha256:" + "0" * 64, "observations": 16, "first_pass_accepted": 16}
+        result = ROUTING.select_adaptive_route(task, evidence=evidence)
+        self.assertEqual(result["candidate"], "S2")
+        self.assertEqual(result["responsibilities"]["implementer"], "LUNA")
+        self.assertEqual(result["responsibilities"]["visual_document_reviewer"], "SOL")
+        self.assertEqual(sum(item["operation"] == "visual_review" for item in result["required_tools"]), 1)
+
+        bad = dict(task, required_tool_capabilities=[
+            dict(item, operation="test_execution") for item in task["required_tool_capabilities"]
+        ])
+        bad_result = ROUTING.select_adaptive_route(bad, evidence=evidence)
+        self.assertEqual(bad_result["candidate"], "S0")
+        self.assertEqual(bad_result["reason_code"], "required_operation_capability_missing")
+        self.assertEqual(bad_result["responsibilities"]["visual_document_reviewer"], "SOL")
+        self.assertTrue(all(item["actor"] == "SOL" for item in bad_result["responsibilities"]["capability_bindings"]))
+
+    def test_adaptive_static_image_review_does_not_require_browser_render(self) -> None:
+        task = self.adaptive_task(
+            required_input_modalities=["image"], output_kind="text",
+            acceptance={"kind": "visual_review", "independent": True, "closed": True,
+                        "verification_cost": "low", "suite_digest": "sha256:" + "0" * 64},
+            required_tool_capabilities=[
+                {"name": "writer", "status": "host-observed", "source": "host-observed", "operation": "implementation", "actor": "LUNA", "surface": "filesystem"},
+                {"name": "image-view", "status": "host-observed", "source": "host-observed", "operation": "visual_review", "actor": "SOL", "surface": "view_image"},
+            ],
+        )
+        evidence = {"effort": "low", "status": "MATCHED_EXPERIENCE", "lower_effort_comparator": False,
+                    "task_family": "adaptive-demo", "input_modalities": ["image"], "output_kind": "text",
+                    "acceptance_kind": "visual_review", "distribution_id": "same-distribution-v1",
+                    "acceptance_suite_digest": "sha256:" + "0" * 64, "observations": 16, "first_pass_accepted": 16}
+        result = ROUTING.select_adaptive_route(task, evidence=evidence)
+        self.assertEqual((result["candidate"], result["route"]), ("S1", "SOL_LUNA"))
+        self.assertNotIn("browser_render", {item["operation"] for item in result["required_tools"]})
+
+    def test_adaptive_coordination_number_is_not_an_effort_or_rejection_threshold(self) -> None:
+        evidence = {"effort": "low", "status": "MATCHED_EXPERIENCE", "lower_effort_comparator": False,
+                    "task_family": "adaptive-demo", "input_modalities": ["text"], "output_kind": "code",
+                    "acceptance_kind": "deterministic", "distribution_id": "same-distribution-v1",
+                    "acceptance_suite_digest": "sha256:" + "0" * 64, "observations": 16, "first_pass_accepted": 16}
+        result = ROUTING.select_adaptive_route(self.adaptive_task(coordination_overhead=1000), evidence=evidence)
+        self.assertEqual((result["candidate"], result["effort"]), ("S1", "low"))
+
+    def test_adaptive_cold_start_requires_time_improvement(self) -> None:
+        constraints = {key: True for key in (
+            "architecture_settled", "deterministic_acceptance", "low_risk", "low_coupling",
+            "complete_luna_ownership", "exclusive_write", "single_writer", "sol_queue_empty",
+        )}
+        economics = {"baseline_credits": 10, "launch_credits": 2, "overhead_credits": 2,
+                     "recovery_credits": 1, "failure_probability": 0,
+                     "baseline_seconds": 25, "launch_seconds": 20, "overhead_seconds": 5,
+                     "recovery_seconds": 1}
+        result = ROUTING.select_adaptive_route(self.adaptive_task(
+            cold_start=True, cold_start_constraints=constraints, economics=economics,
+        ))
+        self.assertEqual((result["candidate"], result["reason_code"]), ("S0", "cold_start_economics_fail"))
 
     def test_schema6_p010_zero_of_one_evidence_rejects_ninety_percent_self_report(self) -> None:
         source, evidence = schema6_request(first_pass_accepted=0, observations=1)
