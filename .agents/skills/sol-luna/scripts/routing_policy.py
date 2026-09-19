@@ -80,6 +80,15 @@ class _ExternallyBoundColdStartEvidence(dict[str, Any]):
         self.manifest_path = manifest_path
 
 
+class _ExternallyBoundAdaptiveEvidencePool(list[Mapping[str, Any]]):
+    """Marker for cross-instance evidence verified outside the task request.
+
+    The routing module deliberately exposes no JSON field that can manufacture
+    this authority.  Host provenance, budget compliance, and protocol validity
+    must be checked by the caller before it constructs this boundary object.
+    """
+
+
 def finite_number(value: Any, field: str, *, minimum: float = 0.0, maximum: float | None = None) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(float(value)):
         raise PolicyError(f"{field} must be a finite number")
@@ -1737,6 +1746,482 @@ def adaptive_difficulty_profile(value: Any) -> dict[str, Any]:
     }
 
 
+ADAPTIVE_MATCHING_SPEC_FIELDS = {
+    "schema_version", "distribution_id", "acceptance_protocol_version",
+    "acceptance_protocol_digest", "input_modalities", "output_kind",
+    "acceptance_kind", "difficulty_schema_version", "difficulty_band",
+    "role_bindings", "coupling", "risk", "repair_policy",
+    "environment_boundary_digest", "spec_digest",
+}
+ADAPTIVE_REPAIR_POLICIES = {"no-repair", "one-focused-repair"}
+ADAPTIVE_CANDIDATE_ECONOMIC_FIELDS = {
+    "effort", "execution_credits", "coordination_credits", "recovery_credits",
+    "execution_seconds", "coordination_seconds", "recovery_seconds",
+}
+ADAPTIVE_BASELINE_ECONOMIC_FIELDS = {"baseline_credits", "baseline_seconds"}
+ADAPTIVE_CLUSTER_FIELDS = {
+    "record_id", "matching_spec_digest", "semantic_cluster_id", "effort",
+    "expected_member_ids", "members",
+}
+ADAPTIVE_CLUSTER_MEMBER_FIELDS = {
+    "member_id", "instance_digest", "material_digest",
+    "acceptance_instance_digest", "first_pass_accepted", "final_accepted",
+    "repair_attempts", "final_defect",
+}
+ADAPTIVE_CANDIDATE_EFFORTS = ("low", "medium", "high")
+
+
+def _adaptive_role_bindings(value: Any, field: str) -> list[dict[str, str]]:
+    if not isinstance(value, list) or not value:
+        raise PolicyError(f"{field} must be a non-empty array")
+    result: list[dict[str, str]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for index, raw in enumerate(value):
+        prefix = f"{field}[{index}]"
+        item = require_object(raw, prefix)
+        expected = {"actor", "operation", "surface"}
+        reject_unknown_fields(item, expected, prefix)
+        if set(item) != expected:
+            raise PolicyError(f"{prefix} requires actor, operation, and surface")
+        actor = require_string(item["actor"], f"{prefix}.actor").upper()
+        operation = require_string(item["operation"], f"{prefix}.operation").lower()
+        surface = require_string(item["surface"], f"{prefix}.surface").lower()
+        if actor not in ADAPTIVE_ACTORS or operation not in ADAPTIVE_OPERATIONS:
+            raise PolicyError(f"{prefix} has unsupported actor or operation")
+        key = (actor, operation, surface)
+        if key in seen:
+            raise PolicyError(f"{field} contains a duplicate binding")
+        seen.add(key)
+        result.append({"actor": actor, "operation": operation, "surface": surface})
+    return sorted(result, key=lambda item: (item["actor"], item["operation"], item["surface"]))
+
+
+def _adaptive_matching_spec(
+    value: Any, *, distribution_id: str, difficulty: Mapping[str, Any],
+    coupling: str, risk: str, capabilities: list[dict[str, str]],
+    modalities: list[str], output_kind: str, acceptance_kind: str,
+    acceptance_protocol_version: str | None,
+    acceptance_protocol_digest: str | None,
+) -> dict[str, Any]:
+    source = require_object(value, "adaptive task.matching_spec")
+    reject_unknown_fields(source, ADAPTIVE_MATCHING_SPEC_FIELDS, "adaptive task.matching_spec")
+    if set(source) != ADAPTIVE_MATCHING_SPEC_FIELDS:
+        raise PolicyError("adaptive task.matching_spec is incomplete")
+    if source.get("schema_version") != 1 or type(source.get("schema_version")) is not int:
+        raise PolicyError("adaptive task.matching_spec.schema_version must be 1")
+    supplied_digest = require_digest(source.get("spec_digest"), "matching_spec.spec_digest")
+    payload = {key: value for key, value in source.items() if key != "spec_digest"}
+    expected_digest = "sha256:" + hashlib.sha256(canonical_json(payload)).hexdigest()
+    if supplied_digest != expected_digest:
+        raise PolicyError("matching_spec.spec_digest does not match content")
+    if require_string(source.get("distribution_id"), "matching_spec.distribution_id") != distribution_id:
+        raise PolicyError("matching_spec.distribution_id does not match task")
+    protocol = require_string(
+        source.get("acceptance_protocol_version"),
+        "matching_spec.acceptance_protocol_version",
+    )
+    if acceptance_protocol_version is None:
+        raise PolicyError("matching_spec requires adaptive task.acceptance.protocol_version")
+    if protocol != acceptance_protocol_version:
+        raise PolicyError("matching_spec.acceptance_protocol_version does not match task")
+    protocol_digest = require_digest(
+        source.get("acceptance_protocol_digest"),
+        "matching_spec.acceptance_protocol_digest",
+    )
+    if acceptance_protocol_digest is None:
+        raise PolicyError("matching_spec requires adaptive task.acceptance.protocol_digest")
+    if protocol_digest != acceptance_protocol_digest:
+        raise PolicyError("matching_spec.acceptance_protocol_digest does not match task")
+    raw_modalities = source.get("input_modalities")
+    if not isinstance(raw_modalities, list):
+        raise PolicyError("matching_spec.input_modalities must be an array")
+    spec_modalities = [
+        require_string(item, "matching_spec.input_modalities item").lower()
+        for item in raw_modalities
+    ]
+    if len(set(spec_modalities)) != len(spec_modalities):
+        raise PolicyError("matching_spec.input_modalities contains duplicates")
+    spec_modalities = sorted(spec_modalities)
+    if spec_modalities != sorted(modalities):
+        raise PolicyError("matching_spec.input_modalities do not match task")
+    spec_output = require_string(
+        source.get("output_kind"), "matching_spec.output_kind"
+    ).lower()
+    spec_acceptance = require_string(
+        source.get("acceptance_kind"), "matching_spec.acceptance_kind"
+    ).lower()
+    if spec_output != output_kind or spec_acceptance != acceptance_kind:
+        raise PolicyError("matching_spec output or acceptance kind does not match task")
+    difficulty_schema = require_string(
+        source.get("difficulty_schema_version"),
+        "matching_spec.difficulty_schema_version",
+    )
+    if difficulty_schema != "adaptive-difficulty-v1":
+        raise PolicyError("matching_spec.difficulty_schema_version is unsupported")
+    if not difficulty.get("provided"):
+        raise PolicyError("matching_spec requires a pre-execution difficulty_profile")
+    difficulty_band = require_string(
+        source.get("difficulty_band"), "matching_spec.difficulty_band"
+    ).upper()
+    if difficulty_band != difficulty.get("band"):
+        raise PolicyError("matching_spec.difficulty_band does not match task")
+    spec_coupling = require_string(source.get("coupling"), "matching_spec.coupling").lower()
+    spec_risk = require_string(source.get("risk"), "matching_spec.risk").lower()
+    if spec_coupling != coupling or spec_risk != risk:
+        raise PolicyError("matching_spec coupling or risk does not match task")
+    repair_policy = require_string(
+        source.get("repair_policy"), "matching_spec.repair_policy"
+    ).lower()
+    if repair_policy not in ADAPTIVE_REPAIR_POLICIES:
+        raise PolicyError("matching_spec.repair_policy is unsupported")
+    environment = require_digest(
+        source.get("environment_boundary_digest"),
+        "matching_spec.environment_boundary_digest",
+    )
+    roles = _adaptive_role_bindings(source.get("role_bindings"), "matching_spec.role_bindings")
+    expected_roles = [
+        {"actor": "LUNA", "operation": "implementation", "surface": "filesystem"},
+        {"actor": "SOL", "operation": "test_execution", "surface": "shell"},
+    ]
+    expected_roles.extend(
+        {
+            "actor": item["actor"],
+            "operation": item["operation"],
+            "surface": item["surface"],
+        }
+        for item in capabilities
+    )
+    expected_roles = sorted(
+        {(
+            item["actor"], item["operation"], item["surface"]
+        ) for item in expected_roles}
+    )
+    observed_roles = [
+        (item["actor"], item["operation"], item["surface"]) for item in roles
+    ]
+    if observed_roles != expected_roles:
+        raise PolicyError("matching_spec.role_bindings do not match task responsibilities")
+    return {
+        "schema_version": 1,
+        "distribution_id": distribution_id,
+        "acceptance_protocol_version": protocol,
+        "acceptance_protocol_digest": protocol_digest,
+        "input_modalities": spec_modalities,
+        "output_kind": spec_output,
+        "acceptance_kind": spec_acceptance,
+        "difficulty_schema_version": difficulty_schema,
+        "difficulty_band": difficulty_band,
+        "role_bindings": roles,
+        "coupling": spec_coupling,
+        "risk": spec_risk,
+        "repair_policy": repair_policy,
+        "environment_boundary_digest": environment,
+        "spec_digest": supplied_digest,
+    }
+
+
+def _adaptive_candidate_economics(value: Any) -> dict[str, dict[str, float]]:
+    if value is None:
+        return {}
+    if not isinstance(value, list):
+        raise PolicyError("adaptive task.candidate_economics must be an array")
+    if not value:
+        raise PolicyError("adaptive task.candidate_economics must not be empty")
+    result: dict[str, dict[str, float]] = {}
+    for index, raw in enumerate(value):
+        prefix = f"adaptive task.candidate_economics[{index}]"
+        item = require_object(raw, prefix)
+        reject_unknown_fields(item, ADAPTIVE_CANDIDATE_ECONOMIC_FIELDS, prefix)
+        if set(item) != ADAPTIVE_CANDIDATE_ECONOMIC_FIELDS:
+            raise PolicyError(f"{prefix} is incomplete")
+        effort = require_string(item.get("effort"), f"{prefix}.effort").lower()
+        if effort not in ADAPTIVE_CANDIDATE_EFFORTS or effort in result:
+            raise PolicyError("candidate_economics efforts must be unique Low/Medium/High")
+        normalized = {"effort": effort}
+        for field in ADAPTIVE_CANDIDATE_ECONOMIC_FIELDS - {"effort"}:
+            normalized[field] = finite_number(item.get(field), f"{prefix}.{field}", minimum=0.0)
+        result[effort] = normalized
+    return result
+
+
+def _adaptive_baseline_economics(value: Any) -> dict[str, float]:
+    if value is None:
+        return {}
+    source = require_object(value, "adaptive task.baseline_economics")
+    reject_unknown_fields(
+        source, ADAPTIVE_BASELINE_ECONOMIC_FIELDS,
+        "adaptive task.baseline_economics",
+    )
+    if set(source) != ADAPTIVE_BASELINE_ECONOMIC_FIELDS:
+        raise PolicyError("adaptive task.baseline_economics is incomplete")
+    return {
+        field: finite_number(
+            source.get(field), f"adaptive task.baseline_economics.{field}", minimum=0.0,
+        )
+        for field in ADAPTIVE_BASELINE_ECONOMIC_FIELDS
+    }
+
+
+def _adaptive_cross_instance_evidence(
+    value: Any, *, matching_spec_digest: str, repair_policy: str,
+) -> dict[str, list[dict[str, Any]]]:
+    if not isinstance(value, _ExternallyBoundAdaptiveEvidencePool):
+        raise PolicyError("cross-instance evidence must be externally bound")
+    result = {effort: [] for effort in ADAPTIVE_CANDIDATE_EFFORTS}
+    record_ids: set[str] = set()
+    cluster_ids = {effort: set() for effort in ADAPTIVE_CANDIDATE_EFFORTS}
+    instance_digests = {effort: set() for effort in ADAPTIVE_CANDIDATE_EFFORTS}
+    for index, raw in enumerate(value):
+        prefix = f"verified_evidence_pool[{index}]"
+        item = require_object(raw, prefix)
+        reject_unknown_fields(item, ADAPTIVE_CLUSTER_FIELDS, prefix)
+        if set(item) != ADAPTIVE_CLUSTER_FIELDS:
+            raise PolicyError(f"{prefix} is incomplete")
+        record_id = require_string(item.get("record_id"), f"{prefix}.record_id")
+        if not PACKAGE_ID.fullmatch(record_id) or record_id in record_ids:
+            raise PolicyError("verified_evidence_pool contains a duplicate or invalid record_id")
+        record_ids.add(record_id)
+        if require_digest(
+            item.get("matching_spec_digest"), f"{prefix}.matching_spec_digest"
+        ) != matching_spec_digest:
+            raise PolicyError("verified_evidence_pool matching_spec drift")
+        cluster_id = require_string(
+            item.get("semantic_cluster_id"), f"{prefix}.semantic_cluster_id"
+        )
+        if not PACKAGE_ID.fullmatch(cluster_id):
+            raise PolicyError(f"{prefix}.semantic_cluster_id must be stable hyphen-case")
+        effort = require_string(item.get("effort"), f"{prefix}.effort").lower()
+        if effort not in ADAPTIVE_CANDIDATE_EFFORTS:
+            raise PolicyError(f"{prefix}.effort is unsupported")
+        if cluster_id in cluster_ids[effort]:
+            raise PolicyError("verified_evidence_pool contains a duplicate semantic cluster")
+        cluster_ids[effort].add(cluster_id)
+        expected_raw = item.get("expected_member_ids")
+        if not isinstance(expected_raw, list) or not expected_raw:
+            raise PolicyError(f"{prefix}.expected_member_ids must be non-empty")
+        expected_members = [
+            require_string(member_id, f"{prefix}.expected_member_ids item")
+            for member_id in expected_raw
+        ]
+        if len(set(expected_members)) != len(expected_members):
+            raise PolicyError(f"{prefix}.expected_member_ids contains duplicates")
+        members_raw = item.get("members")
+        if not isinstance(members_raw, list):
+            raise PolicyError(f"{prefix}.members must be an array")
+        members: list[dict[str, Any]] = []
+        member_ids: set[str] = set()
+        for member_index, member_raw in enumerate(members_raw):
+            member_prefix = f"{prefix}.members[{member_index}]"
+            member = require_object(member_raw, member_prefix)
+            reject_unknown_fields(member, ADAPTIVE_CLUSTER_MEMBER_FIELDS, member_prefix)
+            if set(member) != ADAPTIVE_CLUSTER_MEMBER_FIELDS:
+                raise PolicyError(f"{member_prefix} is incomplete")
+            member_id = require_string(member.get("member_id"), f"{member_prefix}.member_id")
+            if member_id not in expected_members or member_id in member_ids:
+                raise PolicyError(f"{member_prefix}.member_id is unexpected or duplicate")
+            member_ids.add(member_id)
+            instance_digest = require_digest(
+                member.get("instance_digest"), f"{member_prefix}.instance_digest"
+            )
+            if instance_digest in instance_digests[effort]:
+                raise PolicyError("verified_evidence_pool contains a duplicate instance")
+            instance_digests[effort].add(instance_digest)
+            first_pass_accepted = member.get("first_pass_accepted")
+            final_accepted = member.get("final_accepted")
+            repair_attempts = member.get("repair_attempts")
+            final_defect = member.get("final_defect")
+            if any(type(value) is not bool for value in (
+                first_pass_accepted, final_accepted, final_defect,
+            )) or type(repair_attempts) is not int or repair_attempts < 0:
+                raise PolicyError(
+                    f"{member_prefix} has invalid first/final/repair/defect evidence"
+                )
+            repair_limit = 0 if repair_policy == "no-repair" else 1
+            if repair_attempts > repair_limit:
+                raise PolicyError(f"{member_prefix} exceeds matching repair policy")
+            if first_pass_accepted and (not final_accepted or repair_attempts):
+                raise PolicyError(f"{member_prefix} has contradictory first-pass evidence")
+            if not first_pass_accepted and final_accepted and repair_attempts == 0:
+                raise PolicyError(f"{member_prefix} final acceptance requires observed repair")
+            members.append({
+                "member_id": member_id,
+                "instance_digest": instance_digest,
+                "material_digest": require_digest(
+                    member.get("material_digest"), f"{member_prefix}.material_digest"
+                ),
+                "acceptance_instance_digest": require_digest(
+                    member.get("acceptance_instance_digest"),
+                    f"{member_prefix}.acceptance_instance_digest",
+                ),
+                "first_pass_accepted": first_pass_accepted,
+                "final_accepted": final_accepted,
+                "repair_attempts": repair_attempts,
+                "final_defect": final_defect,
+            })
+        members.sort(key=lambda member: member["member_id"])
+        expected_members = sorted(expected_members)
+        result[effort].append({
+            "record_id": record_id,
+            "semantic_cluster_id": cluster_id,
+            "expected_member_ids": expected_members,
+            "members": members,
+            "cluster_first_pass_accepted": (
+                [member["member_id"] for member in members] == expected_members
+                and all(member["first_pass_accepted"] for member in members)
+            ),
+            "cluster_final_accepted": (
+                [member["member_id"] for member in members] == expected_members
+                and all(member["final_accepted"] for member in members)
+            ),
+            "cluster_repair_observed": any(member["repair_attempts"] for member in members),
+            "cluster_final_defect": any(member["final_defect"] for member in members),
+        })
+    for records in result.values():
+        records.sort(key=lambda record: record["semantic_cluster_id"])
+    return result
+
+
+def _adaptive_comparator_matches(
+    high_records: list[dict[str, Any]], medium_records: list[dict[str, Any]],
+) -> bool:
+    medium_by_cluster = {
+        record["semantic_cluster_id"]: record for record in medium_records
+    }
+    if not high_records:
+        return False
+    for high in high_records:
+        medium = medium_by_cluster.get(high["semantic_cluster_id"])
+        if medium is None or medium["expected_member_ids"] != high["expected_member_ids"]:
+            return False
+        high_members = {
+            member["member_id"]: (
+                member["instance_digest"], member["material_digest"],
+                member["acceptance_instance_digest"],
+            )
+            for member in high["members"]
+        }
+        medium_members = {
+            member["member_id"]: (
+                member["instance_digest"], member["material_digest"],
+                member["acceptance_instance_digest"],
+            )
+            for member in medium["members"]
+        }
+        if high_members != medium_members:
+            return False
+    return True
+
+
+def _adaptive_candidate_evaluations(
+    records_by_effort: Mapping[str, list[dict[str, Any]]],
+    economics_by_effort: Mapping[str, Mapping[str, float]],
+    baseline_economics: Mapping[str, float],
+) -> list[dict[str, Any]]:
+    evaluations: list[dict[str, Any]] = []
+    for effort in ADAPTIVE_CANDIDATE_EFFORTS:
+        records = records_by_effort.get(effort, [])
+        economics = economics_by_effort.get(effort)
+        evaluation: dict[str, Any] = {
+            "effort": effort,
+            "semantic_clusters": len(records),
+            "first_pass_accepted_clusters": sum(
+                record["cluster_first_pass_accepted"] for record in records
+            ),
+            "final_accepted_clusters": sum(
+                record["cluster_final_accepted"] for record in records
+            ),
+            "repair_observed_clusters": sum(
+                record["cluster_repair_observed"] for record in records
+            ),
+            "final_defect_clusters": sum(record["cluster_final_defect"] for record in records),
+            "status": "EVIDENCE_UNKNOWN" if not records else "PENDING",
+            "eligible": False,
+            "economic_basis": "DECLARED_POINT_ESTIMATES_PLUS_WILSON_FAILURE_BOUND_NOT_COST_BOUND",
+        }
+        if not records:
+            evaluations.append(evaluation)
+            continue
+        accepted = int(evaluation["first_pass_accepted_clusters"])
+        observations = int(evaluation["semantic_clusters"])
+        lower_bound = wilson_lower_bound(accepted, observations)
+        evaluation["first_pass_wilson_lower_bound_95"] = lower_bound
+        if (
+            int(evaluation["final_accepted_clusters"]) != observations
+            or evaluation["final_defect_clusters"]
+        ):
+            evaluation["status"] = "FINAL_ACCEPTANCE_GATE_FAILED"
+            evaluations.append(evaluation)
+            continue
+        if lower_bound < 0.80:
+            evaluation["status"] = "QUALITY_GATE_FAILED"
+            evaluations.append(evaluation)
+            continue
+        if effort == "high" and not _adaptive_comparator_matches(
+            records, records_by_effort.get("medium", [])
+        ):
+            evaluation["status"] = "HIGH_COMPARATOR_MISSING"
+            evaluations.append(evaluation)
+            continue
+        if economics is None or not baseline_economics:
+            evaluation["status"] = "ECONOMICS_UNKNOWN"
+            evaluations.append(evaluation)
+            continue
+        failure_probability = 1.0 - lower_bound
+        expected_credits = (
+            float(economics["execution_credits"])
+            + float(economics["coordination_credits"])
+            + failure_probability * float(economics["recovery_credits"])
+        )
+        expected_seconds = (
+            float(economics["execution_seconds"])
+            + float(economics["coordination_seconds"])
+            + failure_probability * float(economics["recovery_seconds"])
+        )
+        evaluation.update({
+            "failure_probability_bound": failure_probability,
+            "conservative_complete_credits": expected_credits,
+            "conservative_complete_seconds": expected_seconds,
+            "baseline_credits": float(baseline_economics["baseline_credits"]),
+            "baseline_seconds": float(baseline_economics["baseline_seconds"]),
+            "lower_effort_comparator_observed": True if effort == "high" else None,
+        })
+        if expected_credits > 0.5 * float(baseline_economics["baseline_credits"]) + 1e-12:
+            evaluation["status"] = "CREDIT_GATE_FAILED"
+        elif expected_seconds >= float(baseline_economics["baseline_seconds"]):
+            evaluation["status"] = "TIME_GATE_FAILED"
+        else:
+            evaluation["status"] = "ELIGIBLE"
+            evaluation["eligible"] = True
+        evaluations.append(evaluation)
+    return evaluations
+
+
+def _attach_cross_instance_selection(
+    result: dict[str, Any], *, evaluations: list[dict[str, Any]],
+    matching_spec_digest: str, instance_digest: str,
+    material_digest: str, acceptance_instance_digest: str,
+) -> dict[str, Any]:
+    result["candidate_evaluations"] = evaluations
+    result["matching_spec_digest"] = matching_spec_digest
+    result["selection_basis"] = "MIN_CONSERVATIVE_COMPLETE_COST_THEN_TIME"
+    result["trace_digests"] = {
+        "instance": instance_digest,
+        "material": material_digest,
+        "acceptance_instance": acceptance_instance_digest,
+        "matching_spec": matching_spec_digest,
+    }
+    result["execution_token"] = hashlib.sha256(canonical_json({
+        "route": result["route"],
+        "candidate": result["candidate"],
+        "effort": result["effort"],
+        "responsibilities": result["responsibilities"],
+        "candidate_evaluations": evaluations,
+        "selection_basis": result["selection_basis"],
+        "trace_digests": result["trace_digests"],
+    })).hexdigest()
+    return result
+
+
 def _adaptive_research_plan(
     value: Any, *, decision_context: str, task_contract_digest: str | None,
     acceptance_suite_digest: str, difficulty: Mapping[str, Any],
@@ -1814,7 +2299,10 @@ def _adaptive_research_plan(
     }
 
 
-def select_adaptive_route(task: Mapping[str, Any], *, evidence: Mapping[str, Any] | None = None) -> dict[str, Any]:
+def select_adaptive_route(
+    task: Mapping[str, Any], *, evidence: Mapping[str, Any] | None = None,
+    verified_evidence_pool: _ExternallyBoundAdaptiveEvidencePool | None = None,
+) -> dict[str, Any]:
     """Select S0-S4 from a strictly typed task image before execution.
 
     This is intentionally a policy entry point, not a dispatcher.  It returns
@@ -1827,7 +2315,8 @@ def select_adaptive_route(task: Mapping[str, Any], *, evidence: Mapping[str, Any
         "required_tool_capabilities", "acceptance", "coupling", "risk",
         "size", "coordination_overhead", "cold_start", "cold_start_constraints", "economics",
         "distribution_id", "decision_context", "difficulty_profile",
-        "task_contract_digest", "research_exploration",
+        "task_contract_digest", "material_digest", "research_exploration",
+        "matching_spec", "candidate_economics", "baseline_economics",
     }, "adaptive task")
     family = require_string(source.get("task_family"), "adaptive task.task_family")
     distribution_id = require_string(source.get("distribution_id"), "adaptive task.distribution_id")
@@ -1837,6 +2326,9 @@ def select_adaptive_route(task: Mapping[str, Any], *, evidence: Mapping[str, Any
     task_contract_digest = source.get("task_contract_digest")
     if task_contract_digest is not None:
         task_contract_digest = require_digest(task_contract_digest, "adaptive task.task_contract_digest")
+    material_digest = source.get("material_digest")
+    if material_digest is not None:
+        material_digest = require_digest(material_digest, "adaptive task.material_digest")
     modalities = source.get("required_input_modalities")
     if not isinstance(modalities, list) or any(not isinstance(v, str) for v in modalities):
         raise PolicyError("required_input_modalities must be a string array")
@@ -1847,8 +2339,26 @@ def select_adaptive_route(task: Mapping[str, Any], *, evidence: Mapping[str, Any
     if output not in ADAPTIVE_OUTPUTS:
         raise PolicyError("output_kind is unsupported")
     acceptance = require_object(source.get("acceptance"), "adaptive task.acceptance")
-    reject_unknown_fields(acceptance, {"kind", "independent", "closed", "suite_digest", "verification_cost"}, "adaptive task.acceptance")
+    reject_unknown_fields(
+        acceptance,
+        {
+            "kind", "independent", "closed", "suite_digest", "protocol_version",
+            "protocol_digest",
+            "verification_cost",
+        },
+        "adaptive task.acceptance",
+    )
     suite_digest = require_digest(acceptance.get("suite_digest"), "adaptive task.acceptance.suite_digest")
+    acceptance_protocol_version = acceptance.get("protocol_version")
+    if acceptance_protocol_version is not None:
+        acceptance_protocol_version = require_string(
+            acceptance_protocol_version, "adaptive task.acceptance.protocol_version"
+        )
+    acceptance_protocol_digest = acceptance.get("protocol_digest")
+    if acceptance_protocol_digest is not None:
+        acceptance_protocol_digest = require_digest(
+            acceptance_protocol_digest, "adaptive task.acceptance.protocol_digest"
+        )
     kind = require_string(acceptance.get("kind"), "adaptive task.acceptance.kind").lower()
     if kind not in ADAPTIVE_ACCEPTANCE_KINDS or type(acceptance.get("independent")) is not bool or type(acceptance.get("closed")) is not bool:
         raise PolicyError("acceptance requires supported kind and boolean independent/closed")
@@ -1866,6 +2376,29 @@ def select_adaptive_route(task: Mapping[str, Any], *, evidence: Mapping[str, Any
     coordination = finite_number(source.get("coordination_overhead", 0), "coordination_overhead", minimum=0.0)
     capabilities = _adaptive_capabilities(source.get("required_tool_capabilities"))
     difficulty = adaptive_difficulty_profile(source.get("difficulty_profile"))
+    matching_spec = None
+    if source.get("matching_spec") is not None:
+        if task_contract_digest is None or material_digest is None:
+            raise PolicyError("matching_spec requires task_contract_digest and material_digest")
+        matching_spec = _adaptive_matching_spec(
+            source.get("matching_spec"),
+            distribution_id=distribution_id,
+            difficulty=difficulty,
+            coupling=coupling,
+            risk=risk,
+            capabilities=capabilities,
+            modalities=modalities,
+            output_kind=output,
+            acceptance_kind=kind,
+            acceptance_protocol_version=acceptance_protocol_version,
+            acceptance_protocol_digest=acceptance_protocol_digest,
+        )
+    candidate_economics = _adaptive_candidate_economics(source.get("candidate_economics"))
+    baseline_economics = _adaptive_baseline_economics(source.get("baseline_economics"))
+    if matching_spec is None and (candidate_economics or baseline_economics):
+        raise PolicyError("candidate_economics and baseline_economics require matching_spec")
+    if matching_spec is None and verified_evidence_pool is not None:
+        raise PolicyError("verified_evidence_pool requires matching_spec")
     research_plan = _adaptive_research_plan(
         source.get("research_exploration"), decision_context=decision_context,
         task_contract_digest=task_contract_digest,
@@ -1914,10 +2447,19 @@ def select_adaptive_route(task: Mapping[str, Any], *, evidence: Mapping[str, Any
                 return route_result(family, "S0", "cold_start_economics_fail", "UNKNOWN", modalities, output, kind, capabilities, "SOL_ONLY", "gpt-5.6-sol", "high", coordination)
     elif cold_start:
         raise PolicyError("cold_start requires economics")
-    evidence_match = _adaptive_matching_evidence(
-        evidence, family, modalities, output, kind, distribution_id, suite_digest,
-        difficulty["profile_fingerprint"],
-    )
+    if matching_spec is not None:
+        if cold_start or research_plan is not None or decision_context != "production":
+            raise PolicyError("matching_spec is reserved for production evidence reuse")
+        if economics is not None:
+            raise PolicyError("matching_spec uses candidate_economics, not legacy economics")
+        if evidence is not None and verified_evidence_pool is not None:
+            raise PolicyError("legacy evidence and verified_evidence_pool are mutually exclusive")
+        evidence_match = None
+    else:
+        evidence_match = _adaptive_matching_evidence(
+            evidence, family, modalities, output, kind, distribution_id, suite_digest,
+            difficulty["profile_fingerprint"],
+        )
     unavailable = [item["name"] for item in capabilities if item["status"] in {"unknown", "unavailable"}]
     visual = bool(set(modalities) & {"image", "screenshot", "document", "chart"}) or output in {"image", "document", "chart"}
     needs_visual_tool = visual or kind in {"visual_review", "document_review", "mixed_review"}
@@ -1955,6 +2497,61 @@ def select_adaptive_route(task: Mapping[str, Any], *, evidence: Mapping[str, Any
         reviewers = [item for item in capabilities if item["operation"] in {"visual_review", "document_review"}]
         if len(reviewers) != 1:
             return route_result(family, "S0", "visual_acceptance_reviewer_not_unique", "MATCHED_EXPERIENCE" if evidence_match else "UNKNOWN", modalities, output, kind, capabilities, "SOL_ONLY", "gpt-5.6-sol", "high", coordination)
+    if matching_spec is not None:
+        records_by_effort = (
+            _adaptive_cross_instance_evidence(
+                verified_evidence_pool,
+                matching_spec_digest=matching_spec["spec_digest"],
+                repair_policy=matching_spec["repair_policy"],
+            )
+            if verified_evidence_pool is not None
+            else {effort: [] for effort in ADAPTIVE_CANDIDATE_EFFORTS}
+        )
+        evaluations = _adaptive_candidate_evaluations(
+            records_by_effort, candidate_economics, baseline_economics
+        )
+        eligible = [item for item in evaluations if item["eligible"]]
+        effort_selection = "ENUMERATED_MATCHED_EVIDENCE"
+        if not eligible:
+            unresolved = {"EVIDENCE_UNKNOWN", "ECONOMICS_UNKNOWN"}
+            evidence_status = (
+                "UNKNOWN"
+                if not any(records_by_effort.values())
+                or any(item["status"] in unresolved for item in evaluations)
+                else "MATCHED_EXPERIENCE"
+            )
+            result = route_result(
+                family, "S0", "cross_instance_no_candidate_passed", evidence_status,
+                modalities, output, kind, capabilities, "SOL_ONLY",
+                "gpt-5.6-sol", "high", coordination,
+            )
+        else:
+            effort_rank = {effort: index for index, effort in enumerate(ADAPTIVE_CANDIDATE_EFFORTS)}
+            selected = min(
+                eligible,
+                key=lambda item: (
+                    item["conservative_complete_credits"],
+                    item["conservative_complete_seconds"],
+                    effort_rank[item["effort"]],
+                ),
+            )
+            effort = selected["effort"]
+            result = route_result(
+                family,
+                "S3" if effort == "high" else "S2" if effort == "medium" else "S1",
+                "cross_instance_minimum_conservative_complete_cost",
+                "MATCHED_EXPERIENCE",
+                modalities, output, kind, capabilities, "SOL_LUNA",
+                "gpt-5.6-luna", effort, coordination,
+            )
+        return _attach_cross_instance_selection(
+            result,
+            evaluations=evaluations,
+            matching_spec_digest=matching_spec["spec_digest"],
+            instance_digest=task_contract_digest,
+            material_digest=material_digest,
+            acceptance_instance_digest=suite_digest,
+        )
     # Distinct, observable work factors only.  Modality names and the
     # coordination number are deliberately not double-counted as effort.
     medium_signals = sum((

@@ -370,6 +370,116 @@ class RoutingPolicyTests(unittest.TestCase):
             )["profile_fingerprint"]
         return evidence
 
+    def adaptive_matching_spec(self, task: dict, **overrides: object) -> dict:
+        difficulty = ROUTING.adaptive_difficulty_profile(task.get("difficulty_profile"))
+        role_bindings = [
+            {"actor": "LUNA", "operation": "implementation", "surface": "filesystem"},
+            {"actor": "SOL", "operation": "test_execution", "surface": "shell"},
+        ]
+        role_bindings.extend(
+            {
+                "actor": item["actor"],
+                "operation": item["operation"],
+                "surface": item["surface"],
+            }
+            for item in task.get("required_tool_capabilities", [])
+        )
+        spec = {
+            "schema_version": 1,
+            "distribution_id": task["distribution_id"],
+            "acceptance_protocol_version": task["acceptance"]["protocol_version"],
+            "acceptance_protocol_digest": task["acceptance"]["protocol_digest"],
+            "input_modalities": sorted(task["required_input_modalities"]),
+            "output_kind": task["output_kind"],
+            "acceptance_kind": task["acceptance"]["kind"],
+            "difficulty_schema_version": "adaptive-difficulty-v1",
+            "difficulty_band": difficulty["band"],
+            "role_bindings": role_bindings,
+            "coupling": task["coupling"],
+            "risk": task["risk"],
+            "repair_policy": "one-focused-repair",
+            "environment_boundary_digest": "sha256:" + "e" * 64,
+        }
+        spec.update(overrides)
+        spec["spec_digest"] = "sha256:" + hashlib.sha256(
+            ROUTING.canonical_json(spec)
+        ).hexdigest()
+        return spec
+
+    def adaptive_candidate_economics(self, **execution_credits: float) -> list[dict]:
+        defaults = {"low": 24.0, "medium": 18.0, "high": 12.0}
+        defaults.update(execution_credits)
+        return [
+            {
+                "effort": effort,
+                "execution_credits": defaults[effort],
+                "coordination_credits": 5.0,
+                "recovery_credits": 10.0,
+                "execution_seconds": 30.0 + index,
+                "coordination_seconds": 5.0,
+                "recovery_seconds": 10.0,
+            }
+            for index, effort in enumerate(("low", "medium", "high"))
+        ]
+
+    def adaptive_cluster(
+        self, spec: dict, effort: str, index: int, *,
+        member_ids: tuple[str, ...] = ("primary",),
+        passed: bool = True,
+        repaired: bool = False,
+        missing_last: bool = False,
+    ) -> dict:
+        present = member_ids[:-1] if missing_last else member_ids
+        return {
+            "record_id": f"{effort}-record-{index}",
+            "matching_spec_digest": spec["spec_digest"],
+            "semantic_cluster_id": f"cluster-{index}",
+            "effort": effort,
+            "expected_member_ids": list(member_ids),
+            "members": [
+                {
+                    "member_id": member_id,
+                    "instance_digest": "sha256:" + hashlib.sha256(
+                        f"{index}:{member_id}:instance".encode()
+                    ).hexdigest(),
+                    "material_digest": "sha256:" + hashlib.sha256(
+                        f"{index}:{member_id}:material".encode()
+                    ).hexdigest(),
+                    "acceptance_instance_digest": "sha256:" + hashlib.sha256(
+                        f"{index}:{member_id}:acceptance".encode()
+                    ).hexdigest(),
+                    "first_pass_accepted": passed and not repaired,
+                    "final_accepted": passed or repaired,
+                    "repair_attempts": 1 if repaired else 0,
+                    "final_defect": False,
+                }
+                for member_id in present
+            ],
+        }
+
+    def adaptive_cross_instance_task(self, **overrides: object) -> dict:
+        task = self.adaptive_task(
+            task_contract_digest="sha256:" + "a" * 64,
+            material_digest="sha256:" + "b" * 64,
+            difficulty_profile=self.difficulty_profile(stages=6, interactions=3),
+        )
+        task.pop("economics")
+        task.update(overrides)
+        task["acceptance"] = dict(
+            task["acceptance"], protocol_version="acceptance-v1",
+            protocol_digest="sha256:" + "c" * 64,
+        )
+        task["matching_spec"] = self.adaptive_matching_spec(task)
+        task["candidate_economics"] = self.adaptive_candidate_economics()
+        task["baseline_economics"] = {
+            "baseline_credits": 100.0,
+            "baseline_seconds": 100.0,
+        }
+        return task
+
+    def bound_adaptive_pool(self, records: list[dict]) -> object:
+        return ROUTING._ExternallyBoundAdaptiveEvidencePool(records)
+
     def adaptive_research_task(self, effort: str = "high") -> dict:
         profile = self.difficulty_profile(stages=10, interactions=6, ambiguities=1)
         profile_fingerprint = ROUTING.adaptive_difficulty_profile(profile)["profile_fingerprint"]
@@ -565,6 +675,265 @@ class RoutingPolicyTests(unittest.TestCase):
             bad = dict(actual, research_receipt=dict(receipt, **{field: value}))
             with self.subTest(field=field), self.assertRaises(ROUTING.PolicyError):
                 ROUTING.validate_adaptive_execution(selected, bad)
+
+    def test_cross_instance_reuse_enumerates_all_efforts_and_selects_lowest_cost(self) -> None:
+        task = self.adaptive_cross_instance_task()
+        records = [
+            self.adaptive_cluster(task["matching_spec"], effort, index)
+            for effort in ("low", "medium", "high")
+            for index in range(16)
+        ]
+        selected = ROUTING.select_adaptive_route(
+            task, verified_evidence_pool=self.bound_adaptive_pool(records)
+        )
+        self.assertEqual((selected["candidate"], selected["effort"]), ("S3", "high"))
+        self.assertEqual(selected["selection_basis"], "MIN_CONSERVATIVE_COMPLETE_COST_THEN_TIME")
+        self.assertEqual(
+            selected["trace_digests"],
+            {
+                "instance": task["task_contract_digest"],
+                "material": task["material_digest"],
+                "acceptance_instance": task["acceptance"]["suite_digest"],
+                "matching_spec": task["matching_spec"]["spec_digest"],
+            },
+        )
+        self.assertEqual(
+            {item["effort"] for item in selected["candidate_evaluations"]},
+            {"low", "medium", "high"},
+        )
+
+        reordered = dict(task, candidate_economics=list(reversed(task["candidate_economics"])))
+        repeated = ROUTING.select_adaptive_route(
+            reordered, verified_evidence_pool=self.bound_adaptive_pool(list(reversed(records)))
+        )
+        self.assertEqual(repeated["effort"], selected["effort"])
+        self.assertEqual(repeated["execution_token"], selected["execution_token"])
+
+    def test_cross_instance_matching_spec_rejects_drift_and_inline_claims(self) -> None:
+        task = self.adaptive_cross_instance_task()
+        records = [
+            self.adaptive_cluster(task["matching_spec"], "low", index)
+            for index in range(16)
+        ]
+        with self.assertRaisesRegex(ROUTING.PolicyError, "externally bound"):
+            ROUTING.select_adaptive_route(task, verified_evidence_pool=records)
+
+        for field, value in (
+            ("difficulty_band", "D3"),
+            ("acceptance_protocol_version", "acceptance-v2"),
+            ("environment_boundary_digest", "sha256:" + "f" * 64),
+            ("coupling", "medium"),
+            ("risk", "medium"),
+        ):
+            drifted = dict(task)
+            drifted["matching_spec"] = self.adaptive_matching_spec(task, **{field: value})
+            with self.subTest(field=field), self.assertRaises(ROUTING.PolicyError):
+                ROUTING.select_adaptive_route(
+                    drifted, verified_evidence_pool=self.bound_adaptive_pool(records)
+                )
+
+        for field, drifted in (
+            ("output_kind", dict(task, output_kind="text")),
+            (
+                "input_modalities",
+                dict(task, required_input_modalities=["text", "image"]),
+            ),
+            (
+                "acceptance_kind",
+                dict(task, acceptance=dict(task["acceptance"], kind="text_review")),
+            ),
+            (
+                "acceptance_protocol_digest",
+                dict(
+                    task,
+                    acceptance=dict(
+                        task["acceptance"], protocol_digest="sha256:" + "d" * 64,
+                    ),
+                ),
+            ),
+            (
+                "acceptance_protocol_version",
+                dict(
+                    task,
+                    acceptance=dict(task["acceptance"], protocol_version="acceptance-v2"),
+                ),
+            ),
+        ):
+            with self.subTest(field=field), self.assertRaises(ROUTING.PolicyError):
+                ROUTING.select_adaptive_route(
+                    drifted, verified_evidence_pool=self.bound_adaptive_pool(records)
+                )
+
+        visual = dict(task)
+        visual["required_tool_capabilities"] = [{
+            "name": "vision", "status": "host-observed", "source": "host-observed",
+            "operation": "visual_review", "actor": "LUNA", "surface": "view_image",
+        }]
+        with self.assertRaisesRegex(ROUTING.PolicyError, "role_bindings"):
+            ROUTING.select_adaptive_route(
+                visual, verified_evidence_pool=self.bound_adaptive_pool(records)
+            )
+
+    def test_semantic_clusters_count_once_require_all_members_and_reject_duplicates(self) -> None:
+        task = self.adaptive_cross_instance_task()
+        records = [
+            self.adaptive_cluster(
+                task["matching_spec"], "low", index,
+                member_ids=("text", "visual"), missing_last=index == 15,
+            )
+            for index in range(16)
+        ]
+        selected = ROUTING.select_adaptive_route(
+            task, verified_evidence_pool=self.bound_adaptive_pool(records)
+        )
+        low = next(item for item in selected["candidate_evaluations"] if item["effort"] == "low")
+        self.assertEqual(
+            (low["semantic_clusters"], low["first_pass_accepted_clusters"]),
+            (16, 15),
+        )
+        self.assertEqual(low["status"], "FINAL_ACCEPTANCE_GATE_FAILED")
+        self.assertEqual(selected["candidate"], "S0")
+
+        duplicate_record = records + [dict(records[0])]
+        with self.assertRaisesRegex(ROUTING.PolicyError, "duplicate"):
+            ROUTING.select_adaptive_route(
+                task, verified_evidence_pool=self.bound_adaptive_pool(duplicate_record)
+            )
+        duplicate_instance = [dict(item) for item in records]
+        duplicate_instance[1] = dict(
+            duplicate_instance[1],
+            members=[dict(member) for member in duplicate_instance[1]["members"]],
+        )
+        duplicate_instance[1]["members"][0]["instance_digest"] = records[0]["members"][0]["instance_digest"]
+        with self.assertRaisesRegex(ROUTING.PolicyError, "duplicate instance"):
+            ROUTING.select_adaptive_route(
+                task, verified_evidence_pool=self.bound_adaptive_pool(duplicate_instance)
+            )
+
+    def test_cross_instance_candidates_fail_closed_on_quality_time_and_missing_high_comparator(self) -> None:
+        task = self.adaptive_cross_instance_task()
+        economics = [dict(item) for item in task["candidate_economics"]]
+        next(item for item in economics if item["effort"] == "low")["execution_credits"] = 1.0
+        next(item for item in economics if item["effort"] == "medium")["execution_credits"] = 2.0
+        next(item for item in economics if item["effort"] == "medium")["execution_seconds"] = 100.0
+        task["candidate_economics"] = economics
+        records = [
+            self.adaptive_cluster(
+                task["matching_spec"], effort, index,
+                repaired=effort == "low" and index == 15,
+            )
+            for effort in ("low", "medium", "high")
+            for index in range(16)
+        ]
+        selected = ROUTING.select_adaptive_route(
+            task, verified_evidence_pool=self.bound_adaptive_pool(records)
+        )
+        evaluations = {item["effort"]: item for item in selected["candidate_evaluations"]}
+        self.assertEqual(evaluations["low"]["status"], "QUALITY_GATE_FAILED")
+        self.assertEqual(evaluations["medium"]["status"], "TIME_GATE_FAILED")
+        self.assertEqual((selected["candidate"], selected["effort"]), ("S3", "high"))
+
+        no_economics = dict(task)
+        no_economics.pop("candidate_economics")
+        unknown = ROUTING.select_adaptive_route(
+            no_economics, verified_evidence_pool=self.bound_adaptive_pool(records)
+        )
+        self.assertEqual((unknown["candidate"], unknown["evidence_status"]), ("S0", "UNKNOWN"))
+        self.assertTrue(all(
+            item["status"] == "ECONOMICS_UNKNOWN"
+            for item in unknown["candidate_evaluations"]
+            if item["semantic_clusters"] and item["status"] != "QUALITY_GATE_FAILED"
+        ))
+
+        high_only = [record for record in records if record["effort"] == "high"]
+        no_comparator = ROUTING.select_adaptive_route(
+            task, verified_evidence_pool=self.bound_adaptive_pool(high_only)
+        )
+        high = next(item for item in no_comparator["candidate_evaluations"] if item["effort"] == "high")
+        self.assertEqual(high["status"], "HIGH_COMPARATOR_MISSING")
+        self.assertEqual(no_comparator["candidate"], "S0")
+
+    def test_cross_instance_allows_low_only_economics_with_shared_baseline(self) -> None:
+        task = self.adaptive_cross_instance_task()
+        task["candidate_economics"] = [
+            item for item in task["candidate_economics"] if item["effort"] == "low"
+        ]
+        records = [
+            self.adaptive_cluster(task["matching_spec"], "low", index)
+            for index in range(16)
+        ]
+        selected = ROUTING.select_adaptive_route(
+            task, verified_evidence_pool=self.bound_adaptive_pool(records)
+        )
+        self.assertEqual((selected["candidate"], selected["effort"]), ("S1", "low"))
+        evaluations = {item["effort"]: item for item in selected["candidate_evaluations"]}
+        self.assertEqual(evaluations["medium"]["status"], "EVIDENCE_UNKNOWN")
+        self.assertEqual(evaluations["high"]["status"], "EVIDENCE_UNKNOWN")
+
+        malformed = dict(task)
+        malformed["candidate_economics"] = [
+            dict(task["candidate_economics"][0], baseline_credits=100.0)
+        ]
+        with self.assertRaisesRegex(ROUTING.PolicyError, "unknown fields"):
+            ROUTING.select_adaptive_route(
+                malformed, verified_evidence_pool=self.bound_adaptive_pool(records)
+            )
+
+        no_baseline = dict(task)
+        no_baseline.pop("baseline_economics")
+        unknown = ROUTING.select_adaptive_route(
+            no_baseline, verified_evidence_pool=self.bound_adaptive_pool(records)
+        )
+        low = next(
+            item for item in unknown["candidate_evaluations"] if item["effort"] == "low"
+        )
+        self.assertEqual((unknown["candidate"], low["status"]), ("S0", "ECONOMICS_UNKNOWN"))
+
+    def test_cross_instance_repaired_successes_do_not_count_as_first_pass(self) -> None:
+        task = self.adaptive_cross_instance_task()
+        task["candidate_economics"] = [
+            item for item in task["candidate_economics"] if item["effort"] == "low"
+        ]
+        records = [
+            self.adaptive_cluster(
+                task["matching_spec"], "low", index, passed=False, repaired=True,
+            )
+            for index in range(16)
+        ]
+        selected = ROUTING.select_adaptive_route(
+            task, verified_evidence_pool=self.bound_adaptive_pool(records)
+        )
+        low = next(
+            item for item in selected["candidate_evaluations"] if item["effort"] == "low"
+        )
+        self.assertEqual(
+            (
+                low["first_pass_accepted_clusters"],
+                low["final_accepted_clusters"],
+                low["repair_observed_clusters"],
+            ),
+            (0, 16, 16),
+        )
+        self.assertEqual(low["status"], "QUALITY_GATE_FAILED")
+        self.assertNotIn("failure_probability_bound", low)
+        self.assertEqual(selected["candidate"], "S0")
+
+        excessive = [dict(record) for record in records]
+        excessive[0] = dict(
+            excessive[0], members=[dict(member) for member in excessive[0]["members"]],
+        )
+        excessive[0]["members"][0]["repair_attempts"] = 2
+        with self.assertRaisesRegex(ROUTING.PolicyError, "repair policy"):
+            ROUTING.select_adaptive_route(
+                task, verified_evidence_pool=self.bound_adaptive_pool(excessive)
+            )
+
+    def test_legacy_adaptive_entry_remains_compatible(self) -> None:
+        task = self.adaptive_task()
+        expected = ROUTING.select_adaptive_route(task, evidence=self.adaptive_evidence(task, "low"))
+        self.assertEqual((expected["candidate"], expected["effort"]), ("S1", "low"))
+        self.assertNotIn("candidate_evaluations", expected)
+
     def test_direct_policy_mapping_is_strictly_validated_without_mutation(self) -> None:
         for field, value in (
             ("maximum_active_luna_writers", None),
