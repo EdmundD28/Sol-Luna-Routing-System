@@ -257,6 +257,7 @@ def quality_evidence_index(
             "acceptance_suite_digest": suite,
             "observations": observations,
             "first_pass_probability": accepted / observations,
+            "first_pass_wilson_lower_bound_95": wilson_lower_bound(accepted, observations),
             "final_defect_probability": defects / observations,
             "source_kind": source_kind,
             "evidence_digest": evidence_digest,
@@ -1537,6 +1538,214 @@ def evaluate_route(
         ),
         "automatic_execution_allowed": False,
     }
+
+
+# P130 stage-B: a small, closed-set selector for execution-time task shape.
+# This deliberately sits beside (rather than inside) the cost/evidence router:
+# legacy route requests remain readable, while new callers receive an explicit
+# route, responsibility, and trust boundary.
+ADAPTIVE_MODALITIES = {"text", "code", "image", "screenshot", "document", "chart"}
+ADAPTIVE_OUTPUTS = {"text", "code", "image", "document", "chart", "mixed"}
+ADAPTIVE_ACCEPTANCE_KINDS = {"deterministic", "text_review", "visual_review", "document_review", "mixed_review"}
+ADAPTIVE_COUPLING = {"low", "medium", "high"}
+ADAPTIVE_RISK = {"low", "medium", "high", "critical"}
+ADAPTIVE_CAPABILITY_STATUS = {"host-observed", "basic-proven", "unknown", "unavailable"}
+ADAPTIVE_EVIDENCE_STATUS = {"MATCHED_EXPERIENCE", "UNKNOWN", "BUDGETED_RESEARCH_EXPLORATION"}
+
+
+def wilson_lower_bound(successes: Any, observations: Any, *, z: float = 1.96) -> float:
+    """Return a diagnostic Wilson lower bound; it is never an unknown-task prior."""
+    n = integer(observations, "observations", minimum=1)
+    k = integer(successes, "successes", minimum=0)
+    if k > n:
+        raise PolicyError("successes may not exceed observations")
+    z = finite_number(z, "z", minimum=0.0)
+    p = k / n
+    denominator = 1 + z * z / n
+    centre = p + z * z / (2 * n)
+    spread = z * math.sqrt((p * (1 - p) + z * z / (4 * n)) / n)
+    return max(0.0, (centre - spread) / denominator)
+
+
+def cold_start_credit_bound(baseline: Any, launch: Any, overhead: Any, recovery: Any) -> float:
+    """Maximum q for C=L+O+qR to save at least 50% of baseline B."""
+    b = finite_number(baseline, "baseline_credits", minimum=0.0)
+    l = finite_number(launch, "launch_credits", minimum=0.0)
+    o = finite_number(overhead, "overhead_credits", minimum=0.0)
+    r = finite_number(recovery, "recovery_credits", minimum=0.0)
+    if l + o > 0.5 * b:
+        return -1.0
+    if r == 0:
+        return math.inf if l + o <= 0.5 * b else -1.0
+    return (0.5 * b - l - o) / r
+
+
+def _adaptive_capabilities(value: Any) -> list[dict[str, str]]:
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise PolicyError("required_tool_capabilities must be an array")
+    result = []
+    names: set[str] = set()
+    for index, raw in enumerate(value):
+        item = require_object(raw, f"required_tool_capabilities[{index}]")
+        reject_unknown_fields(item, {"name", "status", "source"}, f"required_tool_capabilities[{index}]")
+        name = require_string(item.get("name"), f"required_tool_capabilities[{index}].name")
+        status = require_string(item.get("status"), f"required_tool_capabilities[{index}].status").lower()
+        source = require_string(item.get("source"), f"required_tool_capabilities[{index}].source").lower()
+        if status not in ADAPTIVE_CAPABILITY_STATUS:
+            raise PolicyError(f"required_tool_capabilities[{index}].status is unsupported")
+        if name in names:
+            raise PolicyError("required_tool_capabilities names must be unique")
+        names.add(name)
+        result.append({"name": name, "status": status, "source": source})
+    return result
+
+
+def select_adaptive_route(task: Mapping[str, Any], *, evidence: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    """Select S0-S4 from a strictly typed task image before execution.
+
+    This is intentionally a policy entry point, not a dispatcher.  It returns
+    executable responsibilities and a verification token that callers must
+    pass to ``validate_adaptive_execution``.
+    """
+    source = require_object(task, "adaptive task")
+    reject_unknown_fields(source, {
+        "task_family", "required_input_modalities", "output_kind",
+        "required_tool_capabilities", "acceptance", "coupling", "risk",
+        "size", "coordination_overhead", "cold_start", "cold_start_constraints", "economics", "distribution_id", "decision_context",
+    }, "adaptive task")
+    family = require_string(source.get("task_family"), "adaptive task.task_family")
+    distribution_id = require_string(source.get("distribution_id"), "adaptive task.distribution_id")
+    decision_context = require_string(source.get("decision_context", "production"), "adaptive task.decision_context").lower()
+    if decision_context not in {"production", "budgeted_research"}:
+        raise PolicyError("decision_context must be production or budgeted_research")
+    modalities = source.get("required_input_modalities")
+    if not isinstance(modalities, list) or any(not isinstance(v, str) for v in modalities):
+        raise PolicyError("required_input_modalities must be a string array")
+    modalities = [require_string(v, "required_input_modalities item").lower() for v in modalities]
+    if any(v not in ADAPTIVE_MODALITIES for v in modalities) or len(set(modalities)) != len(modalities):
+        raise PolicyError("required_input_modalities contains an unsupported or duplicate modality")
+    output = require_string(source.get("output_kind"), "adaptive task.output_kind").lower()
+    if output not in ADAPTIVE_OUTPUTS:
+        raise PolicyError("output_kind is unsupported")
+    acceptance = require_object(source.get("acceptance"), "adaptive task.acceptance")
+    reject_unknown_fields(acceptance, {"kind", "independent", "closed", "suite_digest"}, "adaptive task.acceptance")
+    suite_digest = require_digest(acceptance.get("suite_digest"), "adaptive task.acceptance.suite_digest")
+    kind = require_string(acceptance.get("kind"), "adaptive task.acceptance.kind").lower()
+    if kind not in ADAPTIVE_ACCEPTANCE_KINDS or type(acceptance.get("independent")) is not bool or type(acceptance.get("closed")) is not bool:
+        raise PolicyError("acceptance requires supported kind and boolean independent/closed")
+    coupling = require_string(source.get("coupling"), "adaptive task.coupling").lower()
+    risk = require_string(source.get("risk"), "adaptive task.risk").lower()
+    if coupling not in ADAPTIVE_COUPLING or risk not in ADAPTIVE_RISK:
+        raise PolicyError("coupling or risk is unsupported")
+    size = require_string(source.get("size"), "adaptive task.size").lower()
+    if size not in {"small", "normal", "large"}:
+        raise PolicyError("size must be small, normal, or large")
+    coordination = finite_number(source.get("coordination_overhead", 0), "coordination_overhead", minimum=0.0)
+    capabilities = _adaptive_capabilities(source.get("required_tool_capabilities"))
+    cold_start = source.get("cold_start", False)
+    if type(cold_start) is not bool:
+        raise PolicyError("cold_start must be boolean")
+    constraints = source.get("cold_start_constraints")
+    if cold_start:
+        constraints = require_object(constraints, "adaptive task.cold_start_constraints")
+        required_constraints = {"architecture_settled", "deterministic_acceptance", "low_risk", "low_coupling", "complete_luna_ownership", "exclusive_write", "single_writer", "sol_queue_empty"}
+        reject_unknown_fields(constraints, required_constraints, "adaptive task.cold_start_constraints")
+        if set(constraints) != required_constraints or any(type(constraints[key]) is not bool or constraints[key] is not True for key in required_constraints):
+            raise PolicyError("cold_start_constraints must prove every required boolean")
+    elif constraints is not None:
+        raise PolicyError("cold_start_constraints requires cold_start")
+    economics = source.get("economics")
+    if economics is not None:
+        economics = require_object(economics, "adaptive task.economics")
+        reject_unknown_fields(economics, {"baseline_credits", "launch_credits", "overhead_credits", "recovery_credits", "failure_probability"}, "adaptive task.economics")
+        if cold_start:
+            q = finite_number(economics.get("failure_probability"), "economics.failure_probability", maximum=1.0)
+            bound = cold_start_credit_bound(economics.get("baseline_credits"), economics.get("launch_credits"), economics.get("overhead_credits"), economics.get("recovery_credits"))
+            if bound < 0 or q > bound + 1e-12:
+                return _adaptive_result(family, "S0", "cold_start_economics_fail", "UNKNOWN", modalities, output, kind, capabilities, "SOL_ONLY", "gpt-5.6-sol", "high", coordination)
+    elif cold_start:
+        raise PolicyError("cold_start requires economics")
+    evidence_match = _adaptive_matching_evidence(evidence, family, modalities, output, kind, distribution_id, suite_digest)
+    unavailable = [item["name"] for item in capabilities if item["status"] in {"unknown", "unavailable"}]
+    visual = bool(set(modalities) & {"image", "screenshot", "document", "chart"}) or output in {"image", "document", "chart"}
+    needs_visual_tool = visual or kind in {"visual_review", "document_review", "mixed_review"}
+    if needs_visual_tool and not capabilities:
+        return _adaptive_result(family, "S0", "required_visual_or_document_capability_missing", "MATCHED_EXPERIENCE" if evidence_match else "UNKNOWN", modalities, output, kind, capabilities, "SOL_ONLY", "gpt-5.6-sol", "high", coordination)
+    if unavailable or size == "small" or coordination >= 1.0 or not acceptance["independent"] or not acceptance["closed"] or coupling == "high" or risk in {"high", "critical"}:
+        reason = "required_capability_unknown" if unavailable else "task_too_small" if size == "small" else "acceptance_not_independent" if not acceptance["independent"] else "acceptance_not_closed" if not acceptance["closed"] else "coupling_or_risk_requires_sol"
+        return _adaptive_result(family, "S0", reason, "MATCHED_EXPERIENCE" if evidence_match else "UNKNOWN", modalities, output, kind, capabilities, "SOL_ONLY", "gpt-5.6-sol", "high", coordination)
+    proven = all(
+        item["status"] in {"host-observed", "basic-proven"}
+        and item["source"] in {"host-observed", "basic-proven"}
+        for item in capabilities
+    )
+    if not proven:
+        return _adaptive_result(family, "S0", "required_capability_not_basic_proven", "UNKNOWN", modalities, output, kind, capabilities, "SOL_ONLY", "gpt-5.6-sol", "high", coordination)
+    if evidence_match and evidence_match.get("effort") == "high" and evidence_match.get("lower_effort_comparator") is True:
+        return _adaptive_result(family, "S3", "matched_high_effort_with_lower_effort_comparator", "MATCHED_EXPERIENCE", modalities, output, kind, capabilities, "SOL_LUNA", "gpt-5.6-luna", "high", coordination)
+    medium_signals = sum((size == "large", kind in {"visual_review", "document_review", "mixed_review"}, needs_visual_tool and bool(capabilities), coupling == "medium", risk == "medium", len(capabilities) > 1, coordination >= 0.25))
+    effort = "medium" if medium_signals >= 2 else "low"
+    if evidence_match is not None and evidence_match.get("effort") != effort:
+        evidence_match = None
+    strategy = "LUNA_MEDIUM_VISUAL_OR_DOCUMENT" if effort == "medium" else "LUNA_LOW_BOUNDED"
+    if not evidence_match:
+        if not cold_start and decision_context == "budgeted_research":
+            return _adaptive_result(family, "S4", "budgeted_research_exploration", "BUDGETED_RESEARCH_EXPLORATION", modalities, output, kind, capabilities, "SOL_LUNA", "gpt-5.6-luna", effort, coordination)
+        if not cold_start:
+            return _adaptive_result(family, "S0", "production_route_requires_matching_evidence", "UNKNOWN", modalities, output, kind, capabilities, "SOL_ONLY", "gpt-5.6-sol", "high", coordination)
+    status = "MATCHED_EXPERIENCE" if evidence_match else "UNKNOWN"
+    return _adaptive_result(family, "S2" if effort == "medium" else "S1", strategy, status, modalities, output, kind, capabilities, "SOL_LUNA", "gpt-5.6-luna", effort, coordination)
+
+
+def _adaptive_matching_evidence(evidence: Mapping[str, Any] | None, family: str, modalities: list[str], output: str, acceptance: str, distribution_id: str, suite_digest: str) -> Mapping[str, Any] | None:
+    if not isinstance(evidence, Mapping):
+        return None
+    allowed = {"status", "task_family", "input_modalities", "output_kind", "acceptance_kind", "distribution_id", "acceptance_suite_digest", "effort", "lower_effort_comparator", "observations", "first_pass_accepted"}
+    if set(evidence) != allowed or evidence.get("status") != "MATCHED_EXPERIENCE":
+        return None
+    if evidence.get("task_family") != family or evidence.get("input_modalities") != modalities or evidence.get("output_kind") != output or evidence.get("acceptance_kind") != acceptance or evidence.get("distribution_id") != distribution_id or evidence.get("acceptance_suite_digest") != suite_digest:
+        return None
+    try:
+        observations = integer(evidence.get("observations"), "evidence.observations", minimum=1)
+        accepted = integer(evidence.get("first_pass_accepted"), "evidence.first_pass_accepted", minimum=0)
+    except PolicyError:
+        return None
+    if accepted > observations or evidence.get("effort") not in {"low", "medium", "high"} or type(evidence.get("lower_effort_comparator")) is not bool:
+        return None
+    result = dict(evidence)
+    result["wilson_lower_bound_95"] = wilson_lower_bound(accepted, observations)
+    if result["wilson_lower_bound_95"] < 0.80:
+        return None
+    return result
+
+
+def _adaptive_result(family: str, candidate: str, reason: str, evidence_status: str, modalities: list[str], output: str, acceptance: str, capabilities: list[dict[str, str]], route: str, model: str, effort: str, coordination: float) -> dict[str, Any]:
+    responsibilities = {
+        "implementer": "LUNA" if route == "SOL_LUNA" else "SOL",
+        "final_acceptance_owner": "SOL",
+        "visual_document_reviewer": "LUNA" if acceptance in {"visual_review", "document_review", "mixed_review"} and route == "SOL_LUNA" else "SOL",
+    }
+    return {
+        "schema_version": 1, "task_family": family, "candidate": candidate, "route": route,
+        "strategy": reason, "model": model, "effort": effort,
+        "required_tools": capabilities, "acceptance": {"kind": acceptance, "responsibility": "SOL"}, "responsibilities": responsibilities,
+        "modalities": modalities, "output_kind": output, "coordination_overhead": coordination,
+        "reason_code": reason, "evidence_status": evidence_status,
+        "execution_token": hashlib.sha256(canonical_json({"family": family, "candidate": candidate, "route": route, "effort": effort, "reason": reason})).hexdigest(),
+    }
+
+
+def validate_adaptive_execution(selection: Mapping[str, Any], actual: Mapping[str, Any]) -> dict[str, Any]:
+    """Fail closed when the selected route and the observed execution diverge."""
+    selected = require_object(selection, "adaptive selection")
+    observed = require_object(actual, "adaptive execution")
+    reject_unknown_fields(observed, {"route", "candidate", "model", "effort", "execution_token", "responsibilities"}, "adaptive execution")
+    for field in ("route", "candidate", "model", "effort", "execution_token", "responsibilities"):
+        if observed.get(field) != selected.get(field):
+            raise PolicyError(f"adaptive execution mismatch: {field}")
+    return {"valid": True, "route": selected["route"], "candidate": selected["candidate"], "execution_token": selected["execution_token"]}
 
 
 def review_depth(source: Mapping[str, Any]) -> dict[str, Any]:

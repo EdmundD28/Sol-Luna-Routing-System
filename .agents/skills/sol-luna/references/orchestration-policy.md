@@ -15,6 +15,10 @@ For one disclosed cost unit, predict `net_substitution = sol_baseline - luna_exe
 
 Predictions must name their basis: matched task-family evidence, a bounded feasibility map, or a disclosed estimate. Unknown inputs do not become zero.
 
+### P130 adaptive selection
+
+Before execution, callers may pass a closed task image to `select_adaptive_route`. It records required input modalities, output kind, host-observed/basic-proven tool capability status, acceptance independence/closure, coupling, risk, size, and coordination overhead. Unknown or unavailable required capability, non-independent/non-closed acceptance, high coupling/risk, or a task smaller than coordination selects `S0` (`SOL_ONLY`). A proven low-coupling deterministic text/code task may select `S1`/Luna Low; proven visual or document work with independent closed review may select `S2`/Luna Medium, with that review owned by Luna. `S3`/High requires matching same-distribution experience and a lower-effort comparator; it is never inferred from apparent difficulty. Unproven capability is `S4`/`BUDGETED_RESEARCH_EXPLORATION`, not production calibration. Wilson bounds are diagnostic only. Cold-start economics uses `C=L+O+qR`; `q <= (0.5B-L-O)/R` is exact (no solution when `L+O > 0.5B`). Validate the returned execution token with `validate_adaptive_execution`; mismatches fail closed.
+
 ## Predictive effort signals
 
 Route lower when requirements are explicit, scope is isolated, acceptance is deterministic, architecture is settled, failure is cheap, and the task family has strong first-pass history. Prefer ready leaf responsibility units with exclusive ownership and cheap deterministic acceptance; keep coupled semantic cores in Sol. Route directly upward when interfaces are shared, debugging is emergent, context dependencies are long, acceptance is subjective, or rollback and review would be expensive. A High-or-above candidate on a Luna-owned critical path needs a same-allocation lower-effort comparator rejected by a quality or defect gate; XHigh may therefore use a failed High comparator and Max may use a failed XHigh comparator. An `effort_basis` sentence alone is not evidence.

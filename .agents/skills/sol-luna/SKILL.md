@@ -5,23 +5,28 @@ description: "Use one bounded GPT-5.6 Luna worker only when it can replace subst
 
 # Sol-Luna Delivery
 
-Sol remains accountable. Luna is useful only when it substitutes expensive Sol work; adding a worker, protocol, or test is not a saving. Quality and included-plan allowance are co-primary gates, then elapsed time. Diagnostic tokens explain failures but never replace matched five-hour and weekly readings.
+Sol remains accountable. Luna is useful only when it substitutes substantial Sol work. Quality and included-plan allowance are co-primary gates, then elapsed time. Diagnostic tokens explain failures; they never replace matched five-hour and weekly readings.
 
 ## Choose the route
 
-Record `SOL_ONLY` or `SOL_LUNA` before dispatch. Choose `SOL_LUNA` only when it targets the same independent acceptance contract, predicted quality and defects are no worse, expected included-plan allowance is lower, expected elapsed time is no worse, one Luna can own substantial implementation, write ownership is exclusive, and Sol will not repeat that work. Never route below the current policy thresholds: at least 80% predicted first-pass acceptance, at least 50% expected accepted-cost reduction, and no predicted final-defect or elapsed regression. Base those predictions on matched task-family evidence. Without history, permit only one low-impact complete-Luna Low/Medium cold start whose settled architecture, complete deterministic acceptance, exact ownership, empty Sol controller queue, and conservative execution plus one repair plus Sol recovery and downstream dependency-closure re-execution still clear both economic gates. Otherwise choose `SOL_ONLY`.
+For difficult or uncertain shape-dependent work, optionally use
+`select_adaptive_route` in `routing_policy.py`; Sol may apply the same rules
+directly for clear tasks. It returns S0–S4, model/effort, responsibilities,
+reason, and evidence status. Unknown/unavailable capability => S0; unproven
+capability => bounded S4 research. High requires same-distribution evidence
+and a lower-effort comparator. Cold start uses exact `C=L+O+qR`. The selector
+and `validate_adaptive_execution` are optional; the token checks consistency,
+not host-observed execution.
 
-While Luna runs, Sol advances only useful path-disjoint work. If none exists, wait once on the retained worker until completion; never poll, enumerate all agents, or wake on commentary. Shared-interface, high-risk, and High-or-above critical-path work needs external quality evidence bound to the task family, actual effort, allocation shape, and acceptance suite.
+Record `SOL_ONLY` or `SOL_LUNA` before dispatch. Choose `SOL_LUNA` only for the same independent acceptance contract when predicted quality and defects are no worse, expected included-plan allowance is lower, expected elapsed time is no worse, one Luna can own substantial implementation exclusively, and Sol will not repeat that work. Gates: at least 80% predicted first-pass acceptance, at least 50% expected accepted-cost reduction, and no predicted final-defect or elapsed regression, based on matched task-family evidence. Without history, only one low-impact complete-Luna Low/Medium cold start with settled architecture, deterministic acceptance, exact ownership, empty Sol controller queue, conservative execution plus one repair plus Sol recovery and downstream dependency-closure re-execution may qualify; otherwise use `SOL_ONLY`.
 
-Do not run planning scripts on the ordinary path. For a material decision that remains genuinely uncertain, read [references/orchestration-policy.md](references/orchestration-policy.md) and run `scripts/routing_policy.py` once. Formal comparisons may additionally use `scripts/net_substitution.py`. A result with missing evidence or no eligible Luna candidate remains `SOL_ONLY`/`HOLD_SOL_ONLY`.
+While Luna runs, Sol advances useful path-disjoint work. If none exists, wait once on the retained worker until completion; never poll, enumerate all agents, or wake on commentary. Shared-interface, high-risk, and High-or-above critical-path work needs external quality evidence bound to the task family, actual effort, allocation shape, and acceptance suite.
+
+Do not run planning scripts normally. For an uncertain decision, read [references/orchestration-policy.md](references/orchestration-policy.md) and run `scripts/routing_policy.py` once; formal comparisons may use `scripts/net_substitution.py`. Missing evidence or no eligible candidate means `SOL_ONLY`/`HOLD_SOL_ONLY`.
 
 Choose the lowest effort supported by the task:
 
-- Low: explicit, cheaply verified work.
-- Medium: bounded implementation with deterministic acceptance.
-- High: complex logic or edge cases.
-- XHigh: difficult debugging, shared interfaces, or costly ambiguity.
-- Max: uncertainty decomposition cannot remove.
+- Low/Medium: explicit bounded work; High/XHigh/Max require corresponding evidence.
 
 Exact-byte, platform-sensitive, strict-serialization, and adversarial labels do not authorize High. High+ critical-path work requires matched task-family evidence that the same allocation at lower effort missed a quality or defect gate. Use `luna_scout` for a bounded read-only feasibility question and `luna_reviewer` for independent review. Never silently substitute another model family.
 
