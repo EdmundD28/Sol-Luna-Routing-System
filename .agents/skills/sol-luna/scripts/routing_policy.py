@@ -1621,6 +1621,9 @@ ADAPTIVE_OPERATIONS = {
     "implementation", "test_execution", "browser_render", "visual_review", "document_review",
 }
 ADAPTIVE_ACTORS = {"SOL", "LUNA"}
+ADAPTIVE_DIFFICULTY_SOURCES = {
+    "task_contract", "acceptance_contract", "interface_inventory", "reference_material",
+}
 
 
 def _adaptive_capabilities(value: Any) -> list[dict[str, str]]:
@@ -1659,6 +1662,158 @@ def _adaptive_capabilities(value: Any) -> list[dict[str, str]]:
     return result
 
 
+def adaptive_difficulty_profile(value: Any) -> dict[str, Any]:
+    """Normalize observable pre-execution difficulty facts.
+
+    The resulting D1/D2/D3 band is an auditable heuristic, not a calibrated
+    probability and not a model-effort label. Existing coupling, risk, and
+    acceptance-cost fields deliberately do not appear here, so they cannot be
+    counted twice.
+    """
+    limitations = [
+        "heuristic band is not a calibrated success probability",
+        "task-family and modality names do not independently raise effort",
+    ]
+    if value is None:
+        return {
+            "provided": False, "band": "UNSPECIFIED", "profile_fingerprint": None,
+            "signals_used": [], "limitations": limitations,
+        }
+    source = require_object(value, "adaptive task.difficulty_profile")
+    fields = {"reasoning_stages", "constraint_interactions", "semantic_ambiguities", "sources"}
+    reject_unknown_fields(source, fields, "adaptive task.difficulty_profile")
+    if set(source) != fields:
+        raise PolicyError("difficulty_profile requires reasoning_stages, constraint_interactions, semantic_ambiguities, and sources")
+
+    normalized: dict[str, Any] = {}
+    for field in ("reasoning_stages", "constraint_interactions", "semantic_ambiguities"):
+        raw = source.get(field)
+        if not isinstance(raw, list):
+            raise PolicyError(f"difficulty_profile.{field} must be an array")
+        facts = [require_string(item, f"difficulty_profile.{field} item") for item in raw]
+        if field == "reasoning_stages" and not facts:
+            raise PolicyError("difficulty_profile.reasoning_stages must be non-empty")
+        if len(facts) > 16:
+            raise PolicyError(f"difficulty_profile.{field} may contain at most 16 facts")
+        if len(set(facts)) != len(facts):
+            raise PolicyError(f"difficulty_profile.{field} contains contradictory duplicate facts")
+        normalized[field] = sorted(facts)
+
+    raw_sources = require_object(source.get("sources"), "difficulty_profile.sources")
+    expected_sources = {"reasoning_stages", "constraint_interactions", "semantic_ambiguities"}
+    reject_unknown_fields(raw_sources, expected_sources, "difficulty_profile.sources")
+    if set(raw_sources) != expected_sources:
+        raise PolicyError("difficulty_profile.sources must bind every fact group")
+    normalized_sources: dict[str, str] = {}
+    for field in sorted(expected_sources):
+        origin = require_string(raw_sources.get(field), f"difficulty_profile.sources.{field}").lower()
+        if origin not in ADAPTIVE_DIFFICULTY_SOURCES:
+            raise PolicyError(f"difficulty_profile.sources.{field} is not a pre-execution source")
+        normalized_sources[field] = origin
+    normalized["sources"] = normalized_sources
+
+    stages = len(normalized["reasoning_stages"])
+    interactions = len(normalized["constraint_interactions"])
+    ambiguities = len(normalized["semantic_ambiguities"])
+    # Coarse expression bands only.  Thresholds intentionally keep a few
+    # explicit steps/interactions in D1, distinguish the C4 mid-complexity
+    # cases, and reserve D3 for materially deeper or denser reasoning.  They
+    # are research hypotheses, not fitted cut-points.
+    band = (
+        "D3" if stages >= 10 or interactions >= 6
+        or (stages >= 8 and interactions >= 4 and ambiguities >= 2)
+        else "D2" if stages >= 5 or interactions >= 3 or ambiguities >= 1
+        else "D1"
+    )
+    fingerprint = "sha256:" + hashlib.sha256(canonical_json(normalized)).hexdigest()
+    return {
+        "provided": True, "band": band, "profile_fingerprint": fingerprint,
+        "signals_used": [
+            f"reasoning_stages:{stages}",
+            f"constraint_interactions:{interactions}",
+            f"semantic_ambiguities:{ambiguities}",
+        ],
+        "limitations": limitations,
+    }
+
+
+def _adaptive_research_plan(
+    value: Any, *, decision_context: str, task_contract_digest: str | None,
+    acceptance_suite_digest: str, difficulty: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    if decision_context != "budgeted_research":
+        raise PolicyError("research_exploration is allowed only in budgeted_research")
+    source = require_object(value, "adaptive task.research_exploration")
+    allowed = {
+        "experiment_id", "requested_effort", "task_contract_digest",
+        "acceptance_suite_digest", "difficulty_profile_fingerprint",
+        "time_budget_seconds", "attempt_budget", "paired_medium_comparator",
+    }
+    reject_unknown_fields(source, allowed, "adaptive task.research_exploration")
+    required = allowed - {"paired_medium_comparator"}
+    if not required.issubset(source):
+        raise PolicyError("research_exploration is missing required preregistration fields")
+    if task_contract_digest is None:
+        raise PolicyError("research_exploration requires adaptive task.task_contract_digest")
+    if not difficulty.get("provided"):
+        raise PolicyError("research_exploration requires a pre-execution difficulty_profile")
+
+    experiment_id = require_string(source.get("experiment_id"), "research_exploration.experiment_id")
+    requested_effort = require_string(source.get("requested_effort"), "research_exploration.requested_effort").lower()
+    if requested_effort not in {"medium", "high"}:
+        raise PolicyError("research_exploration.requested_effort must be medium or high")
+    declared_task_digest = require_digest(source.get("task_contract_digest"), "research_exploration.task_contract_digest")
+    declared_suite_digest = require_digest(source.get("acceptance_suite_digest"), "research_exploration.acceptance_suite_digest")
+    declared_profile = require_digest(source.get("difficulty_profile_fingerprint"), "research_exploration.difficulty_profile_fingerprint")
+    if declared_task_digest != task_contract_digest:
+        raise PolicyError("research_exploration task_contract_digest drift")
+    if declared_suite_digest != acceptance_suite_digest:
+        raise PolicyError("research_exploration acceptance_suite_digest drift")
+    if declared_profile != difficulty.get("profile_fingerprint"):
+        raise PolicyError("research_exploration difficulty_profile_fingerprint drift")
+    time_budget = finite_number(source.get("time_budget_seconds"), "research_exploration.time_budget_seconds", minimum=1.0, maximum=7200.0)
+    attempts = integer(source.get("attempt_budget"), "research_exploration.attempt_budget", minimum=1)
+    if attempts > 3:
+        raise PolicyError("research_exploration.attempt_budget may not exceed 3")
+
+    comparator: dict[str, Any] | None = None
+    raw_comparator = source.get("paired_medium_comparator")
+    if requested_effort == "high":
+        comparator_source = require_object(raw_comparator, "research_exploration.paired_medium_comparator")
+        comparator_fields = {"planned", "effort", "task_contract_digest", "acceptance_suite_digest"}
+        reject_unknown_fields(comparator_source, comparator_fields, "research_exploration.paired_medium_comparator")
+        if set(comparator_source) != comparator_fields:
+            raise PolicyError("High exploration requires a complete paired Medium comparator plan")
+        if type(comparator_source.get("planned")) is not bool:
+            raise PolicyError("paired_medium_comparator.planned must be boolean")
+        comparator = {
+            "planned": comparator_source.get("planned"),
+            "effort": require_string(comparator_source.get("effort"), "paired_medium_comparator.effort").lower(),
+            "task_contract_digest": require_digest(comparator_source.get("task_contract_digest"), "paired_medium_comparator.task_contract_digest"),
+            "acceptance_suite_digest": require_digest(comparator_source.get("acceptance_suite_digest"), "paired_medium_comparator.acceptance_suite_digest"),
+        }
+        if comparator != {
+            "planned": True, "effort": "medium",
+            "task_contract_digest": task_contract_digest,
+            "acceptance_suite_digest": acceptance_suite_digest,
+        }:
+            raise PolicyError("High exploration comparator must plan Medium on the same task and acceptance")
+    elif raw_comparator is not None:
+        raise PolicyError("paired_medium_comparator is reserved for High exploration")
+
+    return {
+        "experiment_id": experiment_id, "requested_effort": requested_effort,
+        "task_contract_digest": task_contract_digest,
+        "acceptance_suite_digest": acceptance_suite_digest,
+        "difficulty_profile_fingerprint": difficulty["profile_fingerprint"],
+        "time_budget_seconds": time_budget, "attempt_budget": attempts,
+        "paired_medium_comparator": comparator,
+        "evidence_effect": "PREREGISTERED_PLAN_NOT_OBSERVED_EVIDENCE",
+    }
+
+
 def select_adaptive_route(task: Mapping[str, Any], *, evidence: Mapping[str, Any] | None = None) -> dict[str, Any]:
     """Select S0-S4 from a strictly typed task image before execution.
 
@@ -1670,13 +1825,18 @@ def select_adaptive_route(task: Mapping[str, Any], *, evidence: Mapping[str, Any
     reject_unknown_fields(source, {
         "task_family", "required_input_modalities", "output_kind",
         "required_tool_capabilities", "acceptance", "coupling", "risk",
-        "size", "coordination_overhead", "cold_start", "cold_start_constraints", "economics", "distribution_id", "decision_context",
+        "size", "coordination_overhead", "cold_start", "cold_start_constraints", "economics",
+        "distribution_id", "decision_context", "difficulty_profile",
+        "task_contract_digest", "research_exploration",
     }, "adaptive task")
     family = require_string(source.get("task_family"), "adaptive task.task_family")
     distribution_id = require_string(source.get("distribution_id"), "adaptive task.distribution_id")
     decision_context = require_string(source.get("decision_context", "production"), "adaptive task.decision_context").lower()
     if decision_context not in {"production", "budgeted_research"}:
         raise PolicyError("decision_context must be production or budgeted_research")
+    task_contract_digest = source.get("task_contract_digest")
+    if task_contract_digest is not None:
+        task_contract_digest = require_digest(task_contract_digest, "adaptive task.task_contract_digest")
     modalities = source.get("required_input_modalities")
     if not isinstance(modalities, list) or any(not isinstance(v, str) for v in modalities):
         raise PolicyError("required_input_modalities must be a string array")
@@ -1705,9 +1865,26 @@ def select_adaptive_route(task: Mapping[str, Any], *, evidence: Mapping[str, Any
         raise PolicyError("size must be small, normal, or large")
     coordination = finite_number(source.get("coordination_overhead", 0), "coordination_overhead", minimum=0.0)
     capabilities = _adaptive_capabilities(source.get("required_tool_capabilities"))
+    difficulty = adaptive_difficulty_profile(source.get("difficulty_profile"))
+    research_plan = _adaptive_research_plan(
+        source.get("research_exploration"), decision_context=decision_context,
+        task_contract_digest=task_contract_digest,
+        acceptance_suite_digest=suite_digest, difficulty=difficulty,
+    )
+    effort_selection = "DEFAULT_HEURISTIC"
+
+    def route_result(*args: Any) -> dict[str, Any]:
+        return _adaptive_result(
+            *args, difficulty=difficulty, research_plan=research_plan,
+            effort_selection=effort_selection, acceptance_suite_digest=suite_digest,
+            task_contract_digest=task_contract_digest,
+        )
+
     cold_start = source.get("cold_start", False)
     if type(cold_start) is not bool:
         raise PolicyError("cold_start must be boolean")
+    if cold_start and research_plan is not None:
+        raise PolicyError("research_exploration cannot be combined with cold_start")
     constraints = source.get("cold_start_constraints")
     if cold_start:
         constraints = require_object(constraints, "adaptive task.cold_start_constraints")
@@ -1730,32 +1907,35 @@ def select_adaptive_route(task: Mapping[str, Any], *, evidence: Mapping[str, Any
             bound = cold_start_credit_bound(economics.get("baseline_credits"), economics.get("launch_credits"), economics.get("overhead_credits"), economics.get("recovery_credits"))
             required_seconds = ("baseline_seconds", "launch_seconds", "overhead_seconds", "recovery_seconds")
             if any(field not in economics for field in required_seconds):
-                return _adaptive_result(family, "S0", "cold_start_economics_incomplete", "UNKNOWN", modalities, output, kind, capabilities, "SOL_ONLY", "gpt-5.6-sol", "high", coordination)
+                return route_result(family, "S0", "cold_start_economics_incomplete", "UNKNOWN", modalities, output, kind, capabilities, "SOL_ONLY", "gpt-5.6-sol", "high", coordination)
             baseline_seconds = finite_number(economics["baseline_seconds"], "economics.baseline_seconds", minimum=0.0)
             route_seconds = finite_number(economics["launch_seconds"], "economics.launch_seconds", minimum=0.0) + finite_number(economics["overhead_seconds"], "economics.overhead_seconds", minimum=0.0) + q * finite_number(economics["recovery_seconds"], "economics.recovery_seconds", minimum=0.0)
             if bound < 0 or q > bound + 1e-12 or route_seconds >= baseline_seconds:
-                return _adaptive_result(family, "S0", "cold_start_economics_fail", "UNKNOWN", modalities, output, kind, capabilities, "SOL_ONLY", "gpt-5.6-sol", "high", coordination)
+                return route_result(family, "S0", "cold_start_economics_fail", "UNKNOWN", modalities, output, kind, capabilities, "SOL_ONLY", "gpt-5.6-sol", "high", coordination)
     elif cold_start:
         raise PolicyError("cold_start requires economics")
-    evidence_match = _adaptive_matching_evidence(evidence, family, modalities, output, kind, distribution_id, suite_digest)
+    evidence_match = _adaptive_matching_evidence(
+        evidence, family, modalities, output, kind, distribution_id, suite_digest,
+        difficulty["profile_fingerprint"],
+    )
     unavailable = [item["name"] for item in capabilities if item["status"] in {"unknown", "unavailable"}]
     visual = bool(set(modalities) & {"image", "screenshot", "document", "chart"}) or output in {"image", "document", "chart"}
     needs_visual_tool = visual or kind in {"visual_review", "document_review", "mixed_review"}
     if needs_visual_tool and not capabilities:
-        return _adaptive_result(family, "S0", "required_visual_or_document_capability_missing", "MATCHED_EXPERIENCE" if evidence_match else "UNKNOWN", modalities, output, kind, capabilities, "SOL_ONLY", "gpt-5.6-sol", "high", coordination)
+        return route_result(family, "S0", "required_visual_or_document_capability_missing", "MATCHED_EXPERIENCE" if evidence_match else "UNKNOWN", modalities, output, kind, capabilities, "SOL_ONLY", "gpt-5.6-sol", "high", coordination)
     if unavailable or size == "small" or not acceptance["independent"] or not acceptance["closed"] or coupling == "high" or risk in {"high", "critical"}:
         reason = "required_capability_unknown" if unavailable else "task_too_small" if size == "small" else "acceptance_not_independent" if not acceptance["independent"] else "acceptance_not_closed" if not acceptance["closed"] else "coupling_or_risk_requires_sol"
-        return _adaptive_result(family, "S0", reason, "MATCHED_EXPERIENCE" if evidence_match else "UNKNOWN", modalities, output, kind, capabilities, "SOL_ONLY", "gpt-5.6-sol", "high", coordination)
+        return route_result(family, "S0", reason, "MATCHED_EXPERIENCE" if evidence_match else "UNKNOWN", modalities, output, kind, capabilities, "SOL_ONLY", "gpt-5.6-sol", "high", coordination)
     proven = all(
         item["status"] in {"host-observed", "basic-proven"}
         and item["source"] in {"host-observed", "basic-proven"}
         for item in capabilities
     )
     if not proven:
-        return _adaptive_result(family, "S0", "required_capability_not_basic_proven", "UNKNOWN", modalities, output, kind, capabilities, "SOL_ONLY", "gpt-5.6-sol", "high", coordination)
+        return route_result(family, "S0", "required_capability_not_basic_proven", "UNKNOWN", modalities, output, kind, capabilities, "SOL_ONLY", "gpt-5.6-sol", "high", coordination)
     implementation_bindings = [item for item in capabilities if item["operation"] == "implementation"]
     if len(implementation_bindings) > 1 or any(item["actor"] != "LUNA" for item in implementation_bindings):
-        return _adaptive_result(family, "S0", "implementation_actor_binding_invalid", "MATCHED_EXPERIENCE" if evidence_match else "UNKNOWN", modalities, output, kind, capabilities, "SOL_ONLY", "gpt-5.6-sol", "high", coordination)
+        return route_result(family, "S0", "implementation_actor_binding_invalid", "MATCHED_EXPERIENCE" if evidence_match else "UNKNOWN", modalities, output, kind, capabilities, "SOL_ONLY", "gpt-5.6-sol", "high", coordination)
     # For tool-bearing tasks the operation/actor/surface table is part of the
     # decision, not decorative metadata.  A text capability cannot stand in
     # for a browser or image surface, and a visual acceptance operation must
@@ -1771,10 +1951,10 @@ def select_adaptive_route(task: Mapping[str, Any], *, evidence: Mapping[str, Any
         if browser_required:
             required_operations.add("browser_render")
         if not required_operations.issubset(operations):
-            return _adaptive_result(family, "S0", "required_operation_capability_missing", "MATCHED_EXPERIENCE" if evidence_match else "UNKNOWN", modalities, output, kind, capabilities, "SOL_ONLY", "gpt-5.6-sol", "high", coordination)
+            return route_result(family, "S0", "required_operation_capability_missing", "MATCHED_EXPERIENCE" if evidence_match else "UNKNOWN", modalities, output, kind, capabilities, "SOL_ONLY", "gpt-5.6-sol", "high", coordination)
         reviewers = [item for item in capabilities if item["operation"] in {"visual_review", "document_review"}]
         if len(reviewers) != 1:
-            return _adaptive_result(family, "S0", "visual_acceptance_reviewer_not_unique", "MATCHED_EXPERIENCE" if evidence_match else "UNKNOWN", modalities, output, kind, capabilities, "SOL_ONLY", "gpt-5.6-sol", "high", coordination)
+            return route_result(family, "S0", "visual_acceptance_reviewer_not_unique", "MATCHED_EXPERIENCE" if evidence_match else "UNKNOWN", modalities, output, kind, capabilities, "SOL_ONLY", "gpt-5.6-sol", "high", coordination)
     # Distinct, observable work factors only.  Modality names and the
     # coordination number are deliberately not double-counted as effort.
     medium_signals = sum((
@@ -1783,29 +1963,36 @@ def select_adaptive_route(task: Mapping[str, Any], *, evidence: Mapping[str, Any
         risk == "medium",
         verification_cost in {"medium", "high"},
         len({item["operation"] for item in capabilities}) > 1,
-    ))
+        difficulty["band"] == "D2",
+    )) + (2 if difficulty["band"] == "D3" else 0)
     effort = "high" if evidence_match and evidence_match.get("effort") == "high" and evidence_match.get("lower_effort_comparator") is True else ("medium" if medium_signals >= 2 else "low")
     if evidence_match is not None and evidence_match.get("effort") != effort:
         evidence_match = None
+    if research_plan is not None:
+        effort = research_plan["requested_effort"]
+        effort_selection = "PREREGISTERED_COUNTERFACTUAL"
+        evidence_match = None
     strategy = (
         "LUNA_HIGH_MATCHED_COMPARATOR" if effort == "high"
-        else "LUNA_MEDIUM_VISUAL_OR_DOCUMENT" if effort == "medium"
+        else "LUNA_MEDIUM_BOUNDED" if effort == "medium"
         else "LUNA_LOW_BOUNDED"
     )
     if not evidence_match:
+        if research_plan is not None:
+            return route_result(family, "S4", "budgeted_research_preregistered_counterfactual", "BUDGETED_RESEARCH_EXPLORATION", modalities, output, kind, capabilities, "SOL_LUNA", "gpt-5.6-luna", effort, coordination)
         if not cold_start and decision_context == "budgeted_research":
-            return _adaptive_result(family, "S4", "budgeted_research_exploration", "BUDGETED_RESEARCH_EXPLORATION", modalities, output, kind, capabilities, "SOL_LUNA", "gpt-5.6-luna", effort, coordination)
+            return route_result(family, "S4", "budgeted_research_exploration", "BUDGETED_RESEARCH_EXPLORATION", modalities, output, kind, capabilities, "SOL_LUNA", "gpt-5.6-luna", effort, coordination)
         if not cold_start:
-            return _adaptive_result(family, "S0", "production_route_requires_matching_evidence", "UNKNOWN", modalities, output, kind, capabilities, "SOL_ONLY", "gpt-5.6-sol", "high", coordination)
+            return route_result(family, "S0", "production_route_requires_matching_evidence", "UNKNOWN", modalities, output, kind, capabilities, "SOL_ONLY", "gpt-5.6-sol", "high", coordination)
     # Production routes require complete economics.  Research S4 is the only
     # route allowed to proceed without it; a matched boolean cannot bypass a
     # failed or missing credit/time gate.
     if not cold_start:
         if economics is None:
-            return _adaptive_result(family, "S0", "production_economics_unknown", "UNKNOWN", modalities, output, kind, capabilities, "SOL_ONLY", "gpt-5.6-sol", "high", coordination)
+            return route_result(family, "S0", "production_economics_unknown", "UNKNOWN", modalities, output, kind, capabilities, "SOL_ONLY", "gpt-5.6-sol", "high", coordination)
         required_econ = ("baseline_credits", "execution_credits", "coordination_credits", "recovery_credits", "baseline_seconds", "execution_seconds", "coordination_seconds", "recovery_seconds")
         if any(field not in economics for field in required_econ):
-            return _adaptive_result(family, "S0", "production_economics_incomplete", "UNKNOWN", modalities, output, kind, capabilities, "SOL_ONLY", "gpt-5.6-sol", "high", coordination)
+            return route_result(family, "S0", "production_economics_incomplete", "UNKNOWN", modalities, output, kind, capabilities, "SOL_ONLY", "gpt-5.6-sol", "high", coordination)
         baseline_credits = finite_number(economics["baseline_credits"], "economics.baseline_credits", minimum=0.0)
         execution_credits = finite_number(economics["execution_credits"], "economics.execution_credits", minimum=0.0)
         coordination_credits = finite_number(economics["coordination_credits"], "economics.coordination_credits", minimum=0.0)
@@ -1818,20 +2005,28 @@ def select_adaptive_route(task: Mapping[str, Any], *, evidence: Mapping[str, Any
         expected_credits = execution_credits + coordination_credits + failure_probability * recovery_credits
         expected_seconds = execution_seconds + coordination_seconds + failure_probability * recovery_seconds
         if expected_credits > 0.5 * baseline_credits + 1e-12:
-            return _adaptive_result(family, "S0", "production_credit_gate_failed", "MATCHED_EXPERIENCE", modalities, output, kind, capabilities, "SOL_ONLY", "gpt-5.6-sol", "high", coordination)
+            return route_result(family, "S0", "production_credit_gate_failed", "MATCHED_EXPERIENCE", modalities, output, kind, capabilities, "SOL_ONLY", "gpt-5.6-sol", "high", coordination)
         if expected_seconds >= baseline_seconds:
-            return _adaptive_result(family, "S0", "production_time_gate_failed", "MATCHED_EXPERIENCE", modalities, output, kind, capabilities, "SOL_ONLY", "gpt-5.6-sol", "high", coordination)
+            return route_result(family, "S0", "production_time_gate_failed", "MATCHED_EXPERIENCE", modalities, output, kind, capabilities, "SOL_ONLY", "gpt-5.6-sol", "high", coordination)
     status = "MATCHED_EXPERIENCE" if evidence_match else "UNKNOWN"
-    return _adaptive_result(family, "S3" if effort == "high" else "S2" if effort == "medium" else "S1", strategy, status, modalities, output, kind, capabilities, "SOL_LUNA", "gpt-5.6-luna", effort, coordination)
+    return route_result(family, "S3" if effort == "high" else "S2" if effort == "medium" else "S1", strategy, status, modalities, output, kind, capabilities, "SOL_LUNA", "gpt-5.6-luna", effort, coordination)
 
 
-def _adaptive_matching_evidence(evidence: Mapping[str, Any] | None, family: str, modalities: list[str], output: str, acceptance: str, distribution_id: str, suite_digest: str) -> Mapping[str, Any] | None:
+def _adaptive_matching_evidence(
+    evidence: Mapping[str, Any] | None, family: str, modalities: list[str],
+    output: str, acceptance: str, distribution_id: str, suite_digest: str,
+    difficulty_profile_fingerprint: str | None,
+) -> Mapping[str, Any] | None:
     if not isinstance(evidence, Mapping):
         return None
     allowed = {"status", "task_family", "input_modalities", "output_kind", "acceptance_kind", "distribution_id", "acceptance_suite_digest", "effort", "lower_effort_comparator", "observations", "first_pass_accepted"}
+    if difficulty_profile_fingerprint is not None:
+        allowed.add("difficulty_profile_fingerprint")
     if set(evidence) != allowed or evidence.get("status") != "MATCHED_EXPERIENCE":
         return None
     if evidence.get("task_family") != family or evidence.get("input_modalities") != modalities or evidence.get("output_kind") != output or evidence.get("acceptance_kind") != acceptance or evidence.get("distribution_id") != distribution_id or evidence.get("acceptance_suite_digest") != suite_digest:
+        return None
+    if difficulty_profile_fingerprint is not None and evidence.get("difficulty_profile_fingerprint") != difficulty_profile_fingerprint:
         return None
     try:
         observations = integer(evidence.get("observations"), "evidence.observations", minimum=1)
@@ -1847,7 +2042,14 @@ def _adaptive_matching_evidence(evidence: Mapping[str, Any] | None, family: str,
     return result
 
 
-def _adaptive_result(family: str, candidate: str, reason: str, evidence_status: str, modalities: list[str], output: str, acceptance: str, capabilities: list[dict[str, str]], route: str, model: str, effort: str, coordination: float) -> dict[str, Any]:
+def _adaptive_result(
+    family: str, candidate: str, reason: str, evidence_status: str,
+    modalities: list[str], output: str, acceptance: str,
+    capabilities: list[dict[str, str]], route: str, model: str, effort: str,
+    coordination: float, *, difficulty: Mapping[str, Any],
+    research_plan: Mapping[str, Any] | None, effort_selection: str,
+    acceptance_suite_digest: str, task_contract_digest: str | None,
+) -> dict[str, Any]:
     implementer = "LUNA" if route == "SOL_LUNA" else "SOL"
     responsibilities = {"implementer": implementer, "final_acceptance_owner": "SOL"}
     if acceptance in {"visual_review", "document_review", "mixed_review"}:
@@ -1867,25 +2069,85 @@ def _adaptive_result(family: str, candidate: str, reason: str, evidence_status: 
         {"name": item["name"], "operation": item["operation"], "actor": item["actor"], "surface": item["surface"]}
         for item in responsibility_capabilities
     ]
-    return {
+    result = {
         "schema_version": 1, "task_family": family, "candidate": candidate, "route": route,
         "strategy": reason, "model": model, "effort": effort,
         "required_tools": capabilities, "acceptance": {"kind": acceptance, "responsibility": "SOL"}, "responsibilities": responsibilities,
         "modalities": modalities, "output_kind": output, "coordination_overhead": coordination,
         "reason_code": reason, "evidence_status": evidence_status,
-        "execution_token": hashlib.sha256(canonical_json({"family": family, "candidate": candidate, "route": route, "effort": effort, "reason": reason})).hexdigest(),
+        "difficulty": dict(difficulty), "effort_selection": effort_selection,
+        "acceptance_suite_digest": acceptance_suite_digest,
+        "task_contract_digest": task_contract_digest,
     }
+    if research_plan is not None:
+        result["research_plan"] = dict(research_plan)
+    result["execution_token"] = hashlib.sha256(canonical_json({
+        "family": family, "candidate": candidate, "route": route, "effort": effort,
+        "reason": reason, "acceptance_suite_digest": acceptance_suite_digest,
+        "task_contract_digest": task_contract_digest,
+        "difficulty_profile_fingerprint": difficulty.get("profile_fingerprint"),
+        "effort_selection": effort_selection, "research_plan": research_plan,
+    })).hexdigest()
+    return result
 
 
 def validate_adaptive_execution(selection: Mapping[str, Any], actual: Mapping[str, Any]) -> dict[str, Any]:
     """Fail closed when the selected route and the observed execution diverge."""
     selected = require_object(selection, "adaptive selection")
     observed = require_object(actual, "adaptive execution")
-    reject_unknown_fields(observed, {"route", "candidate", "model", "effort", "execution_token", "responsibilities"}, "adaptive execution")
+    allowed = {"route", "candidate", "model", "effort", "execution_token", "responsibilities"}
+    research_plan = selected.get("research_plan")
+    if research_plan is not None:
+        allowed.update({"research_plan", "research_receipt"})
+    reject_unknown_fields(observed, allowed, "adaptive execution")
     for field in ("route", "candidate", "model", "effort", "execution_token", "responsibilities"):
         if observed.get(field) != selected.get(field):
             raise PolicyError(f"adaptive execution mismatch: {field}")
-    return {"valid": True, "route": selected["route"], "candidate": selected["candidate"], "execution_token": selected["execution_token"]}
+    result = {
+        "valid": True, "route": selected["route"], "candidate": selected["candidate"],
+        "execution_token": selected["execution_token"], "budget_status": "NOT_APPLICABLE",
+    }
+    if research_plan is None:
+        return result
+    plan = require_object(research_plan, "adaptive selection.research_plan")
+    if observed.get("research_plan") != plan:
+        raise PolicyError("adaptive execution mismatch: research_plan")
+    receipt = observed.get("research_receipt")
+    if receipt is None:
+        result.update({
+            "budget_status": "DECLARED_NOT_RUNTIME_VERIFIED",
+            "budget_enforcement": "NOT_AUTOMATIC",
+        })
+        return result
+    receipt = require_object(receipt, "adaptive execution.research_receipt")
+    receipt_fields = {
+        "experiment_id", "task_contract_digest", "acceptance_suite_digest",
+        "difficulty_profile_fingerprint", "effort", "elapsed_seconds", "attempts",
+    }
+    reject_unknown_fields(receipt, receipt_fields, "adaptive execution.research_receipt")
+    if set(receipt) != receipt_fields:
+        raise PolicyError("research_receipt is incomplete")
+    bindings = {
+        "experiment_id": plan["experiment_id"],
+        "task_contract_digest": plan["task_contract_digest"],
+        "acceptance_suite_digest": plan["acceptance_suite_digest"],
+        "difficulty_profile_fingerprint": plan["difficulty_profile_fingerprint"],
+        "effort": selected["effort"],
+    }
+    for field, expected in bindings.items():
+        if receipt.get(field) != expected:
+            raise PolicyError(f"adaptive execution research receipt mismatch: {field}")
+    elapsed = finite_number(receipt.get("elapsed_seconds"), "research_receipt.elapsed_seconds", minimum=0.0)
+    attempts = integer(receipt.get("attempts"), "research_receipt.attempts", minimum=1)
+    if elapsed > float(plan["time_budget_seconds"]) + 1e-12:
+        raise PolicyError("adaptive execution exceeded declared time budget")
+    if attempts > int(plan["attempt_budget"]):
+        raise PolicyError("adaptive execution exceeded declared attempt budget")
+    result.update({
+        "budget_status": "VERIFIED_WITHIN_DECLARED_BUDGET",
+        "budget_enforcement": "OBSERVED_ONLY_NOT_AUTOMATIC_CANCELLATION",
+    })
+    return result
 
 
 def review_depth(source: Mapping[str, Any]) -> dict[str, Any]:

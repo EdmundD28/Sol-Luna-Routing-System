@@ -340,6 +340,59 @@ class RoutingPolicyTests(unittest.TestCase):
         task.update(overrides)
         return task
 
+    def difficulty_profile(self, *, stages: int = 1, interactions: int = 0, ambiguities: int = 0) -> dict:
+        return {
+            "reasoning_stages": [f"stage-{index}" for index in range(stages)],
+            "constraint_interactions": [f"constraint-{index}|constraint-{index + 1}" for index in range(interactions)],
+            "semantic_ambiguities": [f"ambiguity-{index}" for index in range(ambiguities)],
+            "sources": {
+                "reasoning_stages": "task_contract",
+                "constraint_interactions": "task_contract",
+                "semantic_ambiguities": "acceptance_contract",
+            },
+        }
+
+    def adaptive_evidence(self, task: dict, effort: str) -> dict:
+        evidence = {
+            "effort": effort, "status": "MATCHED_EXPERIENCE",
+            "lower_effort_comparator": effort == "high",
+            "task_family": task["task_family"],
+            "input_modalities": task["required_input_modalities"],
+            "output_kind": task["output_kind"],
+            "acceptance_kind": task["acceptance"]["kind"],
+            "distribution_id": task["distribution_id"],
+            "acceptance_suite_digest": task["acceptance"]["suite_digest"],
+            "observations": 16, "first_pass_accepted": 16,
+        }
+        if "difficulty_profile" in task:
+            evidence["difficulty_profile_fingerprint"] = ROUTING.adaptive_difficulty_profile(
+                task["difficulty_profile"]
+            )["profile_fingerprint"]
+        return evidence
+
+    def adaptive_research_task(self, effort: str = "high") -> dict:
+        profile = self.difficulty_profile(stages=10, interactions=6, ambiguities=1)
+        profile_fingerprint = ROUTING.adaptive_difficulty_profile(profile)["profile_fingerprint"]
+        task_digest = "sha256:" + "1" * 64
+        suite_digest = "sha256:" + "0" * 64
+        plan = {
+            "experiment_id": "P130-C5-PAIR-01", "requested_effort": effort,
+            "task_contract_digest": task_digest,
+            "acceptance_suite_digest": suite_digest,
+            "difficulty_profile_fingerprint": profile_fingerprint,
+            "time_budget_seconds": 300, "attempt_budget": 2,
+        }
+        if effort == "high":
+            plan["paired_medium_comparator"] = {
+                "planned": True, "effort": "medium",
+                "task_contract_digest": task_digest,
+                "acceptance_suite_digest": suite_digest,
+            }
+        return self.adaptive_task(
+            decision_context="budgeted_research", difficulty_profile=profile,
+            task_contract_digest=task_digest, research_exploration=plan,
+        )
+
     def test_adaptive_shape_changes_low_medium_and_s0(self) -> None:
         evidence = {"effort": "low", "status": "MATCHED_EXPERIENCE", "lower_effort_comparator": False, "task_family": "adaptive-demo", "input_modalities": ["text"], "output_kind": "code", "acceptance_kind": "deterministic", "distribution_id": "same-distribution-v1", "acceptance_suite_digest": "sha256:" + "0" * 64, "observations": 16, "first_pass_accepted": 16}
         low = ROUTING.select_adaptive_route(self.adaptive_task(), evidence=evidence)
@@ -401,6 +454,117 @@ class RoutingPolicyTests(unittest.TestCase):
         actual["effort"] = "medium"
         with self.assertRaisesRegex(ROUTING.PolicyError, "execution mismatch"):
             ROUTING.validate_adaptive_execution(selected, actual)
+
+    def test_adaptive_difficulty_is_observable_order_stable_and_not_high_mapping(self) -> None:
+        d1 = self.adaptive_task(
+            decision_context="budgeted_research",
+            difficulty_profile=self.difficulty_profile(stages=2),
+        )
+        d3_profile = self.difficulty_profile(stages=10, interactions=6, ambiguities=1)
+        d3 = self.adaptive_task(
+            decision_context="budgeted_research", difficulty_profile=d3_profile,
+        )
+        low = ROUTING.select_adaptive_route(d1)
+        hard = ROUTING.select_adaptive_route(d3)
+        self.assertEqual((low["difficulty"]["band"], low["effort"]), ("D1", "low"))
+        self.assertEqual((hard["difficulty"]["band"], hard["effort"]), ("D3", "medium"))
+        self.assertNotEqual(hard["effort"], "high")
+
+        equivalent = dict(d3_profile)
+        equivalent["reasoning_stages"] = list(reversed(d3_profile["reasoning_stages"]))
+        renamed = self.adaptive_task(
+            task_family="renamed-family", required_input_modalities=["code"],
+            decision_context="budgeted_research", difficulty_profile=equivalent,
+        )
+        renamed_result = ROUTING.select_adaptive_route(renamed)
+        self.assertEqual(renamed_result["effort"], hard["effort"])
+        self.assertEqual(
+            renamed_result["difficulty"]["profile_fingerprint"],
+            hard["difficulty"]["profile_fingerprint"],
+        )
+
+    def test_adaptive_profile_evidence_cannot_cross_difficulty_or_missing_profile(self) -> None:
+        d1 = self.adaptive_task(difficulty_profile=self.difficulty_profile(stages=2))
+        d3 = self.adaptive_task(difficulty_profile=self.difficulty_profile(stages=10, interactions=6, ambiguities=1))
+        d1_evidence = self.adaptive_evidence(d1, "low")
+        self.assertEqual(ROUTING.select_adaptive_route(d1, evidence=d1_evidence)["candidate"], "S1")
+        self.assertEqual(ROUTING.select_adaptive_route(d3, evidence=d1_evidence)["candidate"], "S0")
+
+        legacy = self.adaptive_evidence(self.adaptive_task(), "low")
+        self.assertEqual(ROUTING.select_adaptive_route(d3, evidence=legacy)["candidate"], "S0")
+        d3_evidence = self.adaptive_evidence(d3, "medium")
+        self.assertEqual(ROUTING.select_adaptive_route(d3, evidence=d3_evidence)["candidate"], "S2")
+        d3_high_evidence = self.adaptive_evidence(d3, "high")
+        self.assertEqual(ROUTING.select_adaptive_route(d3, evidence=d3_high_evidence)["candidate"], "S3")
+
+    def test_adaptive_difficulty_rejects_unknown_post_outcome_and_duplicate_facts(self) -> None:
+        cases = []
+        unknown = self.difficulty_profile()
+        unknown["result_quality"] = "passed"
+        cases.append(unknown)
+        post_outcome = self.difficulty_profile()
+        post_outcome["sources"] = dict(post_outcome["sources"], reasoning_stages="execution_result")
+        cases.append(post_outcome)
+        duplicate = self.difficulty_profile(stages=2)
+        duplicate["reasoning_stages"][1] = duplicate["reasoning_stages"][0]
+        cases.append(duplicate)
+        for profile in cases:
+            with self.subTest(profile=profile), self.assertRaises(ROUTING.PolicyError):
+                ROUTING.select_adaptive_route(self.adaptive_task(difficulty_profile=profile))
+
+    def test_adaptive_preregistered_high_is_research_only_and_fully_bound(self) -> None:
+        task = self.adaptive_research_task("high")
+        selected = ROUTING.select_adaptive_route(task)
+        self.assertEqual((selected["candidate"], selected["effort"]), ("S4", "high"))
+        self.assertEqual(selected["effort_selection"], "PREREGISTERED_COUNTERFACTUAL")
+        self.assertEqual(selected["evidence_status"], "BUDGETED_RESEARCH_EXPLORATION")
+        self.assertEqual(selected["research_plan"]["evidence_effect"], "PREREGISTERED_PLAN_NOT_OBSERVED_EVIDENCE")
+
+        missing_pair = self.adaptive_research_task("high")
+        missing_pair["research_exploration"].pop("paired_medium_comparator")
+        with self.assertRaises(ROUTING.PolicyError):
+            ROUTING.select_adaptive_route(missing_pair)
+        for field in ("time_budget_seconds", "attempt_budget"):
+            incomplete = self.adaptive_research_task("medium")
+            incomplete["research_exploration"].pop(field)
+            with self.subTest(field=field), self.assertRaises(ROUTING.PolicyError):
+                ROUTING.select_adaptive_route(incomplete)
+        production = self.adaptive_research_task("medium")
+        production["decision_context"] = "production"
+        with self.assertRaisesRegex(ROUTING.PolicyError, "budgeted_research"):
+            ROUTING.select_adaptive_route(production)
+        drift = self.adaptive_research_task("medium")
+        drift["research_exploration"]["acceptance_suite_digest"] = "sha256:" + "2" * 64
+        with self.assertRaisesRegex(ROUTING.PolicyError, "acceptance_suite_digest drift"):
+            ROUTING.select_adaptive_route(drift)
+
+    def test_adaptive_research_execution_binds_plan_and_observed_budget(self) -> None:
+        selected = ROUTING.select_adaptive_route(self.adaptive_research_task("high"))
+        actual = {key: selected[key] for key in (
+            "route", "candidate", "model", "effort", "execution_token", "responsibilities", "research_plan",
+        )}
+        unverified = ROUTING.validate_adaptive_execution(selected, actual)
+        self.assertEqual(unverified["budget_status"], "DECLARED_NOT_RUNTIME_VERIFIED")
+        self.assertEqual(unverified["budget_enforcement"], "NOT_AUTOMATIC")
+
+        receipt = {
+            "experiment_id": selected["research_plan"]["experiment_id"],
+            "task_contract_digest": selected["research_plan"]["task_contract_digest"],
+            "acceptance_suite_digest": selected["research_plan"]["acceptance_suite_digest"],
+            "difficulty_profile_fingerprint": selected["research_plan"]["difficulty_profile_fingerprint"],
+            "effort": selected["effort"], "elapsed_seconds": 299.5, "attempts": 2,
+        }
+        actual["research_receipt"] = receipt
+        verified = ROUTING.validate_adaptive_execution(selected, actual)
+        self.assertEqual(verified["budget_status"], "VERIFIED_WITHIN_DECLARED_BUDGET")
+
+        for field, value in (
+            ("elapsed_seconds", 301), ("attempts", 3), ("effort", "medium"),
+            ("task_contract_digest", "sha256:" + "3" * 64),
+        ):
+            bad = dict(actual, research_receipt=dict(receipt, **{field: value}))
+            with self.subTest(field=field), self.assertRaises(ROUTING.PolicyError):
+                ROUTING.validate_adaptive_execution(selected, bad)
     def test_direct_policy_mapping_is_strictly_validated_without_mutation(self) -> None:
         for field, value in (
             ("maximum_active_luna_writers", None),
