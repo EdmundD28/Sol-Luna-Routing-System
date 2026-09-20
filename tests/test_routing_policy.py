@@ -372,9 +372,21 @@ class RoutingPolicyTests(unittest.TestCase):
 
     def adaptive_matching_spec(self, task: dict, **overrides: object) -> dict:
         difficulty = ROUTING.adaptive_difficulty_profile(task.get("difficulty_profile"))
+        test_bindings = [
+            item for item in task.get("required_tool_capabilities", [])
+            if item["operation"] == "test_execution"
+        ]
+        self.assertLessEqual(len(test_bindings), 1)
+        test_binding = test_bindings[0] if test_bindings else {
+            "actor": "SOL", "surface": "shell",
+        }
         role_bindings = [
             {"actor": "LUNA", "operation": "implementation", "surface": "filesystem"},
-            {"actor": "SOL", "operation": "test_execution", "surface": "shell"},
+            {
+                "actor": test_binding["actor"],
+                "operation": "test_execution",
+                "surface": test_binding["surface"],
+            },
         ]
         role_bindings.extend(
             {
@@ -384,6 +396,13 @@ class RoutingPolicyTests(unittest.TestCase):
             }
             for item in task.get("required_tool_capabilities", [])
         )
+        role_bindings = [
+            {"actor": actor, "operation": operation, "surface": surface}
+            for actor, operation, surface in sorted({
+                (item["actor"], item["operation"], item["surface"])
+                for item in role_bindings
+            })
+        ]
         spec = {
             "schema_version": 1,
             "distribution_id": task["distribution_id"],
@@ -557,6 +576,65 @@ class RoutingPolicyTests(unittest.TestCase):
         self.assertEqual(ROUTING.cold_start_credit_bound(10, 5, 0, 5), 0)
         self.assertEqual(ROUTING.cold_start_credit_bound(10, 5.1, 0, 5), -1)
 
+    def test_adaptive_explicit_test_executor_cannot_use_legacy_cold_start_exception(self) -> None:
+        luna_test_capability = {
+            "name": "luna-tests",
+            "status": "host-observed",
+            "source": "host-observed",
+            "operation": "test_execution",
+            "actor": "LUNA",
+            "surface": "shell",
+        }
+        constraints = {
+            key: True
+            for key in (
+                "architecture_settled", "deterministic_acceptance", "low_risk",
+                "low_coupling", "complete_luna_ownership", "exclusive_write",
+                "single_writer", "sol_queue_empty",
+            )
+        }
+        economics = {
+            "baseline_credits": 10,
+            "launch_credits": 2,
+            "overhead_credits": 3,
+            "recovery_credits": 5,
+            "baseline_seconds": 100,
+            "launch_seconds": 20,
+            "overhead_seconds": 5,
+            "recovery_seconds": 10,
+            "failure_probability": 0,
+        }
+        cold_start = self.adaptive_task(
+            required_tool_capabilities=[luna_test_capability],
+            cold_start=True,
+            cold_start_constraints=constraints,
+            economics=economics,
+        )
+        rejected = ROUTING.select_adaptive_route(cold_start)
+        self.assertEqual(
+            (rejected["candidate"], rejected["route"], rejected["evidence_status"]),
+            ("S0", "SOL_ONLY", "UNKNOWN"),
+        )
+        self.assertEqual(
+            rejected["reason_code"],
+            "cold_start_explicit_test_execution_requires_matching_evidence",
+        )
+        self.assertEqual(
+            rejected["responsibilities"]["test_execution"],
+            {"actor": "SOL", "surface": "shell"},
+        )
+
+        research = self.adaptive_task(
+            required_tool_capabilities=[luna_test_capability],
+            decision_context="budgeted_research",
+        )
+        explored = ROUTING.select_adaptive_route(research)
+        self.assertEqual((explored["candidate"], explored["route"]), ("S4", "SOL_LUNA"))
+        self.assertEqual(
+            explored["responsibilities"]["test_execution"],
+            {"actor": "LUNA", "surface": "shell"},
+        )
+
     def test_adaptive_execution_mismatch_fails_closed(self) -> None:
         selected = ROUTING.select_adaptive_route(self.adaptive_task(cold_start=True, cold_start_constraints={key: True for key in ("architecture_settled", "deterministic_acceptance", "low_risk", "low_coupling", "complete_luna_ownership", "exclusive_write", "single_writer", "sol_queue_empty")}, economics={"baseline_credits": 10, "launch_credits": 2, "overhead_credits": 3, "recovery_credits": 5, "baseline_seconds": 100, "launch_seconds": 20, "overhead_seconds": 5, "recovery_seconds": 10, "failure_probability": 0}))
         actual = {key: selected[key] for key in ("route", "candidate", "model", "effort", "execution_token", "responsibilities")}
@@ -708,6 +786,130 @@ class RoutingPolicyTests(unittest.TestCase):
         )
         self.assertEqual(repeated["effort"], selected["effort"])
         self.assertEqual(repeated["execution_token"], selected["execution_token"])
+
+    def test_cross_instance_test_executor_is_bound_to_capability_evidence_and_execution(self) -> None:
+        def test_capability(actor: str, status: str = "host-observed") -> dict:
+            return {
+                "name": f"{actor.lower()}-tests",
+                "status": status,
+                "source": status,
+                "operation": "test_execution",
+                "actor": actor,
+                "surface": "shell",
+            }
+
+        selected_by_actor = {}
+        task_by_actor = {}
+        records_by_actor = {}
+        for actor in ("SOL", "LUNA"):
+            task = self.adaptive_cross_instance_task(
+                required_tool_capabilities=[test_capability(actor)]
+            )
+            records = [
+                self.adaptive_cluster(task["matching_spec"], "low", index)
+                for index in range(16)
+            ]
+            selected = ROUTING.select_adaptive_route(
+                task, verified_evidence_pool=self.bound_adaptive_pool(records)
+            )
+            self.assertEqual((selected["candidate"], selected["route"]), ("S1", "SOL_LUNA"))
+            self.assertEqual(
+                selected["responsibilities"]["test_execution"],
+                {"actor": actor, "surface": "shell"},
+            )
+            self.assertEqual(selected["responsibilities"]["final_acceptance_owner"], "SOL")
+            self.assertEqual(selected["acceptance"]["responsibility"], "SOL")
+            actual = {
+                key: selected[key]
+                for key in (
+                    "route", "candidate", "model", "effort",
+                    "execution_token", "responsibilities",
+                )
+            }
+            self.assertTrue(ROUTING.validate_adaptive_execution(selected, actual)["valid"])
+            selected_by_actor[actor] = selected
+            task_by_actor[actor] = task
+            records_by_actor[actor] = records
+
+        self.assertNotEqual(
+            task_by_actor["SOL"]["matching_spec"]["spec_digest"],
+            task_by_actor["LUNA"]["matching_spec"]["spec_digest"],
+        )
+        self.assertNotEqual(
+            selected_by_actor["SOL"]["execution_token"],
+            selected_by_actor["LUNA"]["execution_token"],
+        )
+        with self.assertRaisesRegex(ROUTING.PolicyError, "matching_spec drift"):
+            ROUTING.select_adaptive_route(
+                task_by_actor["LUNA"],
+                verified_evidence_pool=self.bound_adaptive_pool(records_by_actor["SOL"]),
+            )
+
+        drifted_actual = {
+            key: selected_by_actor["LUNA"][key]
+            for key in (
+                "route", "candidate", "model", "effort",
+                "execution_token", "responsibilities",
+            )
+        }
+        drifted_actual["responsibilities"] = dict(drifted_actual["responsibilities"])
+        drifted_actual["responsibilities"]["test_execution"] = {
+            "actor": "SOL", "surface": "shell",
+        }
+        with self.assertRaisesRegex(ROUTING.PolicyError, "responsibilities"):
+            ROUTING.validate_adaptive_execution(selected_by_actor["LUNA"], drifted_actual)
+
+        no_evidence = ROUTING.select_adaptive_route(task_by_actor["LUNA"])
+        self.assertEqual(
+            (no_evidence["candidate"], no_evidence["evidence_status"]),
+            ("S0", "UNKNOWN"),
+        )
+        self.assertEqual(no_evidence["responsibilities"]["final_acceptance_owner"], "SOL")
+
+        legacy_task = self.adaptive_task(
+            required_tool_capabilities=[test_capability("LUNA")]
+        )
+        legacy_evidence = self.adaptive_evidence(legacy_task, "low")
+        legacy_result = ROUTING.select_adaptive_route(
+            legacy_task, evidence=legacy_evidence
+        )
+        self.assertEqual(
+            (legacy_result["candidate"], legacy_result["evidence_status"]),
+            ("S0", "UNKNOWN"),
+        )
+
+        old_request = self.adaptive_cross_instance_task()
+        old_records = [
+            self.adaptive_cluster(old_request["matching_spec"], "low", index)
+            for index in range(16)
+        ]
+        old_selected = ROUTING.select_adaptive_route(
+            old_request, verified_evidence_pool=self.bound_adaptive_pool(old_records)
+        )
+        self.assertEqual(
+            old_selected["responsibilities"]["test_execution"],
+            {"actor": "SOL", "surface": "shell"},
+        )
+
+        unavailable = self.adaptive_cross_instance_task(
+            required_tool_capabilities=[test_capability("LUNA", "unknown")]
+        )
+        unavailable_result = ROUTING.select_adaptive_route(unavailable)
+        self.assertEqual(
+            (unavailable_result["candidate"], unavailable_result["reason_code"]),
+            ("S0", "required_capability_unknown"),
+        )
+
+        undeclared = self.adaptive_cross_instance_task()
+        undeclared["matching_spec"] = self.adaptive_matching_spec(
+            undeclared,
+            role_bindings=[
+                {"actor": "LUNA", "operation": "implementation", "surface": "filesystem"},
+                {"actor": "LUNA", "operation": "test_execution", "surface": "shell"},
+            ],
+        )
+        with self.assertRaisesRegex(ROUTING.PolicyError, "role_bindings"):
+            ROUTING.select_adaptive_route(undeclared)
 
     def test_cross_instance_matching_spec_rejects_drift_and_inline_claims(self) -> None:
         task = self.adaptive_cross_instance_task()

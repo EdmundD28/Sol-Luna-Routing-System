@@ -1671,6 +1671,32 @@ def _adaptive_capabilities(value: Any) -> list[dict[str, str]]:
     return result
 
 
+def _adaptive_test_execution_binding(
+    capabilities: list[dict[str, str]],
+) -> dict[str, Any]:
+    """Return the task's pre-execution test actor, preserving the legacy default."""
+    bindings = [
+        item for item in capabilities if item["operation"] == "test_execution"
+    ]
+    if len(bindings) > 1:
+        return {
+            "actor": "SOL", "surface": "shell",
+            "declared": True, "unique": False,
+        }
+    if not bindings:
+        return {
+            "actor": "SOL", "surface": "shell",
+            "declared": False, "unique": True,
+        }
+    binding = bindings[0]
+    return {
+        "actor": binding["actor"],
+        "surface": binding["surface"],
+        "declared": True,
+        "unique": True,
+    }
+
+
 def adaptive_difficulty_profile(value: Any) -> dict[str, Any]:
     """Normalize observable pre-execution difficulty facts.
 
@@ -1799,11 +1825,14 @@ def _adaptive_role_bindings(value: Any, field: str) -> list[dict[str, str]]:
 def _adaptive_matching_spec(
     value: Any, *, distribution_id: str, difficulty: Mapping[str, Any],
     coupling: str, risk: str, capabilities: list[dict[str, str]],
+    test_execution: Mapping[str, Any],
     modalities: list[str], output_kind: str, acceptance_kind: str,
     acceptance_protocol_version: str | None,
     acceptance_protocol_digest: str | None,
 ) -> dict[str, Any]:
     source = require_object(value, "adaptive task.matching_spec")
+    if not test_execution["unique"]:
+        raise PolicyError("test_execution capability binding must be unique")
     reject_unknown_fields(source, ADAPTIVE_MATCHING_SPEC_FIELDS, "adaptive task.matching_spec")
     if set(source) != ADAPTIVE_MATCHING_SPEC_FIELDS:
         raise PolicyError("adaptive task.matching_spec is incomplete")
@@ -1881,7 +1910,11 @@ def _adaptive_matching_spec(
     roles = _adaptive_role_bindings(source.get("role_bindings"), "matching_spec.role_bindings")
     expected_roles = [
         {"actor": "LUNA", "operation": "implementation", "surface": "filesystem"},
-        {"actor": "SOL", "operation": "test_execution", "surface": "shell"},
+        {
+            "actor": test_execution["actor"],
+            "operation": "test_execution",
+            "surface": test_execution["surface"],
+        },
     ]
     expected_roles.extend(
         {
@@ -2375,6 +2408,7 @@ def select_adaptive_route(
         raise PolicyError("size must be small, normal, or large")
     coordination = finite_number(source.get("coordination_overhead", 0), "coordination_overhead", minimum=0.0)
     capabilities = _adaptive_capabilities(source.get("required_tool_capabilities"))
+    test_execution = _adaptive_test_execution_binding(capabilities)
     difficulty = adaptive_difficulty_profile(source.get("difficulty_profile"))
     matching_spec = None
     if source.get("matching_spec") is not None:
@@ -2387,6 +2421,7 @@ def select_adaptive_route(
             coupling=coupling,
             risk=risk,
             capabilities=capabilities,
+            test_execution=test_execution,
             modalities=modalities,
             output_kind=output,
             acceptance_kind=kind,
@@ -2411,6 +2446,7 @@ def select_adaptive_route(
             *args, difficulty=difficulty, research_plan=research_plan,
             effort_selection=effort_selection, acceptance_suite_digest=suite_digest,
             task_contract_digest=task_contract_digest,
+            test_execution=test_execution,
         )
 
     cold_start = source.get("cold_start", False)
@@ -2460,6 +2496,11 @@ def select_adaptive_route(
             evidence, family, modalities, output, kind, distribution_id, suite_digest,
             difficulty["profile_fingerprint"],
         )
+        # Legacy evidence has no role binding.  Once a task explicitly binds
+        # test execution, only the digest-bound matching-spec path may reuse
+        # evidence for production.
+        if test_execution["declared"]:
+            evidence_match = None
     unavailable = [item["name"] for item in capabilities if item["status"] in {"unknown", "unavailable"}]
     visual = bool(set(modalities) & {"image", "screenshot", "document", "chart"}) or output in {"image", "document", "chart"}
     needs_visual_tool = visual or kind in {"visual_review", "document_review", "mixed_review"}
@@ -2497,6 +2538,8 @@ def select_adaptive_route(
         reviewers = [item for item in capabilities if item["operation"] in {"visual_review", "document_review"}]
         if len(reviewers) != 1:
             return route_result(family, "S0", "visual_acceptance_reviewer_not_unique", "MATCHED_EXPERIENCE" if evidence_match else "UNKNOWN", modalities, output, kind, capabilities, "SOL_ONLY", "gpt-5.6-sol", "high", coordination)
+    if not test_execution["unique"]:
+        return route_result(family, "S0", "test_execution_binding_not_unique", "UNKNOWN", modalities, output, kind, capabilities, "SOL_ONLY", "gpt-5.6-sol", "high", coordination)
     if matching_spec is not None:
         records_by_effort = (
             _adaptive_cross_instance_evidence(
@@ -2579,6 +2622,8 @@ def select_adaptive_route(
             return route_result(family, "S4", "budgeted_research_preregistered_counterfactual", "BUDGETED_RESEARCH_EXPLORATION", modalities, output, kind, capabilities, "SOL_LUNA", "gpt-5.6-luna", effort, coordination)
         if not cold_start and decision_context == "budgeted_research":
             return route_result(family, "S4", "budgeted_research_exploration", "BUDGETED_RESEARCH_EXPLORATION", modalities, output, kind, capabilities, "SOL_LUNA", "gpt-5.6-luna", effort, coordination)
+        if cold_start and test_execution["declared"]:
+            return route_result(family, "S0", "cold_start_explicit_test_execution_requires_matching_evidence", "UNKNOWN", modalities, output, kind, capabilities, "SOL_ONLY", "gpt-5.6-sol", "high", coordination)
         if not cold_start:
             return route_result(family, "S0", "production_route_requires_matching_evidence", "UNKNOWN", modalities, output, kind, capabilities, "SOL_ONLY", "gpt-5.6-sol", "high", coordination)
     # Production routes require complete economics.  Research S4 is the only
@@ -2646,9 +2691,19 @@ def _adaptive_result(
     coordination: float, *, difficulty: Mapping[str, Any],
     research_plan: Mapping[str, Any] | None, effort_selection: str,
     acceptance_suite_digest: str, task_contract_digest: str | None,
+    test_execution: Mapping[str, Any],
 ) -> dict[str, Any]:
     implementer = "LUNA" if route == "SOL_LUNA" else "SOL"
-    responsibilities = {"implementer": implementer, "final_acceptance_owner": "SOL"}
+    selected_test_execution = (
+        {"actor": test_execution["actor"], "surface": test_execution["surface"]}
+        if route == "SOL_LUNA"
+        else {"actor": "SOL", "surface": "shell"}
+    )
+    responsibilities = {
+        "implementer": implementer,
+        "test_execution": selected_test_execution,
+        "final_acceptance_owner": "SOL",
+    }
     if acceptance in {"visual_review", "document_review", "mixed_review"}:
         reviewer = (
             next((item["actor"] for item in capabilities
@@ -2684,6 +2739,7 @@ def _adaptive_result(
         "task_contract_digest": task_contract_digest,
         "difficulty_profile_fingerprint": difficulty.get("profile_fingerprint"),
         "effort_selection": effort_selection, "research_plan": research_plan,
+        "responsibilities": responsibilities,
     })).hexdigest()
     return result
 
