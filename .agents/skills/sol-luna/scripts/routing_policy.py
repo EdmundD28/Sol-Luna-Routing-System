@@ -1779,22 +1779,68 @@ ADAPTIVE_MATCHING_SPEC_FIELDS = {
     "role_bindings", "coupling", "risk", "repair_policy",
     "environment_boundary_digest", "spec_digest",
 }
+ADAPTIVE_MATCHING_SPEC_V2_IDENTITY_FIELDS = {
+    "controller_model", "controller_effort", "writer_model",
+    "baseline_model", "baseline_effort",
+}
+ADAPTIVE_MATCHING_SPEC_V2_FIELDS = (
+    ADAPTIVE_MATCHING_SPEC_FIELDS | ADAPTIVE_MATCHING_SPEC_V2_IDENTITY_FIELDS
+)
+ADAPTIVE_EXECUTION_CONFIGURATION_FIELDS = {
+    "schema_version", "controller_model", "controller_effort", "writer_model",
+    "baseline_model", "baseline_effort",
+}
+ADAPTIVE_CONTROLLER_EFFORTS = {"low", "medium", "high", "xhigh", "max", "ultra"}
 ADAPTIVE_REPAIR_POLICIES = {"no-repair", "one-focused-repair"}
 ADAPTIVE_CANDIDATE_ECONOMIC_FIELDS = {
     "effort", "execution_credits", "coordination_credits", "recovery_credits",
     "execution_seconds", "coordination_seconds", "recovery_seconds",
 }
 ADAPTIVE_BASELINE_ECONOMIC_FIELDS = {"baseline_credits", "baseline_seconds"}
+ADAPTIVE_CANDIDATE_ECONOMIC_V2_FIELDS = (
+    ADAPTIVE_CANDIDATE_ECONOMIC_FIELDS | {"complete_config_digest"}
+)
+ADAPTIVE_BASELINE_ECONOMIC_V2_FIELDS = (
+    ADAPTIVE_BASELINE_ECONOMIC_FIELDS | {"complete_config_digest"}
+)
 ADAPTIVE_CLUSTER_FIELDS = {
     "record_id", "matching_spec_digest", "semantic_cluster_id", "effort",
     "expected_member_ids", "members",
 }
+ADAPTIVE_CLUSTER_V2_FIELDS = ADAPTIVE_CLUSTER_FIELDS | {"complete_config_digest"}
 ADAPTIVE_CLUSTER_MEMBER_FIELDS = {
     "member_id", "instance_digest", "material_digest",
     "acceptance_instance_digest", "first_pass_accepted", "final_accepted",
     "repair_attempts", "final_defect",
 }
 ADAPTIVE_CANDIDATE_EFFORTS = ("low", "medium", "high")
+
+
+def _adaptive_execution_configuration(value: Any) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    source = require_object(value, "adaptive task.execution_configuration")
+    reject_unknown_fields(
+        source, ADAPTIVE_EXECUTION_CONFIGURATION_FIELDS,
+        "adaptive task.execution_configuration",
+    )
+    if set(source) != ADAPTIVE_EXECUTION_CONFIGURATION_FIELDS:
+        raise PolicyError("adaptive task.execution_configuration is incomplete")
+    if source.get("schema_version") != 1 or type(source.get("schema_version")) is not int:
+        raise PolicyError("adaptive task.execution_configuration.schema_version must be 1")
+    result = {"schema_version": 1}
+    for field in ("controller_model", "writer_model", "baseline_model"):
+        result[field] = require_string(
+            source.get(field), f"adaptive task.execution_configuration.{field}"
+        ).lower()
+    for field in ("controller_effort", "baseline_effort"):
+        effort = require_string(
+            source.get(field), f"adaptive task.execution_configuration.{field}"
+        ).lower()
+        if effort not in ADAPTIVE_CONTROLLER_EFFORTS:
+            raise PolicyError(f"adaptive task.execution_configuration.{field} is unsupported")
+        result[field] = effort
+    return result
 
 
 def _adaptive_role_bindings(value: Any, field: str) -> list[dict[str, str]]:
@@ -1822,10 +1868,82 @@ def _adaptive_role_bindings(value: Any, field: str) -> list[dict[str, str]]:
     return sorted(result, key=lambda item: (item["actor"], item["operation"], item["surface"]))
 
 
+def _adaptive_expected_role_bindings(
+    capabilities: list[dict[str, str]], test_execution: Mapping[str, Any],
+) -> list[dict[str, str]]:
+    roles = [
+        {"actor": "LUNA", "operation": "implementation", "surface": "filesystem"},
+        {
+            "actor": test_execution["actor"],
+            "operation": "test_execution",
+            "surface": test_execution["surface"],
+        },
+    ]
+    roles.extend(
+        {
+            "actor": item["actor"],
+            "operation": item["operation"],
+            "surface": item["surface"],
+        }
+        for item in capabilities
+    )
+    return [
+        {"actor": actor, "operation": operation, "surface": surface}
+        for actor, operation, surface in sorted({
+            (item["actor"], item["operation"], item["surface"])
+            for item in roles
+        })
+    ]
+
+
+def _adaptive_candidate_configuration(
+    configuration: Mapping[str, Any], role_bindings: list[dict[str, str]],
+    writer_effort: str,
+) -> dict[str, Any]:
+    effort = require_string(writer_effort, "writer_effort").lower()
+    if effort not in ADAPTIVE_CANDIDATE_EFFORTS:
+        raise PolicyError("writer_effort is unsupported")
+    return {
+        "schema_version": 1,
+        "route": "SOL_LUNA",
+        "controller_model": configuration["controller_model"],
+        "controller_effort": configuration["controller_effort"],
+        "writer_model": configuration["writer_model"],
+        "writer_effort": effort,
+        "baseline_model": configuration["baseline_model"],
+        "baseline_effort": configuration["baseline_effort"],
+        "role_bindings": role_bindings,
+    }
+
+
+def _adaptive_baseline_configuration(configuration: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "schema_version": 1,
+        "route": "SOL_ONLY",
+        "model": configuration["baseline_model"],
+        "effort": configuration["baseline_effort"],
+    }
+
+
+def _adaptive_configuration_digest(configuration: Mapping[str, Any]) -> str:
+    return "sha256:" + hashlib.sha256(canonical_json(configuration)).hexdigest()
+
+
+def _adaptive_candidate_configuration_digest(
+    matching_spec: Mapping[str, Any], writer_effort: str,
+) -> str:
+    if matching_spec.get("schema_version") != 2:
+        raise PolicyError("complete configuration digest requires matching_spec schema 2")
+    return _adaptive_configuration_digest(_adaptive_candidate_configuration(
+        matching_spec, matching_spec["role_bindings"], writer_effort,
+    ))
+
+
 def _adaptive_matching_spec(
     value: Any, *, distribution_id: str, difficulty: Mapping[str, Any],
     coupling: str, risk: str, capabilities: list[dict[str, str]],
     test_execution: Mapping[str, Any],
+    execution_configuration: Mapping[str, Any] | None,
     modalities: list[str], output_kind: str, acceptance_kind: str,
     acceptance_protocol_version: str | None,
     acceptance_protocol_digest: str | None,
@@ -1833,11 +1951,21 @@ def _adaptive_matching_spec(
     source = require_object(value, "adaptive task.matching_spec")
     if not test_execution["unique"]:
         raise PolicyError("test_execution capability binding must be unique")
-    reject_unknown_fields(source, ADAPTIVE_MATCHING_SPEC_FIELDS, "adaptive task.matching_spec")
-    if set(source) != ADAPTIVE_MATCHING_SPEC_FIELDS:
+    schema_version = source.get("schema_version")
+    if type(schema_version) is not int or schema_version not in {1, 2}:
+        raise PolicyError("adaptive task.matching_spec.schema_version must be 1 or 2")
+    expected_fields = (
+        ADAPTIVE_MATCHING_SPEC_FIELDS
+        if schema_version == 1
+        else ADAPTIVE_MATCHING_SPEC_V2_FIELDS
+    )
+    reject_unknown_fields(source, expected_fields, "adaptive task.matching_spec")
+    if set(source) != expected_fields:
         raise PolicyError("adaptive task.matching_spec is incomplete")
-    if source.get("schema_version") != 1 or type(source.get("schema_version")) is not int:
-        raise PolicyError("adaptive task.matching_spec.schema_version must be 1")
+    if schema_version == 1 and execution_configuration is not None:
+        raise PolicyError("matching_spec schema 1 cannot bind execution_configuration")
+    if schema_version == 2 and execution_configuration is None:
+        raise PolicyError("matching_spec schema 2 requires execution_configuration")
     supplied_digest = require_digest(source.get("spec_digest"), "matching_spec.spec_digest")
     payload = {key: value for key, value in source.items() if key != "spec_digest"}
     expected_digest = "sha256:" + hashlib.sha256(canonical_json(payload)).hexdigest()
@@ -1908,34 +2036,23 @@ def _adaptive_matching_spec(
         "matching_spec.environment_boundary_digest",
     )
     roles = _adaptive_role_bindings(source.get("role_bindings"), "matching_spec.role_bindings")
-    expected_roles = [
-        {"actor": "LUNA", "operation": "implementation", "surface": "filesystem"},
-        {
-            "actor": test_execution["actor"],
-            "operation": "test_execution",
-            "surface": test_execution["surface"],
-        },
-    ]
-    expected_roles.extend(
-        {
-            "actor": item["actor"],
-            "operation": item["operation"],
-            "surface": item["surface"],
-        }
-        for item in capabilities
-    )
-    expected_roles = sorted(
-        {(
-            item["actor"], item["operation"], item["surface"]
-        ) for item in expected_roles}
-    )
+    expected_roles = _adaptive_expected_role_bindings(capabilities, test_execution)
     observed_roles = [
         (item["actor"], item["operation"], item["surface"]) for item in roles
     ]
-    if observed_roles != expected_roles:
+    expected_role_tuples = [
+        (item["actor"], item["operation"], item["surface"])
+        for item in expected_roles
+    ]
+    if observed_roles != expected_role_tuples:
         raise PolicyError("matching_spec.role_bindings do not match task responsibilities")
-    return {
-        "schema_version": 1,
+    if schema_version == 2:
+        for field in ADAPTIVE_MATCHING_SPEC_V2_IDENTITY_FIELDS:
+            observed = require_string(source.get(field), f"matching_spec.{field}").lower()
+            if observed != execution_configuration[field]:
+                raise PolicyError(f"matching_spec.{field} does not match task execution_configuration")
+    result = {
+        "schema_version": schema_version,
         "distribution_id": distribution_id,
         "acceptance_protocol_version": protocol,
         "acceptance_protocol_digest": protocol_digest,
@@ -1951,21 +2068,34 @@ def _adaptive_matching_spec(
         "environment_boundary_digest": environment,
         "spec_digest": supplied_digest,
     }
+    if schema_version == 2:
+        result.update({
+            field: execution_configuration[field]
+            for field in ADAPTIVE_MATCHING_SPEC_V2_IDENTITY_FIELDS
+        })
+    return result
 
 
-def _adaptive_candidate_economics(value: Any) -> dict[str, dict[str, float]]:
+def _adaptive_candidate_economics(
+    value: Any, *, complete_config_digests: Mapping[str, str] | None,
+) -> dict[str, dict[str, Any]]:
     if value is None:
         return {}
     if not isinstance(value, list):
         raise PolicyError("adaptive task.candidate_economics must be an array")
     if not value:
         raise PolicyError("adaptive task.candidate_economics must not be empty")
-    result: dict[str, dict[str, float]] = {}
+    expected_fields = (
+        ADAPTIVE_CANDIDATE_ECONOMIC_FIELDS
+        if complete_config_digests is None
+        else ADAPTIVE_CANDIDATE_ECONOMIC_V2_FIELDS
+    )
+    result: dict[str, dict[str, Any]] = {}
     for index, raw in enumerate(value):
         prefix = f"adaptive task.candidate_economics[{index}]"
         item = require_object(raw, prefix)
-        reject_unknown_fields(item, ADAPTIVE_CANDIDATE_ECONOMIC_FIELDS, prefix)
-        if set(item) != ADAPTIVE_CANDIDATE_ECONOMIC_FIELDS:
+        reject_unknown_fields(item, expected_fields, prefix)
+        if set(item) != expected_fields:
             raise PolicyError(f"{prefix} is incomplete")
         effort = require_string(item.get("effort"), f"{prefix}.effort").lower()
         if effort not in ADAPTIVE_CANDIDATE_EFFORTS or effort in result:
@@ -1973,30 +2103,54 @@ def _adaptive_candidate_economics(value: Any) -> dict[str, dict[str, float]]:
         normalized = {"effort": effort}
         for field in ADAPTIVE_CANDIDATE_ECONOMIC_FIELDS - {"effort"}:
             normalized[field] = finite_number(item.get(field), f"{prefix}.{field}", minimum=0.0)
+        if complete_config_digests is not None:
+            digest = require_digest(
+                item.get("complete_config_digest"), f"{prefix}.complete_config_digest"
+            )
+            if digest != complete_config_digests[effort]:
+                raise PolicyError(f"{prefix}.complete_config_digest does not match task configuration")
+            normalized["complete_config_digest"] = digest
         result[effort] = normalized
     return result
 
 
-def _adaptive_baseline_economics(value: Any) -> dict[str, float]:
+def _adaptive_baseline_economics(
+    value: Any, *, complete_config_digest: str | None,
+) -> dict[str, Any]:
     if value is None:
         return {}
     source = require_object(value, "adaptive task.baseline_economics")
+    expected_fields = (
+        ADAPTIVE_BASELINE_ECONOMIC_FIELDS
+        if complete_config_digest is None
+        else ADAPTIVE_BASELINE_ECONOMIC_V2_FIELDS
+    )
     reject_unknown_fields(
-        source, ADAPTIVE_BASELINE_ECONOMIC_FIELDS,
+        source, expected_fields,
         "adaptive task.baseline_economics",
     )
-    if set(source) != ADAPTIVE_BASELINE_ECONOMIC_FIELDS:
+    if set(source) != expected_fields:
         raise PolicyError("adaptive task.baseline_economics is incomplete")
-    return {
+    result = {
         field: finite_number(
             source.get(field), f"adaptive task.baseline_economics.{field}", minimum=0.0,
         )
         for field in ADAPTIVE_BASELINE_ECONOMIC_FIELDS
     }
+    if complete_config_digest is not None:
+        digest = require_digest(
+            source.get("complete_config_digest"),
+            "adaptive task.baseline_economics.complete_config_digest",
+        )
+        if digest != complete_config_digest:
+            raise PolicyError("baseline_economics.complete_config_digest does not match baseline configuration")
+        result["complete_config_digest"] = digest
+    return result
 
 
 def _adaptive_cross_instance_evidence(
     value: Any, *, matching_spec_digest: str, repair_policy: str,
+    complete_config_digests: Mapping[str, str] | None,
 ) -> dict[str, list[dict[str, Any]]]:
     if not isinstance(value, _ExternallyBoundAdaptiveEvidencePool):
         raise PolicyError("cross-instance evidence must be externally bound")
@@ -2007,8 +2161,13 @@ def _adaptive_cross_instance_evidence(
     for index, raw in enumerate(value):
         prefix = f"verified_evidence_pool[{index}]"
         item = require_object(raw, prefix)
-        reject_unknown_fields(item, ADAPTIVE_CLUSTER_FIELDS, prefix)
-        if set(item) != ADAPTIVE_CLUSTER_FIELDS:
+        expected_fields = (
+            ADAPTIVE_CLUSTER_FIELDS
+            if complete_config_digests is None
+            else ADAPTIVE_CLUSTER_V2_FIELDS
+        )
+        reject_unknown_fields(item, expected_fields, prefix)
+        if set(item) != expected_fields:
             raise PolicyError(f"{prefix} is incomplete")
         record_id = require_string(item.get("record_id"), f"{prefix}.record_id")
         if not PACKAGE_ID.fullmatch(record_id) or record_id in record_ids:
@@ -2026,6 +2185,14 @@ def _adaptive_cross_instance_evidence(
         effort = require_string(item.get("effort"), f"{prefix}.effort").lower()
         if effort not in ADAPTIVE_CANDIDATE_EFFORTS:
             raise PolicyError(f"{prefix}.effort is unsupported")
+        complete_config_digest = None
+        if complete_config_digests is not None:
+            complete_config_digest = require_digest(
+                item.get("complete_config_digest"),
+                f"{prefix}.complete_config_digest",
+            )
+            if complete_config_digest != complete_config_digests[effort]:
+                raise PolicyError("verified_evidence_pool complete configuration drift")
         if cluster_id in cluster_ids[effort]:
             raise PolicyError("verified_evidence_pool contains a duplicate semantic cluster")
         cluster_ids[effort].add(cluster_id)
@@ -2108,6 +2275,7 @@ def _adaptive_cross_instance_evidence(
             ),
             "cluster_repair_observed": any(member["repair_attempts"] for member in members),
             "cluster_final_defect": any(member["final_defect"] for member in members),
+            "complete_config_digest": complete_config_digest,
         })
     for records in result.values():
         records.sort(key=lambda record: record["semantic_cluster_id"])
@@ -2171,6 +2339,8 @@ def _adaptive_candidate_evaluations(
             "eligible": False,
             "economic_basis": "DECLARED_POINT_ESTIMATES_PLUS_WILSON_FAILURE_BOUND_NOT_COST_BOUND",
         }
+        if economics is not None and economics.get("complete_config_digest") is not None:
+            evaluation["complete_config_digest"] = economics["complete_config_digest"]
         if not records:
             evaluations.append(evaluation)
             continue
@@ -2248,6 +2418,8 @@ def _attach_cross_instance_selection(
         "candidate": result["candidate"],
         "effort": result["effort"],
         "responsibilities": result["responsibilities"],
+        "selected_configuration": result.get("selected_configuration"),
+        "complete_config_digest": result.get("complete_config_digest"),
         "candidate_evaluations": evaluations,
         "selection_basis": result["selection_basis"],
         "trace_digests": result["trace_digests"],
@@ -2350,6 +2522,7 @@ def select_adaptive_route(
         "distribution_id", "decision_context", "difficulty_profile",
         "task_contract_digest", "material_digest", "research_exploration",
         "matching_spec", "candidate_economics", "baseline_economics",
+        "execution_configuration",
     }, "adaptive task")
     family = require_string(source.get("task_family"), "adaptive task.task_family")
     distribution_id = require_string(source.get("distribution_id"), "adaptive task.distribution_id")
@@ -2409,6 +2582,12 @@ def select_adaptive_route(
     coordination = finite_number(source.get("coordination_overhead", 0), "coordination_overhead", minimum=0.0)
     capabilities = _adaptive_capabilities(source.get("required_tool_capabilities"))
     test_execution = _adaptive_test_execution_binding(capabilities)
+    execution_configuration = _adaptive_execution_configuration(
+        source.get("execution_configuration")
+    )
+    declared_role_bindings = _adaptive_expected_role_bindings(
+        capabilities, test_execution
+    )
     difficulty = adaptive_difficulty_profile(source.get("difficulty_profile"))
     matching_spec = None
     if source.get("matching_spec") is not None:
@@ -2422,14 +2601,31 @@ def select_adaptive_route(
             risk=risk,
             capabilities=capabilities,
             test_execution=test_execution,
+            execution_configuration=execution_configuration,
             modalities=modalities,
             output_kind=output,
             acceptance_kind=kind,
             acceptance_protocol_version=acceptance_protocol_version,
             acceptance_protocol_digest=acceptance_protocol_digest,
         )
-    candidate_economics = _adaptive_candidate_economics(source.get("candidate_economics"))
-    baseline_economics = _adaptive_baseline_economics(source.get("baseline_economics"))
+    complete_config_digests = None
+    baseline_complete_config_digest = None
+    if matching_spec is not None and matching_spec["schema_version"] == 2:
+        complete_config_digests = {
+            effort: _adaptive_candidate_configuration_digest(matching_spec, effort)
+            for effort in ADAPTIVE_CANDIDATE_EFFORTS
+        }
+        baseline_complete_config_digest = _adaptive_configuration_digest(
+            _adaptive_baseline_configuration(execution_configuration)
+        )
+    candidate_economics = _adaptive_candidate_economics(
+        source.get("candidate_economics"),
+        complete_config_digests=complete_config_digests,
+    )
+    baseline_economics = _adaptive_baseline_economics(
+        source.get("baseline_economics"),
+        complete_config_digest=baseline_complete_config_digest,
+    )
     if matching_spec is None and (candidate_economics or baseline_economics):
         raise PolicyError("candidate_economics and baseline_economics require matching_spec")
     if matching_spec is None and verified_evidence_pool is not None:
@@ -2447,6 +2643,8 @@ def select_adaptive_route(
             effort_selection=effort_selection, acceptance_suite_digest=suite_digest,
             task_contract_digest=task_contract_digest,
             test_execution=test_execution,
+            execution_configuration=execution_configuration,
+            declared_role_bindings=declared_role_bindings,
         )
 
     cold_start = source.get("cold_start", False)
@@ -2501,6 +2699,8 @@ def select_adaptive_route(
         # evidence for production.
         if test_execution["declared"]:
             evidence_match = None
+        if execution_configuration is not None:
+            evidence_match = None
     unavailable = [item["name"] for item in capabilities if item["status"] in {"unknown", "unavailable"}]
     visual = bool(set(modalities) & {"image", "screenshot", "document", "chart"}) or output in {"image", "document", "chart"}
     needs_visual_tool = visual or kind in {"visual_review", "document_review", "mixed_review"}
@@ -2546,6 +2746,7 @@ def select_adaptive_route(
                 verified_evidence_pool,
                 matching_spec_digest=matching_spec["spec_digest"],
                 repair_policy=matching_spec["repair_policy"],
+                complete_config_digests=complete_config_digests,
             )
             if verified_evidence_pool is not None
             else {effort: [] for effort in ADAPTIVE_CANDIDATE_EFFORTS}
@@ -2622,7 +2823,9 @@ def select_adaptive_route(
             return route_result(family, "S4", "budgeted_research_preregistered_counterfactual", "BUDGETED_RESEARCH_EXPLORATION", modalities, output, kind, capabilities, "SOL_LUNA", "gpt-5.6-luna", effort, coordination)
         if not cold_start and decision_context == "budgeted_research":
             return route_result(family, "S4", "budgeted_research_exploration", "BUDGETED_RESEARCH_EXPLORATION", modalities, output, kind, capabilities, "SOL_LUNA", "gpt-5.6-luna", effort, coordination)
-        if cold_start and test_execution["declared"]:
+        if cold_start and (
+            test_execution["declared"] or execution_configuration is not None
+        ):
             return route_result(family, "S0", "cold_start_explicit_test_execution_requires_matching_evidence", "UNKNOWN", modalities, output, kind, capabilities, "SOL_ONLY", "gpt-5.6-sol", "high", coordination)
         if not cold_start:
             return route_result(family, "S0", "production_route_requires_matching_evidence", "UNKNOWN", modalities, output, kind, capabilities, "SOL_ONLY", "gpt-5.6-sol", "high", coordination)
@@ -2692,7 +2895,26 @@ def _adaptive_result(
     research_plan: Mapping[str, Any] | None, effort_selection: str,
     acceptance_suite_digest: str, task_contract_digest: str | None,
     test_execution: Mapping[str, Any],
+    execution_configuration: Mapping[str, Any] | None,
+    declared_role_bindings: list[dict[str, str]],
 ) -> dict[str, Any]:
+    selected_configuration = None
+    complete_config_digest = None
+    if execution_configuration is not None:
+        if route == "SOL_ONLY":
+            selected_configuration = _adaptive_baseline_configuration(
+                execution_configuration
+            )
+            model = execution_configuration["baseline_model"]
+            effort = execution_configuration["baseline_effort"]
+        else:
+            selected_configuration = _adaptive_candidate_configuration(
+                execution_configuration, declared_role_bindings, effort,
+            )
+            model = execution_configuration["writer_model"]
+        complete_config_digest = _adaptive_configuration_digest(
+            selected_configuration
+        )
     implementer = "LUNA" if route == "SOL_LUNA" else "SOL"
     selected_test_execution = (
         {"actor": test_execution["actor"], "surface": test_execution["surface"]}
@@ -2733,6 +2955,9 @@ def _adaptive_result(
     }
     if research_plan is not None:
         result["research_plan"] = dict(research_plan)
+    if selected_configuration is not None:
+        result["selected_configuration"] = selected_configuration
+        result["complete_config_digest"] = complete_config_digest
     result["execution_token"] = hashlib.sha256(canonical_json({
         "family": family, "candidate": candidate, "route": route, "effort": effort,
         "reason": reason, "acceptance_suite_digest": acceptance_suite_digest,
@@ -2740,20 +2965,38 @@ def _adaptive_result(
         "difficulty_profile_fingerprint": difficulty.get("profile_fingerprint"),
         "effort_selection": effort_selection, "research_plan": research_plan,
         "responsibilities": responsibilities,
+        "selected_configuration": selected_configuration,
+        "complete_config_digest": complete_config_digest,
     })).hexdigest()
     return result
 
 
 def validate_adaptive_execution(selection: Mapping[str, Any], actual: Mapping[str, Any]) -> dict[str, Any]:
-    """Fail closed when the selected route and the observed execution diverge."""
+    """Compare a caller-supplied execution record with the selected route.
+
+    The caller remains responsible for sourcing ``actual`` from trusted host
+    evidence.  This function checks record consistency; it does not inspect
+    host logs or independently attest which model actually ran.
+    """
     selected = require_object(selection, "adaptive selection")
     observed = require_object(actual, "adaptive execution")
     allowed = {"route", "candidate", "model", "effort", "execution_token", "responsibilities"}
+    configuration_fields = set()
+    if "selected_configuration" in selected or "complete_config_digest" in selected:
+        if not {
+            "selected_configuration", "complete_config_digest",
+        }.issubset(selected):
+            raise PolicyError("adaptive selection configuration identity is incomplete")
+        configuration_fields = {"selected_configuration", "complete_config_digest"}
+        allowed.update(configuration_fields)
     research_plan = selected.get("research_plan")
     if research_plan is not None:
         allowed.update({"research_plan", "research_receipt"})
     reject_unknown_fields(observed, allowed, "adaptive execution")
-    for field in ("route", "candidate", "model", "effort", "execution_token", "responsibilities"):
+    for field in (
+        "route", "candidate", "model", "effort", "execution_token",
+        "responsibilities", *sorted(configuration_fields),
+    ):
         if observed.get(field) != selected.get(field):
             raise PolicyError(f"adaptive execution mismatch: {field}")
     result = {

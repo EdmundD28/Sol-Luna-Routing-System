@@ -419,17 +419,42 @@ class RoutingPolicyTests(unittest.TestCase):
             "repair_policy": "one-focused-repair",
             "environment_boundary_digest": "sha256:" + "e" * 64,
         }
+        execution_configuration = task.get("execution_configuration")
+        if execution_configuration is not None:
+            spec["schema_version"] = 2
+            spec.update({
+                field: execution_configuration[field]
+                for field in (
+                    "controller_model", "controller_effort", "writer_model",
+                    "baseline_model", "baseline_effort",
+                )
+            })
         spec.update(overrides)
         spec["spec_digest"] = "sha256:" + hashlib.sha256(
             ROUTING.canonical_json(spec)
         ).hexdigest()
         return spec
 
-    def adaptive_candidate_economics(self, **execution_credits: float) -> list[dict]:
+    def adaptive_execution_configuration(self, **overrides: object) -> dict:
+        configuration = {
+            "schema_version": 1,
+            "controller_model": "gpt-5.6-sol",
+            "controller_effort": "high",
+            "writer_model": "gpt-5.6-luna",
+            "baseline_model": "gpt-5.6-sol",
+            "baseline_effort": "high",
+        }
+        configuration.update(overrides)
+        return configuration
+
+    def adaptive_candidate_economics(
+        self, matching_spec: dict | None = None, **execution_credits: float,
+    ) -> list[dict]:
         defaults = {"low": 24.0, "medium": 18.0, "high": 12.0}
         defaults.update(execution_credits)
-        return [
-            {
+        result = []
+        for index, effort in enumerate(("low", "medium", "high")):
+            item = {
                 "effort": effort,
                 "execution_credits": defaults[effort],
                 "coordination_credits": 5.0,
@@ -438,8 +463,14 @@ class RoutingPolicyTests(unittest.TestCase):
                 "coordination_seconds": 5.0,
                 "recovery_seconds": 10.0,
             }
-            for index, effort in enumerate(("low", "medium", "high"))
-        ]
+            if matching_spec is not None and matching_spec["schema_version"] == 2:
+                item["complete_config_digest"] = (
+                    ROUTING._adaptive_candidate_configuration_digest(
+                        matching_spec, effort
+                    )
+                )
+            result.append(item)
+        return result
 
     def adaptive_cluster(
         self, spec: dict, effort: str, index: int, *,
@@ -449,7 +480,7 @@ class RoutingPolicyTests(unittest.TestCase):
         missing_last: bool = False,
     ) -> dict:
         present = member_ids[:-1] if missing_last else member_ids
-        return {
+        result = {
             "record_id": f"{effort}-record-{index}",
             "matching_spec_digest": spec["spec_digest"],
             "semantic_cluster_id": f"cluster-{index}",
@@ -475,6 +506,11 @@ class RoutingPolicyTests(unittest.TestCase):
                 for member_id in present
             ],
         }
+        if spec["schema_version"] == 2:
+            result["complete_config_digest"] = (
+                ROUTING._adaptive_candidate_configuration_digest(spec, effort)
+            )
+        return result
 
     def adaptive_cross_instance_task(self, **overrides: object) -> dict:
         task = self.adaptive_task(
@@ -489,11 +525,21 @@ class RoutingPolicyTests(unittest.TestCase):
             protocol_digest="sha256:" + "c" * 64,
         )
         task["matching_spec"] = self.adaptive_matching_spec(task)
-        task["candidate_economics"] = self.adaptive_candidate_economics()
+        task["candidate_economics"] = self.adaptive_candidate_economics(
+            task["matching_spec"]
+        )
         task["baseline_economics"] = {
             "baseline_credits": 100.0,
             "baseline_seconds": 100.0,
         }
+        if task["matching_spec"]["schema_version"] == 2:
+            task["baseline_economics"]["complete_config_digest"] = (
+                ROUTING._adaptive_configuration_digest(
+                    ROUTING._adaptive_baseline_configuration(
+                        task["execution_configuration"]
+                    )
+                )
+            )
         return task
 
     def bound_adaptive_pool(self, records: list[dict]) -> object:
@@ -910,6 +956,187 @@ class RoutingPolicyTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(ROUTING.PolicyError, "role_bindings"):
             ROUTING.select_adaptive_route(undeclared)
+
+    def test_cross_instance_v2_configuration_identity_binds_selection_and_execution(self) -> None:
+        configuration = self.adaptive_execution_configuration(
+            controller_effort="low", baseline_effort="high",
+        )
+        luna_test = {
+            "name": "luna-tests",
+            "status": "host-observed",
+            "source": "host-observed",
+            "operation": "test_execution",
+            "actor": "LUNA",
+            "surface": "shell",
+        }
+        task = self.adaptive_cross_instance_task(
+            execution_configuration=configuration,
+            required_tool_capabilities=[luna_test],
+        )
+
+        fallback = ROUTING.select_adaptive_route(task)
+        self.assertEqual(
+            (fallback["candidate"], fallback["route"], fallback["evidence_status"]),
+            ("S0", "SOL_ONLY", "UNKNOWN"),
+        )
+        self.assertEqual(
+            (fallback["model"], fallback["effort"]),
+            (configuration["baseline_model"], configuration["baseline_effort"]),
+        )
+        self.assertEqual(
+            fallback["selected_configuration"],
+            ROUTING._adaptive_baseline_configuration(configuration),
+        )
+        self.assertEqual(
+            fallback["complete_config_digest"],
+            task["baseline_economics"]["complete_config_digest"],
+        )
+        self.assertEqual(
+            fallback["responsibilities"]["test_execution"],
+            {"actor": "SOL", "surface": "shell"},
+        )
+
+        records = [
+            self.adaptive_cluster(task["matching_spec"], "low", index)
+            for index in range(16)
+        ]
+        selected = ROUTING.select_adaptive_route(
+            task, verified_evidence_pool=self.bound_adaptive_pool(records)
+        )
+        self.assertEqual((selected["candidate"], selected["route"]), ("S1", "SOL_LUNA"))
+        self.assertEqual(
+            selected["selected_configuration"],
+            ROUTING._adaptive_candidate_configuration(
+                configuration,
+                task["matching_spec"]["role_bindings"],
+                "low",
+            ),
+        )
+        expected_digest = ROUTING._adaptive_candidate_configuration_digest(
+            task["matching_spec"], "low"
+        )
+        self.assertEqual(selected["complete_config_digest"], expected_digest)
+        self.assertEqual(records[0]["complete_config_digest"], expected_digest)
+        self.assertEqual(
+            next(
+                item for item in task["candidate_economics"]
+                if item["effort"] == "low"
+            )["complete_config_digest"],
+            expected_digest,
+        )
+        self.assertEqual(
+            selected["responsibilities"]["test_execution"],
+            {"actor": "LUNA", "surface": "shell"},
+        )
+        actual = {
+            key: selected[key]
+            for key in (
+                "route", "candidate", "model", "effort", "execution_token",
+                "responsibilities", "selected_configuration",
+                "complete_config_digest",
+            )
+        }
+        self.assertTrue(ROUTING.validate_adaptive_execution(selected, actual)["valid"])
+        drifted_actual = dict(actual)
+        drifted_actual["selected_configuration"] = dict(
+            actual["selected_configuration"], controller_effort="high"
+        )
+        with self.assertRaisesRegex(ROUTING.PolicyError, "selected_configuration"):
+            ROUTING.validate_adaptive_execution(selected, drifted_actual)
+
+    def test_cross_instance_v2_rejects_identity_evidence_and_economics_drift(self) -> None:
+        configuration = self.adaptive_execution_configuration(
+            controller_effort="low", baseline_effort="high",
+        )
+        task = self.adaptive_cross_instance_task(
+            execution_configuration=configuration,
+        )
+
+        for field, value in (
+            ("controller_model", "gpt-6-astra"),
+            ("controller_effort", "medium"),
+            ("writer_model", "gpt-5.6-terra"),
+            ("baseline_model", "gpt-6-astra"),
+            ("baseline_effort", "medium"),
+        ):
+            drifted = dict(task)
+            drifted["execution_configuration"] = dict(
+                configuration, **{field: value}
+            )
+            with self.subTest(identity_field=field), self.assertRaisesRegex(
+                ROUTING.PolicyError, field
+            ):
+                ROUTING.select_adaptive_route(drifted)
+
+        old_economics = dict(task)
+        old_economics["candidate_economics"] = self.adaptive_candidate_economics()
+        with self.assertRaisesRegex(ROUTING.PolicyError, "incomplete"):
+            ROUTING.select_adaptive_route(old_economics)
+
+        wrong_candidate_economics = dict(task)
+        wrong_candidate_economics["candidate_economics"] = [
+            dict(item) for item in task["candidate_economics"]
+        ]
+        wrong_candidate_economics["candidate_economics"][0][
+            "complete_config_digest"
+        ] = "sha256:" + "f" * 64
+        with self.assertRaisesRegex(ROUTING.PolicyError, "complete_config_digest"):
+            ROUTING.select_adaptive_route(wrong_candidate_economics)
+
+        missing_baseline_identity = dict(task)
+        missing_baseline_identity["baseline_economics"] = {
+            "baseline_credits": 100.0, "baseline_seconds": 100.0,
+        }
+        with self.assertRaisesRegex(ROUTING.PolicyError, "incomplete"):
+            ROUTING.select_adaptive_route(missing_baseline_identity)
+
+        wrong_baseline_identity = dict(task)
+        wrong_baseline_identity["baseline_economics"] = dict(
+            task["baseline_economics"],
+            complete_config_digest="sha256:" + "f" * 64,
+        )
+        with self.assertRaisesRegex(ROUTING.PolicyError, "baseline_economics"):
+            ROUTING.select_adaptive_route(wrong_baseline_identity)
+
+        record = self.adaptive_cluster(task["matching_spec"], "low", 0)
+        missing_record_identity = dict(record)
+        missing_record_identity.pop("complete_config_digest")
+        with self.assertRaisesRegex(ROUTING.PolicyError, "incomplete"):
+            ROUTING.select_adaptive_route(
+                task,
+                verified_evidence_pool=self.bound_adaptive_pool(
+                    [missing_record_identity]
+                ),
+            )
+        wrong_record_identity = dict(
+            record, complete_config_digest="sha256:" + "f" * 64
+        )
+        with self.assertRaisesRegex(ROUTING.PolicyError, "configuration drift"):
+            ROUTING.select_adaptive_route(
+                task,
+                verified_evidence_pool=self.bound_adaptive_pool(
+                    [wrong_record_identity]
+                ),
+            )
+
+        other_task = self.adaptive_cross_instance_task(
+            execution_configuration=self.adaptive_execution_configuration(
+                controller_effort="high"
+            )
+        )
+        mixed_records = [
+            self.adaptive_cluster(task["matching_spec"], effort, index)
+            for effort in ("medium", "high")
+            for index in range(16)
+        ]
+        mixed_records[-1] = self.adaptive_cluster(
+            other_task["matching_spec"], "high", 15
+        )
+        with self.assertRaisesRegex(ROUTING.PolicyError, "matching_spec drift"):
+            ROUTING.select_adaptive_route(
+                task,
+                verified_evidence_pool=self.bound_adaptive_pool(mixed_records),
+            )
 
     def test_cross_instance_matching_spec_rejects_drift_and_inline_claims(self) -> None:
         task = self.adaptive_cross_instance_task()
