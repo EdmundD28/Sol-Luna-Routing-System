@@ -1792,6 +1792,14 @@ ADAPTIVE_EXECUTION_CONFIGURATION_FIELDS = {
 }
 ADAPTIVE_CONTROLLER_EFFORTS = {"low", "medium", "high", "xhigh", "max", "ultra"}
 ADAPTIVE_REPAIR_POLICIES = {"no-repair", "one-focused-repair"}
+ADAPTIVE_ECONOMIC_MEASUREMENT_SPEC_FIELDS = {
+    "schema_version", "credit_unit", "rate_card_id", "rate_card_digest",
+    "time_unit", "time_scope",
+}
+ADAPTIVE_ECONOMIC_CREDIT_UNIT = "token_rate_proxy_credits"
+ADAPTIVE_ECONOMIC_TIME_UNIT = "seconds"
+ADAPTIVE_ECONOMIC_TIME_SCOPE = "complete_route_wall_clock"
+
 ADAPTIVE_CANDIDATE_ECONOMIC_FIELDS = {
     "effort", "execution_credits", "coordination_credits", "recovery_credits",
     "execution_seconds", "coordination_seconds", "recovery_seconds",
@@ -2076,8 +2084,69 @@ def _adaptive_matching_spec(
     return result
 
 
+def adaptive_economic_measurement_spec(value: Any) -> dict[str, Any] | None:
+    """Normalize the declared accounting basis without attesting its truth."""
+
+    if value is None:
+        return None
+    source = require_object(value, "adaptive task.economic_measurement_spec")
+    reject_unknown_fields(
+        source, ADAPTIVE_ECONOMIC_MEASUREMENT_SPEC_FIELDS,
+        "adaptive task.economic_measurement_spec",
+    )
+    if set(source) != ADAPTIVE_ECONOMIC_MEASUREMENT_SPEC_FIELDS:
+        raise PolicyError("adaptive task.economic_measurement_spec is incomplete")
+    schema_version = integer(
+        source.get("schema_version"),
+        "adaptive task.economic_measurement_spec.schema_version",
+        minimum=1,
+    )
+    if schema_version != 1:
+        raise PolicyError("economic_measurement_spec.schema_version must be 1")
+    credit_unit = require_string(
+        source.get("credit_unit"),
+        "adaptive task.economic_measurement_spec.credit_unit",
+    )
+    if credit_unit != ADAPTIVE_ECONOMIC_CREDIT_UNIT:
+        raise PolicyError(
+            "economic_measurement_spec.credit_unit must be token_rate_proxy_credits"
+        )
+    time_unit = require_string(
+        source.get("time_unit"),
+        "adaptive task.economic_measurement_spec.time_unit",
+    )
+    if time_unit != ADAPTIVE_ECONOMIC_TIME_UNIT:
+        raise PolicyError("economic_measurement_spec.time_unit must be seconds")
+    time_scope = require_string(
+        source.get("time_scope"),
+        "adaptive task.economic_measurement_spec.time_scope",
+    )
+    if time_scope != ADAPTIVE_ECONOMIC_TIME_SCOPE:
+        raise PolicyError(
+            "economic_measurement_spec.time_scope must be complete_route_wall_clock"
+        )
+    normalized = {
+        "schema_version": schema_version,
+        "credit_unit": credit_unit,
+        "rate_card_id": require_string(
+            source.get("rate_card_id"),
+            "adaptive task.economic_measurement_spec.rate_card_id",
+        ),
+        "rate_card_digest": require_digest(
+            source.get("rate_card_digest"),
+            "adaptive task.economic_measurement_spec.rate_card_digest",
+        ),
+        "time_unit": time_unit,
+        "time_scope": time_scope,
+    }
+    normalized["economic_measurement_digest"] = "sha256:" + hashlib.sha256(
+        canonical_json(normalized)
+    ).hexdigest()
+    return normalized
+
 def _adaptive_candidate_economics(
     value: Any, *, complete_config_digests: Mapping[str, str] | None,
+    economic_measurement_digest: str | None,
 ) -> dict[str, dict[str, Any]]:
     if value is None:
         return {}
@@ -2090,6 +2159,9 @@ def _adaptive_candidate_economics(
         if complete_config_digests is None
         else ADAPTIVE_CANDIDATE_ECONOMIC_V2_FIELDS
     )
+    expected_fields = set(expected_fields)
+    if economic_measurement_digest is not None:
+        expected_fields.add("economic_measurement_digest")
     result: dict[str, dict[str, Any]] = {}
     for index, raw in enumerate(value):
         prefix = f"adaptive task.candidate_economics[{index}]"
@@ -2110,12 +2182,23 @@ def _adaptive_candidate_economics(
             if digest != complete_config_digests[effort]:
                 raise PolicyError(f"{prefix}.complete_config_digest does not match task configuration")
             normalized["complete_config_digest"] = digest
+        if economic_measurement_digest is not None:
+            measurement_digest = require_digest(
+                item.get("economic_measurement_digest"),
+                f"{prefix}.economic_measurement_digest",
+            )
+            if measurement_digest != economic_measurement_digest:
+                raise PolicyError(
+                    f"{prefix}.economic_measurement_digest does not match task declaration"
+                )
+            normalized["economic_measurement_digest"] = measurement_digest
         result[effort] = normalized
     return result
 
 
 def _adaptive_baseline_economics(
     value: Any, *, complete_config_digest: str | None,
+    economic_measurement_digest: str | None,
 ) -> dict[str, Any]:
     if value is None:
         return {}
@@ -2125,6 +2208,9 @@ def _adaptive_baseline_economics(
         if complete_config_digest is None
         else ADAPTIVE_BASELINE_ECONOMIC_V2_FIELDS
     )
+    expected_fields = set(expected_fields)
+    if economic_measurement_digest is not None:
+        expected_fields.add("economic_measurement_digest")
     reject_unknown_fields(
         source, expected_fields,
         "adaptive task.baseline_economics",
@@ -2145,6 +2231,16 @@ def _adaptive_baseline_economics(
         if digest != complete_config_digest:
             raise PolicyError("baseline_economics.complete_config_digest does not match baseline configuration")
         result["complete_config_digest"] = digest
+    if economic_measurement_digest is not None:
+        measurement_digest = require_digest(
+            source.get("economic_measurement_digest"),
+            "adaptive task.baseline_economics.economic_measurement_digest",
+        )
+        if measurement_digest != economic_measurement_digest:
+            raise PolicyError(
+                "baseline_economics.economic_measurement_digest does not match task declaration"
+            )
+        result["economic_measurement_digest"] = measurement_digest
     return result
 
 
@@ -2315,13 +2411,21 @@ def _adaptive_comparator_matches(
 
 def _adaptive_candidate_evaluations(
     records_by_effort: Mapping[str, list[dict[str, Any]]],
-    economics_by_effort: Mapping[str, Mapping[str, float]],
-    baseline_economics: Mapping[str, float],
+    economics_by_effort: Mapping[str, Mapping[str, Any]],
+    baseline_economics: Mapping[str, Any],
+    economic_measurement: Mapping[str, Any] | None,
 ) -> list[dict[str, Any]]:
     evaluations: list[dict[str, Any]] = []
     for effort in ADAPTIVE_CANDIDATE_EFFORTS:
         records = records_by_effort.get(effort, [])
         economics = economics_by_effort.get(effort)
+        measurement_status = "LEGACY_UNSPECIFIED"
+        if economic_measurement is not None:
+            measurement_status = (
+                "DECLARED_MATCHED"
+                if economics is not None and baseline_economics
+                else "DECLARED_NOT_PROVIDED"
+            )
         evaluation: dict[str, Any] = {
             "effort": effort,
             "semantic_clusters": len(records),
@@ -2338,7 +2442,12 @@ def _adaptive_candidate_evaluations(
             "status": "EVIDENCE_UNKNOWN" if not records else "PENDING",
             "eligible": False,
             "economic_basis": "DECLARED_POINT_ESTIMATES_PLUS_WILSON_FAILURE_BOUND_NOT_COST_BOUND",
+            "economic_measurement_status": measurement_status,
         }
+        if economic_measurement is not None:
+            evaluation["economic_measurement_digest"] = (
+                economic_measurement["economic_measurement_digest"]
+            )
         if economics is not None and economics.get("complete_config_digest") is not None:
             evaluation["complete_config_digest"] = economics["complete_config_digest"]
         if not records:
@@ -2420,6 +2529,9 @@ def _attach_cross_instance_selection(
         "responsibilities": result["responsibilities"],
         "selected_configuration": result.get("selected_configuration"),
         "complete_config_digest": result.get("complete_config_digest"),
+        "economic_measurement_status": result.get("economic_measurement_status"),
+        "economic_measurement_spec": result.get("economic_measurement_spec"),
+        "economic_measurement_digest": result.get("economic_measurement_digest"),
         "candidate_evaluations": evaluations,
         "selection_basis": result["selection_basis"],
         "trace_digests": result["trace_digests"],
@@ -2522,7 +2634,7 @@ def select_adaptive_route(
         "distribution_id", "decision_context", "difficulty_profile",
         "task_contract_digest", "material_digest", "research_exploration",
         "matching_spec", "candidate_economics", "baseline_economics",
-        "execution_configuration",
+        "execution_configuration", "economic_measurement_spec",
     }, "adaptive task")
     family = require_string(source.get("task_family"), "adaptive task.task_family")
     distribution_id = require_string(source.get("distribution_id"), "adaptive task.distribution_id")
@@ -2585,6 +2697,13 @@ def select_adaptive_route(
     execution_configuration = _adaptive_execution_configuration(
         source.get("execution_configuration")
     )
+    economic_measurement = adaptive_economic_measurement_spec(
+        source.get("economic_measurement_spec")
+    )
+    if economic_measurement is not None and execution_configuration is None:
+        raise PolicyError(
+            "economic_measurement_spec requires execution_configuration"
+        )
     declared_role_bindings = _adaptive_expected_role_bindings(
         capabilities, test_execution
     )
@@ -2621,10 +2740,27 @@ def select_adaptive_route(
     candidate_economics = _adaptive_candidate_economics(
         source.get("candidate_economics"),
         complete_config_digests=complete_config_digests,
+        economic_measurement_digest=(
+            economic_measurement["economic_measurement_digest"]
+            if economic_measurement is not None else None
+        ),
     )
     baseline_economics = _adaptive_baseline_economics(
         source.get("baseline_economics"),
         complete_config_digest=baseline_complete_config_digest,
+        economic_measurement_digest=(
+            economic_measurement["economic_measurement_digest"]
+            if economic_measurement is not None else None
+        ),
+    )
+    economic_measurement_status = (
+        "LEGACY_UNSPECIFIED"
+        if economic_measurement is None
+        else (
+            "DECLARED_BOUND"
+            if candidate_economics and baseline_economics
+            else "DECLARED_NOT_EVALUATED"
+        )
     )
     if matching_spec is None and (candidate_economics or baseline_economics):
         raise PolicyError("candidate_economics and baseline_economics require matching_spec")
@@ -2645,6 +2781,8 @@ def select_adaptive_route(
             test_execution=test_execution,
             execution_configuration=execution_configuration,
             declared_role_bindings=declared_role_bindings,
+            economic_measurement=economic_measurement,
+            economic_measurement_status=economic_measurement_status,
         )
 
     cold_start = source.get("cold_start", False)
@@ -2662,6 +2800,10 @@ def select_adaptive_route(
     elif constraints is not None:
         raise PolicyError("cold_start_constraints requires cold_start")
     economics = source.get("economics")
+    if economic_measurement is not None and economics is not None:
+        raise PolicyError(
+            "economic_measurement_spec cannot bind legacy economics"
+        )
     if economics is not None:
         economics = require_object(economics, "adaptive task.economics")
         reject_unknown_fields(economics, {
@@ -2752,7 +2894,8 @@ def select_adaptive_route(
             else {effort: [] for effort in ADAPTIVE_CANDIDATE_EFFORTS}
         )
         evaluations = _adaptive_candidate_evaluations(
-            records_by_effort, candidate_economics, baseline_economics
+            records_by_effort, candidate_economics, baseline_economics,
+            economic_measurement,
         )
         eligible = [item for item in evaluations if item["eligible"]]
         effort_selection = "ENUMERATED_MATCHED_EVIDENCE"
@@ -2897,6 +3040,8 @@ def _adaptive_result(
     test_execution: Mapping[str, Any],
     execution_configuration: Mapping[str, Any] | None,
     declared_role_bindings: list[dict[str, str]],
+    economic_measurement: Mapping[str, Any] | None,
+    economic_measurement_status: str,
 ) -> dict[str, Any]:
     selected_configuration = None
     complete_config_digest = None
@@ -2952,7 +3097,13 @@ def _adaptive_result(
         "difficulty": dict(difficulty), "effort_selection": effort_selection,
         "acceptance_suite_digest": acceptance_suite_digest,
         "task_contract_digest": task_contract_digest,
+        "economic_measurement_status": economic_measurement_status,
     }
+    if economic_measurement is not None:
+        result["economic_measurement_spec"] = dict(economic_measurement)
+        result["economic_measurement_digest"] = economic_measurement[
+            "economic_measurement_digest"
+        ]
     if research_plan is not None:
         result["research_plan"] = dict(research_plan)
     if selected_configuration is not None:
@@ -2967,6 +3118,12 @@ def _adaptive_result(
         "responsibilities": responsibilities,
         "selected_configuration": selected_configuration,
         "complete_config_digest": complete_config_digest,
+        "economic_measurement_status": economic_measurement_status,
+        "economic_measurement_spec": economic_measurement,
+        "economic_measurement_digest": (
+            economic_measurement["economic_measurement_digest"]
+            if economic_measurement is not None else None
+        ),
     })).hexdigest()
     return result
 
@@ -2982,6 +3139,22 @@ def validate_adaptive_execution(selection: Mapping[str, Any], actual: Mapping[st
     observed = require_object(actual, "adaptive execution")
     allowed = {"route", "candidate", "model", "effort", "execution_token", "responsibilities"}
     configuration_fields = set()
+    measurement_status = selected.get(
+        "economic_measurement_status", "LEGACY_UNSPECIFIED"
+    )
+    measurement_fields = set()
+    if measurement_status != "LEGACY_UNSPECIFIED":
+        measurement_fields = {
+            "economic_measurement_status", "economic_measurement_spec",
+            "economic_measurement_digest",
+        }
+        if not measurement_fields.issubset(selected):
+            raise PolicyError(
+                "adaptive selection economic measurement identity is incomplete"
+            )
+        allowed.update(measurement_fields)
+    elif "economic_measurement_status" in observed:
+        allowed.add("economic_measurement_status")
     if "selected_configuration" in selected or "complete_config_digest" in selected:
         if not {
             "selected_configuration", "complete_config_digest",
@@ -2996,9 +3169,18 @@ def validate_adaptive_execution(selection: Mapping[str, Any], actual: Mapping[st
     for field in (
         "route", "candidate", "model", "effort", "execution_token",
         "responsibilities", *sorted(configuration_fields),
+        *sorted(measurement_fields),
     ):
         if observed.get(field) != selected.get(field):
             raise PolicyError(f"adaptive execution mismatch: {field}")
+    if (
+        measurement_status == "LEGACY_UNSPECIFIED"
+        and "economic_measurement_status" in observed
+        and observed["economic_measurement_status"] != measurement_status
+    ):
+        raise PolicyError(
+            "adaptive execution mismatch: economic_measurement_status"
+        )
     result = {
         "valid": True, "route": selected["route"], "candidate": selected["candidate"],
         "execution_token": selected["execution_token"], "budget_status": "NOT_APPLICABLE",

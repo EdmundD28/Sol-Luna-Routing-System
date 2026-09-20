@@ -447,8 +447,22 @@ class RoutingPolicyTests(unittest.TestCase):
         configuration.update(overrides)
         return configuration
 
+    def adaptive_economic_measurement_spec(self, **overrides: object) -> dict:
+        spec = {
+            "schema_version": 1,
+            "credit_unit": "token_rate_proxy_credits",
+            "rate_card_id": "sol100-cache10-output500__luna5-cache0.5-output30",
+            "rate_card_digest": "sha256:" + "9" * 64,
+            "time_unit": "seconds",
+            "time_scope": "complete_route_wall_clock",
+        }
+        spec.update(overrides)
+        return spec
+
     def adaptive_candidate_economics(
-        self, matching_spec: dict | None = None, **execution_credits: float,
+        self, matching_spec: dict | None = None,
+        economic_measurement: dict | None = None,
+        **execution_credits: float,
     ) -> list[dict]:
         defaults = {"low": 24.0, "medium": 18.0, "high": 12.0}
         defaults.update(execution_credits)
@@ -468,6 +482,12 @@ class RoutingPolicyTests(unittest.TestCase):
                     ROUTING._adaptive_candidate_configuration_digest(
                         matching_spec, effort
                     )
+                )
+            if economic_measurement is not None:
+                item["economic_measurement_digest"] = (
+                    ROUTING.adaptive_economic_measurement_spec(
+                        economic_measurement
+                    )["economic_measurement_digest"]
                 )
             result.append(item)
         return result
@@ -526,12 +546,19 @@ class RoutingPolicyTests(unittest.TestCase):
         )
         task["matching_spec"] = self.adaptive_matching_spec(task)
         task["candidate_economics"] = self.adaptive_candidate_economics(
-            task["matching_spec"]
+            task["matching_spec"],
+            economic_measurement=task.get("economic_measurement_spec"),
         )
         task["baseline_economics"] = {
             "baseline_credits": 100.0,
             "baseline_seconds": 100.0,
         }
+        if task.get("economic_measurement_spec") is not None:
+            task["baseline_economics"]["economic_measurement_digest"] = (
+                ROUTING.adaptive_economic_measurement_spec(
+                    task["economic_measurement_spec"]
+                )["economic_measurement_digest"]
+            )
         if task["matching_spec"]["schema_version"] == 2:
             task["baseline_economics"]["complete_config_digest"] = (
                 ROUTING._adaptive_configuration_digest(
@@ -1137,6 +1164,218 @@ class RoutingPolicyTests(unittest.TestCase):
                 task,
                 verified_evidence_pool=self.bound_adaptive_pool(mixed_records),
             )
+
+    def test_economic_measurement_binding_preserves_selection_and_binds_execution(self) -> None:
+        configuration = self.adaptive_execution_configuration()
+        records = None
+
+        legacy = self.adaptive_cross_instance_task(
+            execution_configuration=configuration,
+        )
+        records = [
+            self.adaptive_cluster(legacy["matching_spec"], "low", index)
+            for index in range(16)
+        ]
+        legacy_selected = ROUTING.select_adaptive_route(
+            legacy, verified_evidence_pool=self.bound_adaptive_pool(records)
+        )
+        self.assertEqual(
+            (legacy_selected["candidate"], legacy_selected["economic_measurement_status"]),
+            ("S1", "LEGACY_UNSPECIFIED"),
+        )
+
+        measurement = self.adaptive_economic_measurement_spec()
+        declared = self.adaptive_cross_instance_task(
+            execution_configuration=configuration,
+            economic_measurement_spec=measurement,
+        )
+        records = [
+            self.adaptive_cluster(declared["matching_spec"], "low", index)
+            for index in range(16)
+        ]
+        selected = ROUTING.select_adaptive_route(
+            declared, verified_evidence_pool=self.bound_adaptive_pool(records)
+        )
+        normalized = ROUTING.adaptive_economic_measurement_spec(measurement)
+        self.assertEqual(
+            (selected["candidate"], selected["economic_measurement_status"]),
+            ("S1", "DECLARED_BOUND"),
+        )
+        self.assertEqual(selected["economic_measurement_spec"], normalized)
+        self.assertEqual(
+            selected["economic_measurement_digest"],
+            normalized["economic_measurement_digest"],
+        )
+        low_evaluation = next(
+            item for item in selected["candidate_evaluations"]
+            if item["effort"] == "low"
+        )
+        self.assertEqual(
+            low_evaluation["economic_measurement_status"], "DECLARED_MATCHED"
+        )
+        actual = {
+            key: selected[key]
+            for key in (
+                "route", "candidate", "model", "effort", "execution_token",
+                "responsibilities", "selected_configuration",
+                "complete_config_digest", "economic_measurement_status",
+                "economic_measurement_spec", "economic_measurement_digest",
+            )
+        }
+        self.assertTrue(
+            ROUTING.validate_adaptive_execution(selected, actual)["valid"]
+        )
+        drifted = dict(actual)
+        drifted["economic_measurement_digest"] = "sha256:" + "f" * 64
+        with self.assertRaisesRegex(
+            ROUTING.PolicyError, "economic_measurement_digest"
+        ):
+            ROUTING.validate_adaptive_execution(selected, drifted)
+        drifted_spec = dict(actual)
+        drifted_spec["economic_measurement_spec"] = dict(
+            actual["economic_measurement_spec"], rate_card_id="drifted"
+        )
+        with self.assertRaisesRegex(
+            ROUTING.PolicyError, "economic_measurement_spec"
+        ):
+            ROUTING.validate_adaptive_execution(selected, drifted_spec)
+
+        for missing_field in (
+            "economic_measurement_status", "economic_measurement_spec",
+            "economic_measurement_digest",
+        ):
+            incomplete = dict(actual)
+            incomplete.pop(missing_field)
+            with self.subTest(missing_field=missing_field), self.assertRaisesRegex(
+                ROUTING.PolicyError, missing_field
+            ):
+                ROUTING.validate_adaptive_execution(selected, incomplete)
+
+    def test_economic_measurement_missing_or_drifted_rows_are_ineligible(self) -> None:
+        configuration = self.adaptive_execution_configuration()
+        measurement = self.adaptive_economic_measurement_spec()
+        task = self.adaptive_cross_instance_task(
+            execution_configuration=configuration,
+            economic_measurement_spec=measurement,
+        )
+        records = [
+            self.adaptive_cluster(task["matching_spec"], "low", index)
+            for index in range(16)
+        ]
+
+        missing_low = dict(task)
+        missing_low["candidate_economics"] = [
+            dict(item) for item in task["candidate_economics"]
+            if item["effort"] != "low"
+        ]
+        result = ROUTING.select_adaptive_route(
+            missing_low, verified_evidence_pool=self.bound_adaptive_pool(records)
+        )
+        self.assertEqual((result["candidate"], result["route"]), ("S0", "SOL_ONLY"))
+        low_evaluation = next(
+            item for item in result["candidate_evaluations"]
+            if item["effort"] == "low"
+        )
+        self.assertEqual(
+            (low_evaluation["status"], low_evaluation["economic_measurement_status"]),
+            ("ECONOMICS_UNKNOWN", "DECLARED_NOT_PROVIDED"),
+        )
+
+        missing_binding = dict(task)
+        missing_binding["candidate_economics"] = [
+            dict(item) for item in task["candidate_economics"]
+        ]
+        missing_binding["candidate_economics"][0].pop(
+            "economic_measurement_digest"
+        )
+        with self.assertRaisesRegex(ROUTING.PolicyError, "incomplete"):
+            ROUTING.select_adaptive_route(missing_binding)
+
+        missing_baseline = dict(task)
+        missing_baseline["baseline_economics"] = dict(task["baseline_economics"])
+        missing_baseline["baseline_economics"].pop("economic_measurement_digest")
+        with self.assertRaisesRegex(ROUTING.PolicyError, "incomplete"):
+            ROUTING.select_adaptive_route(missing_baseline)
+
+        changed_rate_digest = dict(task)
+        changed_rate_digest["economic_measurement_spec"] = dict(
+            measurement, rate_card_digest="sha256:" + "8" * 64
+        )
+        with self.assertRaisesRegex(
+            ROUTING.PolicyError, "economic_measurement_digest"
+        ):
+            ROUTING.select_adaptive_route(changed_rate_digest)
+
+        rebound_measurement = dict(
+            measurement, rate_card_digest="sha256:" + "8" * 64
+        )
+        rebound = self.adaptive_cross_instance_task(
+            execution_configuration=configuration,
+            economic_measurement_spec=rebound_measurement,
+        )
+        self.assertEqual(
+            rebound["matching_spec"]["spec_digest"],
+            task["matching_spec"]["spec_digest"],
+        )
+        rebound_result = ROUTING.select_adaptive_route(
+            rebound, verified_evidence_pool=self.bound_adaptive_pool(records)
+        )
+        self.assertEqual(
+            (rebound_result["candidate"], rebound_result["route"]),
+            ("S1", "SOL_LUNA"),
+        )
+
+        for field, value, message in (
+            ("credit_unit", "allowance_percentage", "credit_unit"),
+            ("time_scope", "author_only", "time_scope"),
+        ):
+            invalid = dict(task)
+            invalid["economic_measurement_spec"] = dict(
+                measurement, **{field: value}
+            )
+            with self.subTest(field=field), self.assertRaisesRegex(
+                ROUTING.PolicyError, message
+            ):
+                ROUTING.select_adaptive_route(invalid)
+
+    def test_economic_measurement_cold_and_research_boundaries_are_explicit(self) -> None:
+        legacy = ROUTING.select_adaptive_route(self.adaptive_task())
+        self.assertEqual(
+            legacy["economic_measurement_status"], "LEGACY_UNSPECIFIED"
+        )
+
+        explicit_cold = self.adaptive_task(
+            execution_configuration=self.adaptive_execution_configuration(),
+            economic_measurement_spec=self.adaptive_economic_measurement_spec(),
+        )
+        with self.assertRaisesRegex(ROUTING.PolicyError, "legacy economics"):
+            ROUTING.select_adaptive_route(explicit_cold)
+
+        research = self.adaptive_research_task("medium")
+        research.pop("economics")
+        research["execution_configuration"] = self.adaptive_execution_configuration()
+        research["economic_measurement_spec"] = (
+            self.adaptive_economic_measurement_spec()
+        )
+        selected = ROUTING.select_adaptive_route(research)
+        self.assertEqual(
+            (selected["candidate"], selected["economic_measurement_status"]),
+            ("S4", "DECLARED_NOT_EVALUATED"),
+        )
+        actual = {
+            key: selected[key]
+            for key in (
+                "route", "candidate", "model", "effort", "execution_token",
+                "responsibilities", "selected_configuration",
+                "complete_config_digest", "economic_measurement_status",
+                "economic_measurement_spec", "economic_measurement_digest",
+                "research_plan",
+            )
+        }
+        validated = ROUTING.validate_adaptive_execution(selected, actual)
+        self.assertEqual(
+            validated["budget_status"], "DECLARED_NOT_RUNTIME_VERIFIED"
+        )
 
     def test_cross_instance_matching_spec_rejects_drift_and_inline_claims(self) -> None:
         task = self.adaptive_cross_instance_task()
