@@ -11,7 +11,7 @@ python .agents/skills/sol-luna/scripts/runtime_receipt.py `
   --session C:\explicit\rollout.jsonl `
   --thread-id THREAD_ID `
   --requested-agent luna_worker `
-  --requested-model gpt-5.6-luna `
+  --requested-model gpt-6-luna `
   --requested-effort xhigh `
   --expected-sandbox workspace-write `
   --expected-permission-profile managed `
@@ -83,7 +83,7 @@ An `exact` label or a `credit_source` beginning with `exact:` is not trust evide
       "receipt_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
       "runtime_identity_source": "host-receipt-v1",
       "runtime_identity_uncertainty": "none",
-      "observed_sol_model": "gpt-5.6-sol",
+      "observed_sol_model": "gpt-6-sol",
       "observed_luna_model": "",
       "claim_digest": "sha256:c613f5598d4eb06959b8cd564990d1606a9256f0bf25e68ca7a16214ade10d7c"
     }
@@ -141,5 +141,5 @@ The harness freezes and validates comparability but deliberately does not launch
 - One repair is the default. More than one repair requires a short justification and a new evidence reference.
 - Token and credit values require a source and uncertainty statement. A displayed allowance delta is not silently converted into exact credits. Self-declared exact credits and receipt metadata remain untrusted unless an independent record-bound claim index is supplied at assessment time.
 - Matched records identify `sol_execution` for the control arm and `sol_planning`, `sol_retained_execution`, `luna_execution`, `sol_review`, `repair`, and `integration` for the delegated arm. Retained Sol execution is mandatory even when zero. `elapsed_seconds` is wall-clock duration; individual active-phase durations may overlap but none may exceed the run boundary. Token and credit phase totals remain additive and must reconcile with their recorded totals.
-- Matched evidence is invalid unless host-observed runtime identity proves Sol is `gpt-5.6-sol` and every delegated Luna execution is `gpt-5.6-luna`. Agent names, profile labels, prompts, and requested settings are not runtime proof.
+- Matched evidence is invalid unless host-observed runtime identity proves Sol is `gpt-6-sol` and every delegated Luna execution is `gpt-6-luna`. Agent names, profile labels, prompts, and requested settings are not runtime proof. GPT-5.6 records remain historical and cannot satisfy this GPT-6 identity contract.
 - Raw prompts and arbitrary extra fields are rejected. Run references are hashed before append, and private filesystem paths are rejected from summary fields.

@@ -90,8 +90,8 @@ def record(pair: dict, route: str, *, wrong_start: bool = False) -> dict:
                 "integration": 75,
             },
             "phase_tokens": phases,
-            "observed_sol_model": "gpt-5.6-sol",
-            "observed_luna_model": "gpt-5.6-luna" if route == "SOL_LUNA" else "",
+            "observed_sol_model": "gpt-6-sol",
+            "observed_luna_model": "gpt-6-luna" if route == "SOL_LUNA" else "",
             "runtime_identity_source": "codex-session-turn-context-v1",
             "runtime_identity_uncertainty": "none",
         }
@@ -134,7 +134,7 @@ class MatchedEvalTests(unittest.TestCase):
         frozen = plan(1)
         pair = frozen["pairs"][0]
         bad_route = record(pair, "SOL_LUNA")
-        bad_route["observed_luna_model"] = "gpt-5.6-sol"
+        bad_route["observed_luna_model"] = "gpt-6-sol"
         result = MATCHED.assess(
             frozen,
             [record(pair, "SOL_ONLY"), bad_route],

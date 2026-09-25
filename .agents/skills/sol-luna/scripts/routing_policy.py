@@ -2816,11 +2816,11 @@ def select_adaptive_route(
             bound = cold_start_credit_bound(economics.get("baseline_credits"), economics.get("launch_credits"), economics.get("overhead_credits"), economics.get("recovery_credits"))
             required_seconds = ("baseline_seconds", "launch_seconds", "overhead_seconds", "recovery_seconds")
             if any(field not in economics for field in required_seconds):
-                return route_result(family, "S0", "cold_start_economics_incomplete", "UNKNOWN", modalities, output, kind, capabilities, "SOL_ONLY", "gpt-5.6-sol", "high", coordination)
+                return route_result(family, "S0", "cold_start_economics_incomplete", "UNKNOWN", modalities, output, kind, capabilities, "SOL_ONLY", "gpt-6-sol", "high", coordination)
             baseline_seconds = finite_number(economics["baseline_seconds"], "economics.baseline_seconds", minimum=0.0)
             route_seconds = finite_number(economics["launch_seconds"], "economics.launch_seconds", minimum=0.0) + finite_number(economics["overhead_seconds"], "economics.overhead_seconds", minimum=0.0) + q * finite_number(economics["recovery_seconds"], "economics.recovery_seconds", minimum=0.0)
             if bound < 0 or q > bound + 1e-12 or route_seconds >= baseline_seconds:
-                return route_result(family, "S0", "cold_start_economics_fail", "UNKNOWN", modalities, output, kind, capabilities, "SOL_ONLY", "gpt-5.6-sol", "high", coordination)
+                return route_result(family, "S0", "cold_start_economics_fail", "UNKNOWN", modalities, output, kind, capabilities, "SOL_ONLY", "gpt-6-sol", "high", coordination)
     elif cold_start:
         raise PolicyError("cold_start requires economics")
     if matching_spec is not None:
@@ -2847,20 +2847,20 @@ def select_adaptive_route(
     visual = bool(set(modalities) & {"image", "screenshot", "document", "chart"}) or output in {"image", "document", "chart"}
     needs_visual_tool = visual or kind in {"visual_review", "document_review", "mixed_review"}
     if needs_visual_tool and not capabilities:
-        return route_result(family, "S0", "required_visual_or_document_capability_missing", "MATCHED_EXPERIENCE" if evidence_match else "UNKNOWN", modalities, output, kind, capabilities, "SOL_ONLY", "gpt-5.6-sol", "high", coordination)
+        return route_result(family, "S0", "required_visual_or_document_capability_missing", "MATCHED_EXPERIENCE" if evidence_match else "UNKNOWN", modalities, output, kind, capabilities, "SOL_ONLY", "gpt-6-sol", "high", coordination)
     if unavailable or size == "small" or not acceptance["independent"] or not acceptance["closed"] or coupling == "high" or risk in {"high", "critical"}:
         reason = "required_capability_unknown" if unavailable else "task_too_small" if size == "small" else "acceptance_not_independent" if not acceptance["independent"] else "acceptance_not_closed" if not acceptance["closed"] else "coupling_or_risk_requires_sol"
-        return route_result(family, "S0", reason, "MATCHED_EXPERIENCE" if evidence_match else "UNKNOWN", modalities, output, kind, capabilities, "SOL_ONLY", "gpt-5.6-sol", "high", coordination)
+        return route_result(family, "S0", reason, "MATCHED_EXPERIENCE" if evidence_match else "UNKNOWN", modalities, output, kind, capabilities, "SOL_ONLY", "gpt-6-sol", "high", coordination)
     proven = all(
         item["status"] in {"host-observed", "basic-proven"}
         and item["source"] in {"host-observed", "basic-proven"}
         for item in capabilities
     )
     if not proven:
-        return route_result(family, "S0", "required_capability_not_basic_proven", "UNKNOWN", modalities, output, kind, capabilities, "SOL_ONLY", "gpt-5.6-sol", "high", coordination)
+        return route_result(family, "S0", "required_capability_not_basic_proven", "UNKNOWN", modalities, output, kind, capabilities, "SOL_ONLY", "gpt-6-sol", "high", coordination)
     implementation_bindings = [item for item in capabilities if item["operation"] == "implementation"]
     if len(implementation_bindings) > 1 or any(item["actor"] != "LUNA" for item in implementation_bindings):
-        return route_result(family, "S0", "implementation_actor_binding_invalid", "MATCHED_EXPERIENCE" if evidence_match else "UNKNOWN", modalities, output, kind, capabilities, "SOL_ONLY", "gpt-5.6-sol", "high", coordination)
+        return route_result(family, "S0", "implementation_actor_binding_invalid", "MATCHED_EXPERIENCE" if evidence_match else "UNKNOWN", modalities, output, kind, capabilities, "SOL_ONLY", "gpt-6-sol", "high", coordination)
     # For tool-bearing tasks the operation/actor/surface table is part of the
     # decision, not decorative metadata.  A text capability cannot stand in
     # for a browser or image surface, and a visual acceptance operation must
@@ -2876,12 +2876,12 @@ def select_adaptive_route(
         if browser_required:
             required_operations.add("browser_render")
         if not required_operations.issubset(operations):
-            return route_result(family, "S0", "required_operation_capability_missing", "MATCHED_EXPERIENCE" if evidence_match else "UNKNOWN", modalities, output, kind, capabilities, "SOL_ONLY", "gpt-5.6-sol", "high", coordination)
+            return route_result(family, "S0", "required_operation_capability_missing", "MATCHED_EXPERIENCE" if evidence_match else "UNKNOWN", modalities, output, kind, capabilities, "SOL_ONLY", "gpt-6-sol", "high", coordination)
         reviewers = [item for item in capabilities if item["operation"] in {"visual_review", "document_review"}]
         if len(reviewers) != 1:
-            return route_result(family, "S0", "visual_acceptance_reviewer_not_unique", "MATCHED_EXPERIENCE" if evidence_match else "UNKNOWN", modalities, output, kind, capabilities, "SOL_ONLY", "gpt-5.6-sol", "high", coordination)
+            return route_result(family, "S0", "visual_acceptance_reviewer_not_unique", "MATCHED_EXPERIENCE" if evidence_match else "UNKNOWN", modalities, output, kind, capabilities, "SOL_ONLY", "gpt-6-sol", "high", coordination)
     if not test_execution["unique"]:
-        return route_result(family, "S0", "test_execution_binding_not_unique", "UNKNOWN", modalities, output, kind, capabilities, "SOL_ONLY", "gpt-5.6-sol", "high", coordination)
+        return route_result(family, "S0", "test_execution_binding_not_unique", "UNKNOWN", modalities, output, kind, capabilities, "SOL_ONLY", "gpt-6-sol", "high", coordination)
     if matching_spec is not None:
         records_by_effort = (
             _adaptive_cross_instance_evidence(
@@ -2910,7 +2910,7 @@ def select_adaptive_route(
             result = route_result(
                 family, "S0", "cross_instance_no_candidate_passed", evidence_status,
                 modalities, output, kind, capabilities, "SOL_ONLY",
-                "gpt-5.6-sol", "high", coordination,
+                "gpt-6-sol", "high", coordination,
             )
         else:
             effort_rank = {effort: index for index, effort in enumerate(ADAPTIVE_CANDIDATE_EFFORTS)}
@@ -2929,7 +2929,7 @@ def select_adaptive_route(
                 "cross_instance_minimum_conservative_complete_cost",
                 "MATCHED_EXPERIENCE",
                 modalities, output, kind, capabilities, "SOL_LUNA",
-                "gpt-5.6-luna", effort, coordination,
+                "gpt-6-luna", effort, coordination,
             )
         return _attach_cross_instance_selection(
             result,
@@ -2963,24 +2963,24 @@ def select_adaptive_route(
     )
     if not evidence_match:
         if research_plan is not None:
-            return route_result(family, "S4", "budgeted_research_preregistered_counterfactual", "BUDGETED_RESEARCH_EXPLORATION", modalities, output, kind, capabilities, "SOL_LUNA", "gpt-5.6-luna", effort, coordination)
+            return route_result(family, "S4", "budgeted_research_preregistered_counterfactual", "BUDGETED_RESEARCH_EXPLORATION", modalities, output, kind, capabilities, "SOL_LUNA", "gpt-6-luna", effort, coordination)
         if not cold_start and decision_context == "budgeted_research":
-            return route_result(family, "S4", "budgeted_research_exploration", "BUDGETED_RESEARCH_EXPLORATION", modalities, output, kind, capabilities, "SOL_LUNA", "gpt-5.6-luna", effort, coordination)
+            return route_result(family, "S4", "budgeted_research_exploration", "BUDGETED_RESEARCH_EXPLORATION", modalities, output, kind, capabilities, "SOL_LUNA", "gpt-6-luna", effort, coordination)
         if cold_start and (
             test_execution["declared"] or execution_configuration is not None
         ):
-            return route_result(family, "S0", "cold_start_explicit_test_execution_requires_matching_evidence", "UNKNOWN", modalities, output, kind, capabilities, "SOL_ONLY", "gpt-5.6-sol", "high", coordination)
+            return route_result(family, "S0", "cold_start_explicit_test_execution_requires_matching_evidence", "UNKNOWN", modalities, output, kind, capabilities, "SOL_ONLY", "gpt-6-sol", "high", coordination)
         if not cold_start:
-            return route_result(family, "S0", "production_route_requires_matching_evidence", "UNKNOWN", modalities, output, kind, capabilities, "SOL_ONLY", "gpt-5.6-sol", "high", coordination)
+            return route_result(family, "S0", "production_route_requires_matching_evidence", "UNKNOWN", modalities, output, kind, capabilities, "SOL_ONLY", "gpt-6-sol", "high", coordination)
     # Production routes require complete economics.  Research S4 is the only
     # route allowed to proceed without it; a matched boolean cannot bypass a
     # failed or missing credit/time gate.
     if not cold_start:
         if economics is None:
-            return route_result(family, "S0", "production_economics_unknown", "UNKNOWN", modalities, output, kind, capabilities, "SOL_ONLY", "gpt-5.6-sol", "high", coordination)
+            return route_result(family, "S0", "production_economics_unknown", "UNKNOWN", modalities, output, kind, capabilities, "SOL_ONLY", "gpt-6-sol", "high", coordination)
         required_econ = ("baseline_credits", "execution_credits", "coordination_credits", "recovery_credits", "baseline_seconds", "execution_seconds", "coordination_seconds", "recovery_seconds")
         if any(field not in economics for field in required_econ):
-            return route_result(family, "S0", "production_economics_incomplete", "UNKNOWN", modalities, output, kind, capabilities, "SOL_ONLY", "gpt-5.6-sol", "high", coordination)
+            return route_result(family, "S0", "production_economics_incomplete", "UNKNOWN", modalities, output, kind, capabilities, "SOL_ONLY", "gpt-6-sol", "high", coordination)
         baseline_credits = finite_number(economics["baseline_credits"], "economics.baseline_credits", minimum=0.0)
         execution_credits = finite_number(economics["execution_credits"], "economics.execution_credits", minimum=0.0)
         coordination_credits = finite_number(economics["coordination_credits"], "economics.coordination_credits", minimum=0.0)
@@ -2993,11 +2993,11 @@ def select_adaptive_route(
         expected_credits = execution_credits + coordination_credits + failure_probability * recovery_credits
         expected_seconds = execution_seconds + coordination_seconds + failure_probability * recovery_seconds
         if expected_credits > 0.5 * baseline_credits + 1e-12:
-            return route_result(family, "S0", "production_credit_gate_failed", "MATCHED_EXPERIENCE", modalities, output, kind, capabilities, "SOL_ONLY", "gpt-5.6-sol", "high", coordination)
+            return route_result(family, "S0", "production_credit_gate_failed", "MATCHED_EXPERIENCE", modalities, output, kind, capabilities, "SOL_ONLY", "gpt-6-sol", "high", coordination)
         if expected_seconds >= baseline_seconds:
-            return route_result(family, "S0", "production_time_gate_failed", "MATCHED_EXPERIENCE", modalities, output, kind, capabilities, "SOL_ONLY", "gpt-5.6-sol", "high", coordination)
+            return route_result(family, "S0", "production_time_gate_failed", "MATCHED_EXPERIENCE", modalities, output, kind, capabilities, "SOL_ONLY", "gpt-6-sol", "high", coordination)
     status = "MATCHED_EXPERIENCE" if evidence_match else "UNKNOWN"
-    return route_result(family, "S3" if effort == "high" else "S2" if effort == "medium" else "S1", strategy, status, modalities, output, kind, capabilities, "SOL_LUNA", "gpt-5.6-luna", effort, coordination)
+    return route_result(family, "S3" if effort == "high" else "S2" if effort == "medium" else "S1", strategy, status, modalities, output, kind, capabilities, "SOL_LUNA", "gpt-6-luna", effort, coordination)
 
 
 def _adaptive_matching_evidence(

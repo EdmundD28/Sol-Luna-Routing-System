@@ -154,16 +154,16 @@ def _validate_identity(raw: Mapping[str, Any], contract: Mapping[str, Any]) -> d
             seen_receipts.add(digest2)
             return dict(obj)
         controller = identity(run["controller"], f"identity runs[{n}].controller")
-        if (controller["model"], controller["effort"], controller["provider"]) != ("gpt-5.6-sol", "high", "openai") or controller["role"] not in CONTROLLER_ROLES:
-            raise AttestationError("controller identity is not host-observed gpt-5.6-sol/high OpenAI")
+        if (controller["model"], controller["effort"], controller["provider"]) != ("gpt-6-sol", "high", "openai") or controller["role"] not in CONTROLLER_ROLES:
+            raise AttestationError("controller identity is not host-observed gpt-6-sol/high OpenAI")
         workers = run["workers"]
         if not isinstance(workers, list) or len(workers) != (0 if run["route"] == "SOL_ONLY" else contract["expected_sol_luna_worker_count"]):
             raise AttestationError("identity worker count does not match route")
         out_workers = []
         for j, worker in enumerate(workers):
             value = identity(worker, f"identity runs[{n}].workers[{j}]")
-            if (value["model"], value["effort"], value["provider"]) != ("gpt-5.6-luna", contract["expected_sol_luna_effort"], "openai") or value["role"] not in WRITER_ROLES:
-                raise AttestationError("worker identity is not host-observed gpt-5.6-luna")
+            if (value["model"], value["effort"], value["provider"]) != ("gpt-6-luna", contract["expected_sol_luna_effort"], "openai") or value["role"] not in WRITER_ROLES:
+                raise AttestationError("worker identity is not host-observed gpt-6-luna")
             out_workers.append(value)
         runs.append({"pair_id": pair, "route": run["route"], "controller": controller, "workers": out_workers})
     return {"index_sha256": digest, "runs": runs}

@@ -1,6 +1,6 @@
 # Sol-Luna Delivery System
 
-An experimental, explicit Codex Skill for increasing Luna's effective participation only when it produces net substitution of expensive Sol work without lowering independent quality or increasing elapsed time.
+An experimental, explicit Codex Skill for increasing GPT-6 Luna's effective participation only when it produces net substitution of expensive GPT-6 Sol work without lowering independent quality or increasing elapsed time.
 
 The objective is not fewer writers or more Luna calls. Quality, safety, ownership, and authority are hard gates; `SOL_ONLY` is correct whenever Luna execution plus incremental Sol planning, coordination, review, integration, replay, or rework erases the saving.
 
@@ -67,11 +67,13 @@ The project ships two roles rather than a large role hierarchy:
 
 `luna_worker` remains a backward-compatible High profile. Every writer has an explicit `workspace-write` sandbox, and read-only roles declare `read-only`. Parent live permission overrides can still affect a native child; use host-observed receipts when boundary compliance is material.
 
-Official OpenAI documentation describes Luna as the cost-sensitive, high-volume GPT-5.6 tier and recommends reserving higher reasoning settings for workloads where evaluation shows a quality gain:
+Official OpenAI documentation describes GPT-6 Sol as the strong reasoning tier for demanding work and GPT-6 Luna as the efficient tier for repeatable work at scale. This repository preserves the existing reasoning-effort ladder and requires matched evidence before higher settings or production routing:
 
-- [GPT-5.6 Luna](https://developers.openai.com/api/docs/models/gpt-5.6-luna)
-- [GPT-5.6 model guidance](https://developers.openai.com/api/docs/guides/latest-model)
+- [GPT-6 Luna](https://developers.openai.com/api/docs/models/gpt-6-luna)
+- [GPT-6 model guidance](https://developers.openai.com/api/docs/guides/latest-model)
 - [Codex custom agents and subagents](https://developers.openai.com/codex/subagents)
+
+Historical GPT-5.6 benchmark reports, fixtures, and purchased-credit snapshots remain unchanged as provenance. They do not establish GPT-6 quality, allowance, or elapsed-time economics.
 
 ## Evidence and enforcement tools
 

@@ -215,19 +215,19 @@ def _identity_output(identity: Mapping[str, str], digest: str) -> dict[str, str]
 
 def _validate_controller(identity: Mapping[str, str], name: str) -> None:
     if (
-        identity["model"] != "gpt-5.6-sol" or identity["effort"] != "high"
+        identity["model"] != "gpt-6-sol" or identity["effort"] != "high"
         or identity["provider"] != "openai" or identity["role"] not in CONTROLLER_ROLES
     ):
-        raise IdentityError(f"{name} must be a host-observed gpt-5.6-sol/high OpenAI controller")
+        raise IdentityError(f"{name} must be a host-observed gpt-6-sol/high OpenAI controller")
 
 
 def _validate_writer(identity: Mapping[str, str], name: str, expected_effort: str) -> None:
     if (
-        identity["model"] != "gpt-5.6-luna" or identity["effort"] != expected_effort
+        identity["model"] != "gpt-6-luna" or identity["effort"] != expected_effort
         or identity["provider"] != "openai" or identity["role"] not in WRITER_ROLES
     ):
         raise IdentityError(
-            f"{name} must be a host-observed gpt-5.6-luna/{expected_effort} OpenAI writer"
+            f"{name} must be a host-observed gpt-6-luna/{expected_effort} OpenAI writer"
         )
 
 

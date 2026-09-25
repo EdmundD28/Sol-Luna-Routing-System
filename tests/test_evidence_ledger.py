@@ -297,8 +297,8 @@ class EvidenceLedgerTests(unittest.TestCase):
                     "sol_retained_execution": 0,
                     "luna_execution": 80,
                 },
-                "observed_sol_model": "gpt-5.6-sol",
-                "observed_luna_model": "gpt-5.6-luna",
+                "observed_sol_model": "gpt-6-sol",
+                "observed_luna_model": "gpt-6-luna",
                 "runtime_identity_source": "codex-session-turn-context-v1",
                 "runtime_identity_uncertainty": "none",
             }
@@ -320,7 +320,7 @@ class EvidenceLedgerTests(unittest.TestCase):
                 "policy_fingerprint": "sha256:" + "3" * 64,
                 "phase_elapsed_seconds": {"sol_execution": 100},
                 "phase_tokens": {"sol_execution": 900},
-                "observed_sol_model": "gpt-5.6-sol",
+                "observed_sol_model": "gpt-6-sol",
                 "observed_luna_model": "",
                 "runtime_identity_source": "codex-session-turn-context-v1",
                 "runtime_identity_uncertainty": "none",
@@ -331,7 +331,7 @@ class EvidenceLedgerTests(unittest.TestCase):
         with self.assertRaisesRegex(LEDGER.LedgerError, "sol_execution"):
             LEDGER.validate_record(record)
         record["phase_elapsed_seconds"] = {"sol_execution": 100}
-        record["observed_sol_model"] = "gpt-5.6-luna"
+        record["observed_sol_model"] = "gpt-6-luna"
         with self.assertRaisesRegex(LEDGER.LedgerError, "observed_sol_model"):
             LEDGER.validate_record(record)
         record["first_pass_accepted"] = True
@@ -360,8 +360,8 @@ class EvidenceLedgerTests(unittest.TestCase):
                     "sol_retained_execution": 100,
                     "luna_execution": 800,
                 },
-                "observed_sol_model": "gpt-5.6-sol",
-                "observed_luna_model": "gpt-5.6-luna",
+                "observed_sol_model": "gpt-6-sol",
+                "observed_luna_model": "gpt-6-luna",
                 "runtime_identity_source": "codex-session-turn-context-v1",
                 "runtime_identity_uncertainty": "none",
             }
@@ -526,13 +526,13 @@ class EvidenceLedgerTests(unittest.TestCase):
                         "phase_tokens": {"sol_execution": 1000}
                         if route == "SOL_ONLY"
                         else {"luna_execution": 800},
-                        "observed_sol_model": "gpt-5.6-sol",
+                        "observed_sol_model": "gpt-6-sol",
                         "runtime_identity_source": "legacy-host-receipt",
                         "runtime_identity_uncertainty": "none",
                     }
                 )
                 if route == "SOL_LUNA":
-                    record["observed_luna_model"] = "gpt-5.6-luna"
+                    record["observed_luna_model"] = "gpt-6-luna"
                 records.append(LEDGER.validate_record(record))
         self.assertTrue(all(item["schema_version"] == 5 for item in records))
         self.assertTrue(all(item["upgraded_from_schema_version"] == 4 for item in records))
@@ -559,8 +559,8 @@ class EvidenceLedgerTests(unittest.TestCase):
                 "writer_count": 1,
                 "luna_effort": "high",
                 "phase_elapsed_seconds": {"luna_execution": 80},
-                "observed_sol_model": "gpt-5.6-sol",
-                "observed_luna_model": "gpt-5.6-luna",
+                "observed_sol_model": "gpt-6-sol",
+                "observed_luna_model": "gpt-6-luna",
                 "runtime_identity_source": "legacy-host-receipt",
                 "runtime_identity_uncertainty": "none",
             }

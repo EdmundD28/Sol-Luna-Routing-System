@@ -74,10 +74,10 @@ class BenchmarkAttestationTests(unittest.TestCase):
             for route in ("SOL_ONLY", "SOL_LUNA"):
                 def identity(model: str, effort: str, number: int) -> dict:
                     return {"model": model, "effort": effort, "role": "default" if model.endswith("sol") else "luna_worker_medium", "provider": "openai", "receipt_sha256": "sha256:" + format(number, "064x")}
-                controller = identity("gpt-5.6-sol", "high", (pair - 1) * 2 + (1 if route == "SOL_ONLY" else 2))
+                controller = identity("gpt-6-sol", "high", (pair - 1) * 2 + (1 if route == "SOL_ONLY" else 2))
                 workers = [] if route == "SOL_ONLY" else [
-                    identity("gpt-5.6-luna", "medium", 100 + pair),
-                    identity("gpt-5.6-luna", "medium", 200 + pair),
+                    identity("gpt-6-luna", "medium", 100 + pair),
+                    identity("gpt-6-luna", "medium", 200 + pair),
                 ]
                 runs.append({"pair_id": f"pair-{pair:03d}", "route": route, "controller": controller, "workers": workers})
         content = {"schema_version": 2, "campaign_id": "campaign-001", "sol_luna_effort": "medium", "sol_luna_writer_count": 2, "runs": sorted(runs, key=lambda x: (x["pair_id"], x["route"])), "verification_status": "verified"}

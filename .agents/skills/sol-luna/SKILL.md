@@ -1,24 +1,24 @@
 ---
 name: sol-luna
-description: "Use one bounded GPT-5.6 Luna worker only when it can replace substantial Sol implementation while preserving quality and reducing included-plan allowance; otherwise keep the task in Sol."
+description: "Use one bounded GPT-6 Luna worker under a GPT-6 Sol controller only when it can replace substantial Sol implementation while preserving quality and reducing included-plan allowance; otherwise keep the task in Sol."
 ---
 
 # Sol-Luna Delivery
 
 Sol remains accountable. Luna is useful only when it substitutes substantial Sol work. Quality and included-plan allowance are co-primary gates, then elapsed time. Diagnostic tokens explain failures; they never replace matched five-hour and weekly readings.
 
+Require host-observed `gpt-6-sol` control and `gpt-6-luna` workers. GPT-5.6 evidence is historical and cannot authorize GPT-6 production.
+
 ## Choose the route
 
-For difficult or uncertain shape-dependent work, optionally use
-`select_adaptive_route` in `routing_policy.py`; Sol may apply the same rules
-directly for clear tasks. It returns S0–S4, model/effort, responsibilities,
-reason, and evidence status. Unknown/unavailable capability => S0; unproven
-capability => bounded S4 research. High requires same-distribution evidence
-and a lower-effort comparator. Cold start uses exact `C=L+O+qR`. The selector
-and `validate_adaptive_execution` are optional; the token checks consistency,
-not host-observed execution.
+For uncertain work, use `select_adaptive_route` in `routing_policy.py`; apply
+the same rules for clear tasks. It returns
+S0–S4, model/effort, responsibilities, reason, and evidence status. Unknown
+capability => S0; unproven capability => bounded S4 research. High requires
+same-distribution evidence and a lower-effort comparator. Cold start uses
+`C=L+O+qR`. `validate_adaptive_execution` checks consistency, not execution.
 
-Record `SOL_ONLY` or `SOL_LUNA` before dispatch. Production uses the same independent acceptance contract; at least 80% predicted first-pass acceptance; at least 50% expected accepted-cost reduction; no predicted final-defect or elapsed regression; predicted quality and defects are no worse; expected included-plan allowance is lower; and expected elapsed time is no worse. Apply conservative Wilson, credit, and time gates. Bind operations to actors and reachable surfaces, including Sol review cost. Missing evidence/economics is unknown. S4 is research, never production evidence. Without matched task-family evidence, permit at most one low-impact complete-Luna Low/Medium cold start with an empty Sol controller queue, priced as conservative execution plus one repair plus Sol recovery and downstream dependency-closure re-execution. Proceed only when one Luna can own substantial work and Sol will not repeat that work.
+Record `SOL_ONLY` or `SOL_LUNA` before dispatch. Production uses the same independent acceptance contract; at least 80% predicted first-pass acceptance; at least 50% expected accepted-cost reduction; no predicted final-defect or elapsed regression; predicted quality and defects are no worse; expected included-plan allowance is lower; and expected elapsed time is no worse. Apply conservative gates. Bind operations to actors and reachable surfaces, including Sol review cost. Missing evidence/economics is unknown. S4 is research, never production evidence. Without matched task-family evidence, permit at most one low-impact complete-Luna Low/Medium cold start with an empty Sol controller queue, priced as conservative execution plus one repair plus Sol recovery and downstream dependency-closure re-execution. Proceed only when one Luna can own substantial work and Sol will not repeat that work.
 
 While Luna runs, Sol advances useful path-disjoint work. If none exists, wait once on the retained worker until completion; never poll, enumerate all agents, or wake on commentary. Shared-interface, high-risk, and High-or-above critical-path work needs external quality evidence bound to the task family, actual effort, allocation shape, and acceptance suite.
 

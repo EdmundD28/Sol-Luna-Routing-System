@@ -438,10 +438,10 @@ class RoutingPolicyTests(unittest.TestCase):
     def adaptive_execution_configuration(self, **overrides: object) -> dict:
         configuration = {
             "schema_version": 1,
-            "controller_model": "gpt-5.6-sol",
+            "controller_model": "gpt-6-sol",
             "controller_effort": "high",
-            "writer_model": "gpt-5.6-luna",
-            "baseline_model": "gpt-5.6-sol",
+            "writer_model": "gpt-6-luna",
+            "baseline_model": "gpt-6-sol",
             "baseline_effort": "high",
         }
         configuration.update(overrides)

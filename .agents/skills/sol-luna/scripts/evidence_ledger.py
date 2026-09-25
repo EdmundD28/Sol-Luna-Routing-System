@@ -354,13 +354,13 @@ def validate_record(
         if record.get("elapsed_seconds") is None:
             raise LedgerError("MATCHED records require elapsed_seconds")
         observed_sol = require_string(record, "observed_sol_model", required=True)
-        if observed_sol != "gpt-5.6-sol":
-            raise LedgerError("MATCHED records require observed_sol_model gpt-5.6-sol")
+        if observed_sol != "gpt-6-sol":
+            raise LedgerError("MATCHED records require observed_sol_model gpt-6-sol")
         record["observed_sol_model"] = observed_sol
         observed_luna = require_string(record, "observed_luna_model")
         if record["route"] == "SOL_LUNA":
-            if not record.get("upgraded_from_schema_version") and observed_luna != "gpt-5.6-luna":
-                raise LedgerError("matched SOL_LUNA records require observed_luna_model gpt-5.6-luna")
+            if not record.get("upgraded_from_schema_version") and observed_luna != "gpt-6-luna":
+                raise LedgerError("matched SOL_LUNA records require observed_luna_model gpt-6-luna")
             if observed_luna:
                 record["observed_luna_model"] = observed_luna
         elif observed_luna:

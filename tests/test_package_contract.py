@@ -68,7 +68,7 @@ class PackageContractTests(unittest.TestCase):
             with profile_path.open("rb") as handle:
                 profile = tomllib.load(handle)
             self.assertEqual(profile["name"], f"luna_worker_{effort}")
-            self.assertEqual(profile["model"], "gpt-5.6-luna")
+            self.assertEqual(profile["model"], "gpt-6-luna")
             self.assertEqual(profile["model_reasoning_effort"], effort)
             self.assertEqual(profile["sandbox_mode"], "workspace-write")
 
@@ -140,7 +140,7 @@ class PackageContractTests(unittest.TestCase):
             with (ROOT / ".codex" / "agents" / filename).open("rb") as handle:
                 profile = tomllib.load(handle)
             self.assertEqual(profile["name"], name)
-            self.assertEqual(profile["model"], "gpt-5.6-luna")
+            self.assertEqual(profile["model"], "gpt-6-luna")
             self.assertEqual(profile["sandbox_mode"], "read-only")
 
     def test_evidence_runtime_directory_is_ignored(self) -> None:

@@ -152,9 +152,9 @@ def run_sheet(plan: Mapping[str, Any]) -> dict[str, Any]:
                         "both route intervals and report referee cost separately"
                     ),
                     "required_runtime_identity": (
-                        "host-observed gpt-5.6-sol"
+                        "host-observed gpt-6-sol"
                         if route == "SOL_ONLY"
-                        else "host-observed gpt-5.6-sol coordinator and gpt-5.6-luna worker"
+                        else "host-observed gpt-6-sol coordinator and gpt-6-luna worker"
                     ),
                 }
             )
@@ -191,10 +191,10 @@ def assess(plan: Mapping[str, Any], records: list[Mapping[str, Any]], *, minimum
             if record.get(field) != expected_value:
                 mismatches.append(f"{pair_id}:{record.get('route')} {field} does not match frozen plan")
         route = str(record.get("route"))
-        if record.get("observed_sol_model") != "gpt-5.6-sol":
-            mismatches.append(f"{pair_id}:{route} observed_sol_model is not host-verified gpt-5.6-sol")
-        if route == "SOL_LUNA" and record.get("observed_luna_model") != "gpt-5.6-luna":
-            mismatches.append(f"{pair_id}:{route} observed_luna_model is not host-verified gpt-5.6-luna")
+        if record.get("observed_sol_model") != "gpt-6-sol":
+            mismatches.append(f"{pair_id}:{route} observed_sol_model is not host-verified gpt-6-sol")
+        if route == "SOL_LUNA" and record.get("observed_luna_model") != "gpt-6-luna":
+            mismatches.append(f"{pair_id}:{route} observed_luna_model is not host-verified gpt-6-luna")
         if route == "SOL_ONLY" and record.get("observed_luna_model"):
             mismatches.append(f"{pair_id}:{route} unexpectedly reports a Luna runtime")
         if not record.get("runtime_identity_source"):

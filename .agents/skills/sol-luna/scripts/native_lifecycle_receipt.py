@@ -87,8 +87,8 @@ def validate_child(raw: Mapping[str, Any], index: int) -> dict[str, Any]:
         )
     if normalized["requested"] != normalized["observed"]:
         raise ReceiptError(f"children[{index}] host-observed identity or boundary does not match the request")
-    if normalized["observed"]["model"] != "gpt-5.6-luna":
-        raise ReceiptError(f"children[{index}] did not run GPT-5.6 Luna")
+    if normalized["observed"]["model"] != "gpt-6-luna":
+        raise ReceiptError(f"children[{index}] did not run GPT-6 Luna")
     if normalized["observed"]["effort"] not in EFFORTS:
         raise ReceiptError(f"children[{index}] has unsupported observed effort")
     if normalized["observed"]["sandbox_mode"] not in SANDBOXES:

@@ -85,7 +85,7 @@ class BenchmarkIdentityTests(unittest.TestCase):
                     "pair_id": "pair-001",
                     "route": "SOL_ONLY",
                     "controller_receipt": self.write_receipt(
-                        "sol-only.json", receipt(model="gpt-5.6-sol", role="default", marker="sol-only")
+                        "sol-only.json", receipt(model="gpt-6-sol", role="default", marker="sol-only")
                     ),
                     "worker_receipts": [],
                 },
@@ -93,13 +93,13 @@ class BenchmarkIdentityTests(unittest.TestCase):
                     "pair_id": "pair-001",
                     "route": "SOL_LUNA",
                     "controller_receipt": self.write_receipt(
-                        "controller.json", receipt(model="gpt-5.6-sol", role="default", marker="controller")
+                        "controller.json", receipt(model="gpt-6-sol", role="default", marker="controller")
                     ),
                     "worker_receipts": [
                         self.write_receipt(
                             "luna-a.json",
                             receipt(
-                                model="gpt-5.6-luna",
+                                model="gpt-6-luna",
                                 role="luna_worker_medium",
                                 marker="luna-a",
                                 effort="medium",
@@ -131,7 +131,7 @@ class BenchmarkIdentityTests(unittest.TestCase):
 
     def test_host_observed_sol_worker_role_is_valid_as_sol_only_controller(self) -> None:
         manifest = self.valid_manifest()
-        controller = receipt(model="gpt-5.6-sol", role="worker", marker="sol-worker-controller")
+        controller = receipt(model="gpt-6-sol", role="worker", marker="sol-worker-controller")
         manifest["runs"][0]["controller_receipt"] = self.write_receipt(
             "sol-worker-controller.json",
             controller,
@@ -140,7 +140,7 @@ class BenchmarkIdentityTests(unittest.TestCase):
         index = IDENTITY.build_index(self.manifest)
         sol_only = next(run for run in index["runs"] if run["route"] == "SOL_ONLY")
         self.assertEqual(sol_only["controller"]["role"], "worker")
-        self.assertEqual(sol_only["controller"]["model"], "gpt-5.6-sol")
+        self.assertEqual(sol_only["controller"]["model"], "gpt-6-sol")
         self.assertEqual(sol_only["controller"]["effort"], "high")
         self.assertEqual(sol_only["controller"]["provider"], "openai")
         self.assertEqual(
@@ -151,24 +151,24 @@ class BenchmarkIdentityTests(unittest.TestCase):
 
     def test_luna_cannot_impersonate_sol_controller(self) -> None:
         manifest = self.valid_manifest()
-        bad = receipt(model="gpt-5.6-luna", role="default", marker="impostor")
+        bad = receipt(model="gpt-6-luna", role="default", marker="impostor")
         manifest["runs"][0]["controller_receipt"] = self.write_receipt("impostor.json", bad)
         self.write_manifest(manifest)
-        with self.assertRaisesRegex(IDENTITY.IdentityError, "Sol|gpt-5.6-sol"):
+        with self.assertRaisesRegex(IDENTITY.IdentityError, "Sol|gpt-6-sol"):
             IDENTITY.build_index(self.manifest)
 
     def test_sol_cannot_impersonate_luna_writer(self) -> None:
         manifest = self.valid_manifest()
-        bad = receipt(model="gpt-5.6-sol", role="luna_worker", marker="impostor")
+        bad = receipt(model="gpt-6-sol", role="luna_worker", marker="impostor")
         manifest["runs"][1]["worker_receipts"] = [self.write_receipt("impostor.json", bad)]
         self.write_manifest(manifest)
-        with self.assertRaisesRegex(IDENTITY.IdentityError, "Luna|gpt-5.6-luna"):
+        with self.assertRaisesRegex(IDENTITY.IdentityError, "Luna|gpt-6-luna"):
             IDENTITY.build_index(self.manifest)
 
     def test_writer_effort_and_count_must_match_manifest(self) -> None:
         manifest = self.valid_manifest()
         mismatch = receipt(
-            model="gpt-5.6-luna", role="luna_worker_high", marker="wrong-effort", effort="high"
+            model="gpt-6-luna", role="luna_worker_high", marker="wrong-effort", effort="high"
         )
         manifest["runs"][1]["worker_receipts"] = [
             self.write_receipt("wrong-effort.json", mismatch)
@@ -182,7 +182,7 @@ class BenchmarkIdentityTests(unittest.TestCase):
             self.write_receipt(
                 "luna-b.json",
                 receipt(
-                    model="gpt-5.6-luna",
+                    model="gpt-6-luna",
                     role="worker",
                     marker="luna-b",
                     effort="medium",
@@ -204,7 +204,7 @@ class BenchmarkIdentityTests(unittest.TestCase):
             self.write_receipt(
                 "luna-c.json",
                 receipt(
-                    model="gpt-5.6-luna",
+                    model="gpt-6-luna",
                     role="worker",
                     marker="luna-c",
                     effort="medium",
@@ -225,14 +225,14 @@ class BenchmarkIdentityTests(unittest.TestCase):
 
     def test_self_report_unknown_identity_and_non_host_provenance_fail_closed(self) -> None:
         variants = []
-        source = receipt(model="gpt-5.6-sol", role="default", marker="bad")
+        source = receipt(model="gpt-6-sol", role="default", marker="bad")
         source["self_report_used_as_proof"] = True
         variants.append(source)
-        source = receipt(model="gpt-5.6-sol", role="default", marker="bad")
+        source = receipt(model="gpt-6-sol", role="default", marker="bad")
         source["unknown_identity_fields"] = ["model"]
         variants.append(source)
-        source = receipt(model="gpt-5.6-sol", role="default", marker="bad")
-        source["host_observed"]["model"] = requested("gpt-5.6-sol")
+        source = receipt(model="gpt-6-sol", role="default", marker="bad")
+        source["host_observed"]["model"] = requested("gpt-6-sol")
         variants.append(source)
         for index, bad in enumerate(variants):
             with self.subTest(index=index):
@@ -244,7 +244,7 @@ class BenchmarkIdentityTests(unittest.TestCase):
 
     def test_verified_receipt_may_omit_non_identity_path_observations(self) -> None:
         manifest = self.valid_manifest()
-        controller = receipt(model="gpt-5.6-sol", role="default", marker="no-paths")
+        controller = receipt(model="gpt-6-sol", role="default", marker="no-paths")
         unknown = {"value": None, "provenance": "unknown", "issue": "not present in host record"}
         controller["host_observed"]["agent_path_ref"] = dict(unknown)
         controller["host_observed"]["cwd_ref"] = dict(unknown)
@@ -262,7 +262,7 @@ class BenchmarkIdentityTests(unittest.TestCase):
 
     def test_logical_receipt_reuse_rejects_different_json_format_and_key_order(self) -> None:
         manifest = self.valid_manifest()
-        shared = receipt(model="gpt-5.6-sol", role="default", marker="same-logical-session")
+        shared = receipt(model="gpt-6-sol", role="default", marker="same-logical-session")
         manifest["runs"][0]["controller_receipt"] = self.write_receipt("shared-pretty.json", shared)
         compact_path = self.directory / "receipts" / "shared-compact.json"
         compact_path.write_text(
@@ -297,7 +297,7 @@ class BenchmarkIdentityTests(unittest.TestCase):
         with self.assertRaisesRegex(IDENTITY.IdentityError, "unsupported"):
             IDENTITY.build_index(self.manifest)
         manifest = self.valid_manifest()
-        bad = receipt(model="gpt-5.6-sol", role="default", marker="unknown")
+        bad = receipt(model="gpt-6-sol", role="default", marker="unknown")
         bad["surprise"] = True
         manifest["runs"][0]["controller_receipt"] = self.write_receipt("unknown.json", bad)
         self.write_manifest(manifest)

@@ -17,7 +17,7 @@ SPEC.loader.exec_module(RECEIPT)
 def child(reference: str, role: str, effort: str) -> dict:
     contract = {
         "agent_role": role,
-        "model": "gpt-5.6-luna",
+        "model": "gpt-6-luna",
         "effort": effort,
         "sandbox_mode": "read-only",
         "permission_profile": "managed-read-only",
